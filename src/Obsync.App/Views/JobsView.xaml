@@ -35,9 +35,11 @@
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <StackPanel Orientation="Horizontal">
+                                    <Button Content="Open" Style="{StaticResource SecondaryButton}" Margin="4,3" Click="OnOpenJob" />
                                     <Button Content="Run Now" Style="{StaticResource SecondaryButton}" Margin="4,3"
                                             Command="{Binding DataContext.RunNowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                             CommandParameter="{Binding}" />
+                                    <Button Content="Edit" Style="{StaticResource SecondaryButton}" Margin="4,3" Click="OnEditJob" />
                                     <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
                                             Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                             CommandParameter="{Binding}" />

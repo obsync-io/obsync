@@ -27,7 +27,6 @@
     <ProjectReference Include="..\Obsync.Git\Obsync.Git.csproj" />
     <ProjectReference Include="..\Obsync.GitHub\Obsync.GitHub.csproj" />
     <ProjectReference Include="..\Obsync.Security\Obsync.Security.csproj" />
-    <ProjectReference Include="..\Obsync.Scheduler\Obsync.Scheduler.csproj" />
   </ItemGroup>
 
 </Project>

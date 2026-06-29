@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Obsync.App.ViewModels;
+using Obsync.Shared.Models;
 
 namespace Obsync.App.Views;
 
@@ -11,14 +12,29 @@ public partial class JobsView : UserControl
 
     private async void OnCreateJob(object sender, RoutedEventArgs e)
     {
-        var viewModel = App.Services.GetRequiredService<CreateJobViewModel>();
-        await viewModel.LoadAsync();
+        await CreateJobWindow.ShowDialogAsync(Window.GetWindow(this));
+        await ReloadAsync();
+    }
 
-        var window = new CreateJobWindow { DataContext = viewModel, Owner = Window.GetWindow(this) };
-        viewModel.Saved += (_, _) => window.DialogResult = true;
+    private async void OnEditJob(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SyncJob job)
+        {
+            await CreateJobWindow.ShowDialogAsync(Window.GetWindow(this), job);
+            await ReloadAsync();
+        }
+    }
 
-        window.ShowDialog();
+    private async void OnOpenJob(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SyncJob job)
+        {
+            await App.Services.GetRequiredService<IShellNavigator>().ShowJobDetailAsync(job.Id);
+        }
+    }
 
+    private async Task ReloadAsync()
+    {
         if (DataContext is JobsViewModel jobs)
         {
             await jobs.LoadAsync();

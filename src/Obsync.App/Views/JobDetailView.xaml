@@ -1,0 +1,158 @@
+<UserControl x:Class="Obsync.App.Views.JobDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0">
+            <StackPanel>
+                <Button Content="← Back to jobs" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
+                        Command="{Binding BackCommand}" Margin="0,0,0,10" />
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding Job.Name}" Style="{StaticResource PageTitle}" />
+                    <Border Background="{Binding Status, Converter={StaticResource StatusToBrush}}" CornerRadius="10"
+                            Padding="10,2" Margin="12,4,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Status}" Foreground="White" FontSize="11" FontWeight="SemiBold" />
+                    </Border>
+                </StackPanel>
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,6,0,0"
+                           Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                <Button Content="Run Now" Style="{StaticResource PrimaryButton}" Command="{Binding RunNowCommand}" Margin="0,0,8,0" />
+                <Button Content="Edit" Style="{StaticResource SecondaryButton}" Click="OnEdit" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Tabs -->
+        <TabControl Grid.Row="2" Margin="0,18,0,0" Background="Transparent" BorderThickness="0">
+            <!-- Overview -->
+            <TabItem Header="Overview">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Connection" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ConnectionName}" Margin="0,5" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Server" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ServerName}" Margin="0,5" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Databases" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DatabasesText}" Margin="0,5" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Repository" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding RepositoryFullName}" Margin="0,5" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Branch" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Branch}" Margin="0,5" />
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Folder" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Folder}" Margin="0,5" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Schedule" Style="{StaticResource Muted}" Margin="0,5" />
+                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding ScheduleText}" Margin="0,5" />
+                            <TextBlock Grid.Row="7" Grid.Column="0" Text="Last / next run" Style="{StaticResource Muted}" Margin="0,5" />
+                            <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Margin="0,5">
+                                <TextBlock Text="{Binding LastRunText}" />
+                                <TextBlock Text="  ·  next " Style="{StaticResource Muted}" />
+                                <TextBlock Text="{Binding NextRunText}" />
+                            </StackPanel>
+                        </Grid>
+                        <Button Content="Open latest commit in GitHub" Style="{StaticResource SecondaryButton}"
+                                HorizontalAlignment="Left" Margin="0,14,0,0" Command="{Binding OpenCommitCommand}"
+                                Visibility="{Binding HasCommit, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+            <!-- Changes (latest run) -->
+            <TabItem Header="Changes">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" IsReadOnly="True"
+                              HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                              Background="Transparent" RowBackground="Transparent" CanUserAddRows="False" FontSize="13">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Change" Binding="{Binding ChangeType}" Width="Auto" />
+                            <DataGridTextColumn Header="Type" Binding="{Binding ObjectType}" Width="Auto" />
+                            <DataGridTextColumn Header="Object" Binding="{Binding QualifiedName}" Width="*" />
+                            <DataGridTextColumn Header="Path" Binding="{Binding RelativePath}" Width="2*" />
+                            <DataGridTemplateColumn Width="Auto">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="GitHub" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                                Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Border>
+            </TabItem>
+
+            <!-- History -->
+            <TabItem Header="History">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <DataGrid ItemsSource="{Binding Runs}" AutoGenerateColumns="False" IsReadOnly="True"
+                              HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                              Background="Transparent" RowBackground="Transparent" CanUserAddRows="False" FontSize="13">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Run" Binding="{Binding RunKey}" Width="1.5*" />
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*" />
+                            <DataGridTextColumn Header="Started" Binding="{Binding StartedAt, StringFormat=g}" Width="1.5*" />
+                            <DataGridTextColumn Header="Duration (ms)" Binding="{Binding DurationMs}" Width="*" />
+                            <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" />
+                            <DataGridTextColumn Header="Changes" Binding="{Binding ChangeCount}" Width="*" />
+                            <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.5*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Border>
+            </TabItem>
+
+            <!-- Configuration -->
+            <TabItem Header="Configuration">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Edit this job's source, objects, destination, and schedule in the wizard."
+                                   Style="{StaticResource Muted}" Margin="0,0,0,12" TextWrapping="Wrap" />
+                        <Button Content="Edit configuration" Style="{StaticResource PrimaryButton}"
+                                HorizontalAlignment="Left" Click="OnEdit" />
+                    </StackPanel>
+                </Border>
+            </TabItem>
+
+            <!-- Logs (latest run) -->
+            <TabItem Header="Logs">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <DockPanel>
+                        <CheckBox DockPanel.Dock="Top" Content="Show technical details" IsChecked="{Binding ShowTechnicalLogs}"
+                                  Margin="0,0,0,10" />
+                        <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                                  Background="Transparent" RowBackground="Transparent" CanUserAddRows="False" FontSize="13">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat=HH:mm:ss}" Width="Auto" />
+                                <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="Auto" />
+                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </Border>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</UserControl>

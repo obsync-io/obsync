@@ -1,7 +1,7 @@
 <Window x:Class="Obsync.App.Views.CreateJobWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Create Sync Job" Height="720" Width="620"
+        Title="{Binding Title}" Height="720" Width="640"
         WindowStartupLocation="CenterOwner"
         Background="{StaticResource AppBackgroundBrush}"
         FontFamily="{StaticResource AppFontFamily}">
@@ -13,13 +13,14 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
-            <TextBlock Text="Create Sync Job" Style="{StaticResource PageTitle}" />
-            <TextBlock Text="Source → objects → destination → schedule" Style="{StaticResource Muted}" Margin="0,4,0,0" />
+            <TextBlock Text="{Binding Title}" Style="{StaticResource PageTitle}" />
+            <TextBlock Text="{Binding StepCaption}" Style="{StaticResource Muted}" Margin="0,4,0,0" />
         </StackPanel>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
-                <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+            <Grid>
+                <!-- Step 1 · Source -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding IsStep1, Converter={StaticResource BoolToVisibility}}">
                     <StackPanel>
                         <TextBlock Text="1 · Source" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <TextBlock Text="Job name" Style="{StaticResource Muted}" />
@@ -29,8 +30,9 @@
                                   DisplayMemberPath="Name" Margin="0,2,0,8" />
                         <Button Content="Load databases" Style="{StaticResource SecondaryButton}"
                                 HorizontalAlignment="Left" Command="{Binding LoadDatabasesCommand}" />
+                        <TextBlock Text="Databases" Style="{StaticResource Muted}" Margin="0,10,0,0" />
                         <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6"
-                                MaxHeight="140" Margin="0,10,0,0">
+                                MaxHeight="220" Margin="0,4,0,0">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding Databases}" Margin="10,8">
                                     <ItemsControl.ItemTemplate>
@@ -44,15 +46,33 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                <!-- Step 2 · Objects -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding IsStep2, Converter={StaticResource BoolToVisibility}}">
                     <StackPanel>
                         <TextBlock Text="2 · Objects" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <TextBlock Text="Preset" Style="{StaticResource Muted}" />
                         <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}" Margin="0,2,0,0" />
+
+                        <StackPanel Visibility="{Binding IsCustomPreset, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Object types" Style="{StaticResource Muted}" Margin="0,12,0,0" />
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6"
+                                    MaxHeight="300" Margin="0,4,0,0">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding ObjectTypes}" Margin="10,8">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected}" Margin="0,3" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                <!-- Step 3 · Destination -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding IsStep3, Converter={StaticResource BoolToVisibility}}">
                     <StackPanel>
                         <TextBlock Text="3 · Destination" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
                         <TextBlock Text="GitHub repository" Style="{StaticResource Muted}" />
@@ -60,27 +80,80 @@
                                   DisplayMemberPath="FullName" Margin="0,2,0,10" />
                         <TextBlock Text="Branch" Style="{StaticResource Muted}" />
                         <TextBox Text="{Binding Branch, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
-                        <TextBlock Text="Destination folder" Style="{StaticResource Muted}" />
-                        <TextBox Text="{Binding DestinationFolder, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0" />
+                        <TextBlock Text="Destination folder (blank = environments/&lt;server&gt;/&lt;database&gt;)" Style="{StaticResource Muted}" />
+                        <TextBox Text="{Binding DestinationFolder, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                        <TextBlock Text="Local export path (optional)" Style="{StaticResource Muted}" />
+                        <TextBox Text="{Binding LocalExportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0" />
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}">
+                <!-- Step 4 · Schedule -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding IsStep4, Converter={StaticResource BoolToVisibility}}">
                     <StackPanel>
                         <TextBlock Text="4 · Schedule" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
-                        <ComboBox ItemsSource="{Binding ScheduleKinds}" SelectedItem="{Binding SelectedScheduleKind}" Margin="0,0,0,10" />
-                        <TextBlock Text="Custom cron (used when schedule is Cron)" Style="{StaticResource Muted}" />
-                        <TextBox Text="{Binding CronExpression, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,0" />
+                        <TextBlock Text="Cadence" Style="{StaticResource Muted}" />
+                        <ComboBox ItemsSource="{Binding ScheduleKinds}" SelectedItem="{Binding SelectedScheduleKind}" Margin="0,2,0,10" />
+
+                        <StackPanel Visibility="{Binding ShowHourly, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Every N hours" Style="{StaticResource Muted}" />
+                            <TextBox Text="{Binding IntervalHours, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                        </StackPanel>
+
+                        <StackPanel Visibility="{Binding ShowDayTime, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Time of day (HH:mm)" Style="{StaticResource Muted}" />
+                            <TextBox Text="{Binding TimeOfDay, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                        </StackPanel>
+
+                        <StackPanel Visibility="{Binding ShowWeekday, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Day of week" Style="{StaticResource Muted}" />
+                            <ComboBox ItemsSource="{Binding DaysOfWeek}" SelectedItem="{Binding SelectedDayOfWeek}" Margin="0,2,0,10" />
+                        </StackPanel>
+
+                        <StackPanel Visibility="{Binding ShowCron, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Cron expression (Quartz 7-field)" Style="{StaticResource Muted}" />
+                            <TextBox Text="{Binding CronExpression, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                        </StackPanel>
+
+                        <CheckBox Content="Also run once on app/service startup" IsChecked="{Binding RunOnStartup}" Margin="0,4,0,6" />
+                        <CheckBox Content="Commit only when changes are detected" IsChecked="{Binding RunOnlyIfChanges}" />
                     </StackPanel>
                 </Border>
-            </StackPanel>
+
+                <!-- Step 5 · Review -->
+                <Border Style="{StaticResource Card}" Visibility="{Binding IsStep5, Converter={StaticResource BoolToVisibility}}">
+                    <StackPanel>
+                        <TextBlock Text="5 · Review" Style="{StaticResource SectionTitle}" Margin="0,0,0,10" />
+                        <ItemsControl ItemsSource="{Binding ReviewItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,5">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="130" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Label}" Style="{StaticResource Muted}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Value}" Foreground="{StaticResource TextPrimaryBrush}"
+                                                   TextWrapping="Wrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </Grid>
         </ScrollViewer>
 
         <Grid Grid.Row="2" Margin="0,14,0,0">
-            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" VerticalAlignment="Center"
+                       TextWrapping="Wrap" MaxWidth="300" HorizontalAlignment="Left" />
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Click="OnCancel" Margin="0,0,8,0" />
-                <Button Content="Save Job" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" />
+                <Button Content="Back" Style="{StaticResource SecondaryButton}" Command="{Binding BackCommand}"
+                        Margin="0,0,8,0" Visibility="{Binding ShowBack, Converter={StaticResource BoolToVisibility}}" />
+                <Button Content="Next" Style="{StaticResource PrimaryButton}" Command="{Binding NextCommand}"
+                        Visibility="{Binding ShowNext, Converter={StaticResource BoolToVisibility}}" />
+                <Button Content="Save Job" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"
+                        Visibility="{Binding IsLastStep, Converter={StaticResource BoolToVisibility}}" />
             </StackPanel>
         </Grid>
     </Grid>

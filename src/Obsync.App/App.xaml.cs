@@ -5,8 +5,6 @@ using Microsoft.Extensions.Hosting;
 using Obsync.App.ViewModels;
 using Obsync.App.Views;
 using Obsync.Data;
-using Obsync.Engine.DependencyInjection;
-using Obsync.Security.DependencyInjection;
 using Obsync.Shared;
 using Serilog;
 
@@ -34,23 +32,7 @@ public partial class App : Application
         _host = Host.CreateDefaultBuilder()
             .UseSerilog()
             .ConfigureServices(services =>
-            {
-                services.AddObsyncSecurity();
-                services.AddObsyncCore(ObsyncPaths.DatabasePath, options =>
-                {
-                    options.WorkspacesRoot = ObsyncPaths.WorkspacesRoot;
-                });
-
-                services.AddSingleton<MainViewModel>();
-                services.AddSingleton<DashboardViewModel>();
-                services.AddSingleton<JobsViewModel>();
-                services.AddSingleton<ConnectionsViewModel>();
-                services.AddSingleton<RepositoriesViewModel>();
-                services.AddSingleton<HistoryViewModel>();
-                services.AddSingleton<SettingsViewModel>();
-                services.AddTransient<CreateJobViewModel>();
-                services.AddSingleton<MainWindow>();
-            })
+                services.AddObsyncApp(ObsyncPaths.DatabasePath, ObsyncPaths.WorkspacesRoot))
             .Build();
 
         await _host.StartAsync();

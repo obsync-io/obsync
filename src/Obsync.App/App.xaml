@@ -23,6 +23,9 @@
             <DataTemplate DataType="{x:Type vm:JobsViewModel}">
                 <views:JobsView />
             </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:JobDetailViewModel}">
+                <views:JobDetailView />
+            </DataTemplate>
             <DataTemplate DataType="{x:Type vm:ConnectionsViewModel}">
                 <views:ConnectionsView />
             </DataTemplate>

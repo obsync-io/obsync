@@ -3,7 +3,6 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.Data.Repositories;
 using Obsync.Metadata;
-using Obsync.Scheduler;
 using Obsync.Shared;
 using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
@@ -19,7 +18,23 @@ public sealed partial class SelectableDatabase(string name) : ObservableObject
     [ObservableProperty] private bool _isSelected;
 }
 
-/// <summary>Drives the "Create Sync Job" flow: source → objects → destination → schedule → review.</summary>
+/// <summary>A SQL object type that can be selected for the Custom object preset.</summary>
+public sealed partial class SelectableObjectType(SqlObjectType type, string displayName) : ObservableObject
+{
+    public SqlObjectType Type { get; } = type;
+    public string DisplayName { get; } = displayName;
+
+    [ObservableProperty] private bool _isSelected;
+}
+
+/// <summary>One labelled line on the Review step.</summary>
+public sealed record ReviewItem(string Label, string Value);
+
+/// <summary>
+/// Drives the "Create / Edit Sync Job" wizard as a five-step stepper:
+/// Source → Objects → Destination → Schedule → Review. Each step is validated before the user
+/// can advance, and the final step shows a read-only summary before the job is saved.
+/// </summary>
 public sealed partial class CreateJobViewModel : ObservableObject
 {
     private readonly IConnectionProfileRepository _connections;
@@ -27,8 +42,13 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private readonly IJobRepository _jobs;
     private readonly ISqlServerProbe _probe;
     private readonly ICredentialStore _credentialStore;
-    private readonly ISyncJobScheduler _scheduler;
     private readonly IClock _clock;
+
+    private Guid _editingJobId;
+    private DateTimeOffset _createdAt;
+
+    [ObservableProperty] private int _currentStep = 1;
+    [ObservableProperty] private bool _isEditMode;
 
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private SqlConnectionProfile? _selectedConnection;
@@ -36,17 +56,28 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private GitRepositoryProfile? _selectedRepository;
     [ObservableProperty] private string _branch = "main";
     [ObservableProperty] private string _destinationFolder = string.Empty;
+    [ObservableProperty] private string? _localExportPath;
+
     [ObservableProperty] private ScheduleKind _selectedScheduleKind = ScheduleKind.Manual;
+    [ObservableProperty] private int _intervalHours = 1;
+    [ObservableProperty] private string _timeOfDay = "23:00";
+    [ObservableProperty] private DayOfWeek _selectedDayOfWeek = DayOfWeek.Sunday;
     [ObservableProperty] private string _cronExpression = "0 0 23 * * ?";
+    [ObservableProperty] private bool _runOnStartup;
+    [ObservableProperty] private bool _runOnlyIfChanges = true;
+
     [ObservableProperty] private string? _statusMessage;
     [ObservableProperty] private bool _isBusy;
 
     public ObservableCollection<SqlConnectionProfile> Connections { get; } = [];
     public ObservableCollection<GitRepositoryProfile> Repositories { get; } = [];
     public ObservableCollection<SelectableDatabase> Databases { get; } = [];
+    public ObservableCollection<SelectableObjectType> ObjectTypes { get; } = [];
+    public ObservableCollection<ReviewItem> ReviewItems { get; } = [];
 
     public IReadOnlyList<ObjectSelectionPreset> Presets { get; } = Enum.GetValues<ObjectSelectionPreset>();
     public IReadOnlyList<ScheduleKind> ScheduleKinds { get; } = Enum.GetValues<ScheduleKind>();
+    public IReadOnlyList<DayOfWeek> DaysOfWeek { get; } = Enum.GetValues<DayOfWeek>();
 
     public event EventHandler? Saved;
 
@@ -56,7 +87,6 @@ public sealed partial class CreateJobViewModel : ObservableObject
         IJobRepository jobs,
         ISqlServerProbe probe,
         ICredentialStore credentialStore,
-        ISyncJobScheduler scheduler,
         IClock clock)
     {
         _connections = connections;
@@ -64,29 +94,126 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _jobs = jobs;
         _probe = probe;
         _credentialStore = credentialStore;
-        _scheduler = scheduler;
         _clock = clock;
+
+        foreach (var descriptor in SqlObjectTypeCatalog.All)
+        {
+            ObjectTypes.Add(new SelectableObjectType(descriptor.Type, descriptor.DisplayName));
+        }
     }
+
+    // --- Step state surfaced to the view -------------------------------------------------------
+
+    public bool IsStep1 => CurrentStep == 1;
+    public bool IsStep2 => CurrentStep == 2;
+    public bool IsStep3 => CurrentStep == 3;
+    public bool IsStep4 => CurrentStep == 4;
+    public bool IsStep5 => CurrentStep == 5;
+    public bool IsFirstStep => CurrentStep == 1;
+    public bool IsLastStep => CurrentStep == 5;
+    public bool ShowBack => !IsFirstStep;
+    public bool ShowNext => !IsLastStep;
+    public string Title => IsEditMode ? "Edit Sync Job" : "Create Sync Job";
+
+    public string StepCaption => CurrentStep switch
+    {
+        1 => "Step 1 of 5 · Source",
+        2 => "Step 2 of 5 · Objects",
+        3 => "Step 3 of 5 · Destination",
+        4 => "Step 4 of 5 · Schedule",
+        _ => "Step 5 of 5 · Review",
+    };
+
+    public bool IsCustomPreset => SelectedPreset == ObjectSelectionPreset.Custom;
+    public bool ShowHourly => SelectedScheduleKind == ScheduleKind.Hourly;
+    public bool ShowDayTime => SelectedScheduleKind is ScheduleKind.Daily or ScheduleKind.Weekly;
+    public bool ShowWeekday => SelectedScheduleKind == ScheduleKind.Weekly;
+    public bool ShowCron => SelectedScheduleKind == ScheduleKind.Cron;
+
+    partial void OnCurrentStepChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsStep1));
+        OnPropertyChanged(nameof(IsStep2));
+        OnPropertyChanged(nameof(IsStep3));
+        OnPropertyChanged(nameof(IsStep4));
+        OnPropertyChanged(nameof(IsStep5));
+        OnPropertyChanged(nameof(IsFirstStep));
+        OnPropertyChanged(nameof(IsLastStep));
+        OnPropertyChanged(nameof(ShowBack));
+        OnPropertyChanged(nameof(ShowNext));
+        OnPropertyChanged(nameof(StepCaption));
+    }
+
+    partial void OnIsEditModeChanged(bool value) => OnPropertyChanged(nameof(Title));
+
+    partial void OnSelectedPresetChanged(ObjectSelectionPreset value) => OnPropertyChanged(nameof(IsCustomPreset));
+
+    partial void OnSelectedScheduleKindChanged(ScheduleKind value)
+    {
+        OnPropertyChanged(nameof(ShowHourly));
+        OnPropertyChanged(nameof(ShowDayTime));
+        OnPropertyChanged(nameof(ShowWeekday));
+        OnPropertyChanged(nameof(ShowCron));
+    }
+
+    partial void OnSelectedRepositoryChanged(GitRepositoryProfile? value)
+    {
+        if (value is not null && string.IsNullOrWhiteSpace(Branch))
+        {
+            Branch = value.DefaultBranch;
+        }
+    }
+
+    // --- Loading -------------------------------------------------------------------------------
 
     public async Task LoadAsync()
     {
+        Connections.Clear();
         foreach (var connection in await _connections.GetAllAsync())
         {
             Connections.Add(connection);
         }
 
+        Repositories.Clear();
         foreach (var repository in await _repositories.GetAllAsync())
         {
             Repositories.Add(repository);
         }
     }
 
-    partial void OnSelectedRepositoryChanged(GitRepositoryProfile? value)
+    /// <summary>Populates the wizard from an existing job for editing. Call after <see cref="LoadAsync"/>.</summary>
+    public void InitializeForEdit(SyncJob job)
     {
-        if (value is not null)
+        IsEditMode = true;
+        _editingJobId = job.Id;
+        _createdAt = job.CreatedAt;
+
+        Name = job.Name;
+        SelectedConnection = Connections.FirstOrDefault(c => c.Id == job.ConnectionProfileId);
+        SelectedRepository = Repositories.FirstOrDefault(r => r.Id == job.RepositoryProfileId);
+        Branch = job.Branch ?? SelectedRepository?.DefaultBranch ?? "main";
+        DestinationFolder = job.DestinationFolder;
+        LocalExportPath = job.LocalExportPath;
+        SelectedPreset = job.Selection.Preset;
+
+        Databases.Clear();
+        foreach (var database in job.Databases)
         {
-            Branch = value.DefaultBranch;
+            Databases.Add(new SelectableDatabase(database) { IsSelected = true });
         }
+
+        foreach (var objectType in ObjectTypes)
+        {
+            objectType.IsSelected = job.Selection.CustomTypes.Contains(objectType.Type);
+        }
+
+        SelectedScheduleKind = job.Schedule.Kind;
+        IntervalHours = job.Schedule.IntervalHours;
+        TimeOfDay = job.Schedule.TimeOfDay.ToString("HH:mm");
+        SelectedDayOfWeek = job.Schedule.DayOfWeek;
+        CronExpression = job.Schedule.CronExpression ?? "0 0 23 * * ?";
+        RunOnStartup = job.Schedule.RunOnStartup;
+        RunOnlyIfChanges = job.Schedule.RunOnlyIfChanges;
     }
 
     [RelayCommand]
@@ -106,16 +233,18 @@ public sealed partial class CreateJobViewModel : ObservableObject
                 ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(SelectedConnection.Id))
                 : null;
             var result = await _probe.GetDatabasesAsync(SelectedConnection, password);
-            Databases.Clear();
             if (result.IsFailure)
             {
                 StatusMessage = result.Error;
                 return;
             }
 
+            // Preserve any already-selected databases (e.g. when editing) across a refresh.
+            var selected = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Databases.Clear();
             foreach (var database in result.Value)
             {
-                Databases.Add(new SelectableDatabase(database.Name));
+                Databases.Add(new SelectableDatabase(database.Name) { IsSelected = selected.Contains(database.Name) });
             }
 
             StatusMessage = $"Found {result.Value.Count} database(s).";
@@ -126,34 +255,146 @@ public sealed partial class CreateJobViewModel : ObservableObject
         }
     }
 
+    // --- Stepper navigation --------------------------------------------------------------------
+
+    [RelayCommand]
+    private void Back()
+    {
+        if (CurrentStep > 1)
+        {
+            CurrentStep--;
+            StatusMessage = null;
+        }
+    }
+
+    [RelayCommand]
+    private void Next()
+    {
+        var error = ValidateStep(CurrentStep);
+        if (error is not null)
+        {
+            StatusMessage = error;
+            return;
+        }
+
+        StatusMessage = null;
+        if (CurrentStep < 5)
+        {
+            CurrentStep++;
+            if (CurrentStep == 5)
+            {
+                BuildReview();
+            }
+        }
+    }
+
+    private string? ValidateStep(int step) => step switch
+    {
+        1 when string.IsNullOrWhiteSpace(Name) => "Enter a job name.",
+        1 when SelectedConnection is null => "Select a SQL connection.",
+        1 when !Databases.Any(d => d.IsSelected) => "Select at least one database.",
+        2 when IsCustomPreset && !ObjectTypes.Any(t => t.IsSelected) => "Select at least one object type for the Custom preset.",
+        3 when SelectedRepository is null => "Select a destination repository.",
+        3 when string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
+        4 when SelectedScheduleKind == ScheduleKind.Cron && string.IsNullOrWhiteSpace(CronExpression) => "Enter a cron expression.",
+        _ => null,
+    };
+
+    private void BuildReview()
+    {
+        var databases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
+        var objects = IsCustomPreset
+            ? string.Join(", ", ObjectTypes.Where(t => t.IsSelected).Select(t => t.DisplayName))
+            : $"{SelectedPreset} preset";
+
+        ReviewItems.Clear();
+        ReviewItems.Add(new ReviewItem("Job name", Name.Trim()));
+        ReviewItems.Add(new ReviewItem("Source", SelectedConnection is null
+            ? "—"
+            : $"{SelectedConnection.Name} ({SelectedConnection.ServerName}) · {SelectedConnection.AuthenticationMode}"));
+        ReviewItems.Add(new ReviewItem("Databases", databases.Count == 0 ? "—" : string.Join(", ", databases)));
+        ReviewItems.Add(new ReviewItem("Objects", objects));
+        ReviewItems.Add(new ReviewItem("Repository", SelectedRepository?.FullName ?? "—"));
+        ReviewItems.Add(new ReviewItem("Branch", Branch));
+        ReviewItems.Add(new ReviewItem("Folder", EffectiveDestinationFolder(databases)));
+        ReviewItems.Add(new ReviewItem("Schedule", BuildSchedule().Describe()));
+        ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges ? "Commit only when changes are detected" : "Always create a run"));
+        ReviewItems.Add(new ReviewItem("Commit mode", "Direct commit & push"));
+        ReviewItems.Add(new ReviewItem("Security",
+            "SQL password and GitHub token are read from Windows Credential Manager; never written to disk or logs."));
+    }
+
+    private string EffectiveDestinationFolder(IReadOnlyList<string> databases) =>
+        string.IsNullOrWhiteSpace(DestinationFolder)
+            ? $"environments/{SelectedConnection?.ServerName}/{(databases.Count > 0 ? databases[0] : "db")}"
+            : DestinationFolder.Trim();
+
+    private ScheduleProfile BuildSchedule()
+    {
+        var time = TimeOnly.TryParseExact(TimeOfDay, "HH:mm", out var parsed) ? parsed : new TimeOnly(23, 0);
+        return new ScheduleProfile
+        {
+            Kind = SelectedScheduleKind,
+            IntervalHours = Math.Max(1, IntervalHours),
+            TimeOfDay = time,
+            DayOfWeek = SelectedDayOfWeek,
+            CronExpression = CronExpression,
+            RunOnStartup = RunOnStartup,
+            RunOnlyIfChanges = RunOnlyIfChanges,
+        };
+    }
+
+    // --- Save ----------------------------------------------------------------------------------
+
     [RelayCommand]
     private async Task SaveAsync()
     {
-        var selectedDatabases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
-        if (string.IsNullOrWhiteSpace(Name) || SelectedConnection is null || SelectedRepository is null || selectedDatabases.Count == 0)
+        for (var step = 1; step <= 4; step++)
         {
-            StatusMessage = "Provide a name, a connection, at least one database, and a repository.";
-            return;
+            var error = ValidateStep(step);
+            if (error is not null)
+            {
+                CurrentStep = step;
+                StatusMessage = error;
+                return;
+            }
+        }
+
+        var selectedDatabases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
+        var selection = new ObjectSelectionProfile { Preset = SelectedPreset };
+        if (IsCustomPreset)
+        {
+            selection.CustomTypes = [.. ObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)];
         }
 
         var job = new SyncJob
         {
+            Id = IsEditMode ? _editingJobId : Guid.NewGuid(),
             Name = Name.Trim(),
-            ConnectionProfileId = SelectedConnection.Id,
-            RepositoryProfileId = SelectedRepository.Id,
+            ConnectionProfileId = SelectedConnection!.Id,
+            RepositoryProfileId = SelectedRepository!.Id,
             Databases = selectedDatabases,
-            Branch = string.IsNullOrWhiteSpace(Branch) ? SelectedRepository.DefaultBranch : Branch.Trim(),
-            DestinationFolder = string.IsNullOrWhiteSpace(DestinationFolder)
-                ? $"environments/{SelectedConnection.ServerName}/{selectedDatabases[0]}"
-                : DestinationFolder.Trim(),
-            Selection = new ObjectSelectionProfile { Preset = SelectedPreset },
-            Schedule = new ScheduleProfile { Kind = SelectedScheduleKind, CronExpression = CronExpression },
-            CreatedAt = _clock.UtcNow,
+            Branch = string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim(),
+            DestinationFolder = EffectiveDestinationFolder(selectedDatabases),
+            LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim(),
+            Selection = selection,
+            Schedule = BuildSchedule(),
+            CreatedAt = IsEditMode ? _createdAt : _clock.UtcNow,
             UpdatedAt = _clock.UtcNow,
         };
 
-        await _jobs.UpsertAsync(job);
-        await _scheduler.ScheduleJobAsync(job);
-        Saved?.Invoke(this, EventArgs.Empty);
+        IsBusy = true;
+        try
+        {
+            // The desktop app is the source of truth (SQLite); the Obsync Windows Service is the
+            // scheduler host and picks up jobs and their schedules when it loads them. The app runs
+            // jobs on demand via Run Now.
+            await _jobs.UpsertAsync(job);
+            Saved?.Invoke(this, EventArgs.Empty);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 }

@@ -88,6 +88,10 @@ public sealed class GitHubService : IGitHubService
     public static string BuildCommitUrl(string owner, string name, string sha) =>
         $"https://github.com/{owner}/{name}/commit/{sha}";
 
+    /// <summary>The web URL for a file on a branch, used for the per-change "Open in GitHub" links.</summary>
+    public static string BuildBlobUrl(string owner, string name, string branch, string relativePath) =>
+        $"https://github.com/{owner}/{name}/blob/{branch}/{relativePath.TrimStart('/')}";
+
     /// <summary>
     /// Builds the HTTP Authorization header value used to authenticate git over HTTPS with a PAT,
     /// without persisting the token in the repository config.

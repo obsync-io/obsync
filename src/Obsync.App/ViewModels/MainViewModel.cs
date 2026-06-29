@@ -1,11 +1,13 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Obsync.App.ViewModels;
 
 /// <summary>The shell view model: owns the section view models and drives left-rail navigation.</summary>
-public sealed partial class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject, IShellNavigator
 {
+    private readonly IServiceProvider _services;
     private readonly DashboardViewModel _dashboard;
     private readonly JobsViewModel _jobs;
     private readonly ConnectionsViewModel _connections;
@@ -17,6 +19,7 @@ public sealed partial class MainViewModel : ObservableObject
     private object? _currentView;
 
     public MainViewModel(
+        IServiceProvider services,
         DashboardViewModel dashboard,
         JobsViewModel jobs,
         ConnectionsViewModel connections,
@@ -24,6 +27,7 @@ public sealed partial class MainViewModel : ObservableObject
         HistoryViewModel history,
         SettingsViewModel settings)
     {
+        _services = services;
         _dashboard = dashboard;
         _jobs = jobs;
         _connections = connections;
@@ -51,5 +55,14 @@ public sealed partial class MainViewModel : ObservableObject
         {
             await asyncViewModel.LoadAsync();
         }
+    }
+
+    public Task ShowSectionAsync(string section) => NavigateAsync(section);
+
+    public async Task ShowJobDetailAsync(Guid jobId)
+    {
+        var detail = _services.GetRequiredService<JobDetailViewModel>();
+        await detail.LoadAsync(jobId);
+        CurrentView = detail;
     }
 }

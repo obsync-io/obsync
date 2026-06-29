@@ -14,6 +14,7 @@
     <Project Path="src/Obsync.Smo/Obsync.Smo.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Obsync.App.Tests/Obsync.App.Tests.csproj" />
     <Project Path="tests/Obsync.Engine.Tests/Obsync.Engine.Tests.csproj" />
     <Project Path="tests/Obsync.Git.Tests/Obsync.Git.Tests.csproj" />
     <Project Path="tests/Obsync.Integration.Tests/Obsync.Integration.Tests.csproj" />
