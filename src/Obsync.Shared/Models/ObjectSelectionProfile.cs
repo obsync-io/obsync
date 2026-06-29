@@ -25,6 +25,15 @@ public sealed class ObjectSelectionProfile
     /// <summary>Include extended properties (MS_Description etc.).</summary>
     public bool IncludeExtendedProperties { get; set; } = true;
 
+    /// <summary>Write <c>metadata/object-inventory.json</c>: a manifest of every tracked object and its hash.</summary>
+    public bool IncludeObjectInventory { get; set; } = true;
+
+    /// <summary>Write <c>metadata/database-options.sql</c>: the database-level <c>ALTER DATABASE … SET</c> settings.</summary>
+    public bool IncludeDatabaseOptions { get; set; } = true;
+
+    /// <summary>Write <c>security/permissions/permissions.sql</c>: consolidated database-scoped GRANT/DENY statements.</summary>
+    public bool IncludeDatabasePermissionsFile { get; set; } = true;
+
     /// <summary>Delete files (and commit the deletion) for objects dropped on the source.</summary>
     public bool RemoveDroppedObjects { get; set; } = true;
 

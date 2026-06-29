@@ -30,6 +30,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
+    private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IGitWorkspace _gitWorkspace;
     private readonly ICredentialStore _credentialStore;
     private readonly IScriptNormalizer _normalizer;
@@ -46,6 +47,7 @@ public sealed class SyncEngine : ISyncEngine
         IRunRepository runs,
         IObjectStateRepository objectStates,
         IEnumerable<IObjectScriptProvider> scriptProviders,
+        IDatabaseArtifactReader artifactReader,
         IGitWorkspace gitWorkspace,
         ICredentialStore credentialStore,
         IScriptNormalizer normalizer,
@@ -61,6 +63,7 @@ public sealed class SyncEngine : ISyncEngine
         _runs = runs;
         _objectStates = objectStates;
         _scriptProviders = [.. scriptProviders];
+        _artifactReader = artifactReader;
         _gitWorkspace = gitWorkspace;
         _credentialStore = credentialStore;
         _normalizer = normalizer;
@@ -197,6 +200,72 @@ public sealed class SyncEngine : ISyncEngine
             .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var changedStates = new List<TrackedObjectState>();
+        var inventory = new List<ObjectInventoryEntry>();
+
+        // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
+        // database artifact). Artifacts ride the same change-detection path so an options- or
+        // permissions-only change still produces a commit, while an unchanged run still produces none.
+        async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath)
+        {
+            var isArtifact = identity.Type == SqlObjectType.DatabaseArtifact;
+            var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
+            var hash = _hasher.ComputeHash(script);
+            var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
+            var key = StateKey(identity);
+            seen.Add(key);
+
+            if (!isArtifact)
+            {
+                context.Scanned++;
+                inventory.Add(new ObjectInventoryEntry(
+                    identity.Type.ToString(), identity.Schema, identity.Name, relativePath, hash));
+            }
+
+            var hasPrior = prior.TryGetValue(key, out var priorState);
+            var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
+            if (changeType == ChangeType.Unchanged)
+            {
+                return;
+            }
+
+            await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (changeType == ChangeType.Added)
+            {
+                context.Added++;
+            }
+            else
+            {
+                context.Modified++;
+            }
+
+            context.Changes.Add(new ObjectChange
+            {
+                ChangeType = changeType,
+                ObjectType = identity.Type,
+                Schema = identity.Schema,
+                Name = identity.Name,
+                RelativePath = repoRelativePath,
+                PreviousHash = hasPrior ? priorState!.LastHash : null,
+                NewHash = hash,
+            });
+
+            changedStates.Add(new TrackedObjectState
+            {
+                JobId = context.Job.Id,
+                DatabaseName = database,
+                ObjectType = identity.Type,
+                SchemaName = identity.Schema,
+                ObjectName = identity.Name,
+                ObjectId = identity.ObjectId,
+                FilePath = repoRelativePath,
+                LastHash = hash,
+                LastScriptedAt = _clock.UtcNow,
+                LastRunId = run.Id,
+                LastStatus = RunStatus.Running,
+            });
+        }
 
         context.Report(SyncPhase.Scripting, $"Scripting objects in {database}…");
 
@@ -220,65 +289,51 @@ public sealed class SyncEngine : ISyncEngine
 
             await foreach (var raw in provider.ScriptAsync(request, cancellationToken).ConfigureAwait(false))
             {
-                context.Scanned++;
-                var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(raw.Script) : raw.Script;
-                var hash = _hasher.ComputeHash(script);
-                var relativePath = _pathMapper.MapRelativePath(raw.Identity);
-                var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
-                var key = StateKey(raw.Identity);
-                seen.Add(key);
-
-                var hasPrior = prior.TryGetValue(key, out var priorState);
-                var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
-                if (changeType == ChangeType.Unchanged)
-                {
-                    continue;
-                }
-
-                await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (changeType == ChangeType.Added)
-                {
-                    context.Added++;
-                }
-                else
-                {
-                    context.Modified++;
-                }
-
-                context.Changes.Add(new ObjectChange
-                {
-                    ChangeType = changeType,
-                    ObjectType = raw.Identity.Type,
-                    Schema = raw.Identity.Schema,
-                    Name = raw.Identity.Name,
-                    RelativePath = repoRelativePath,
-                    PreviousHash = hasPrior ? priorState!.LastHash : null,
-                    NewHash = hash,
-                });
-
-                changedStates.Add(new TrackedObjectState
-                {
-                    JobId = context.Job.Id,
-                    DatabaseName = database,
-                    ObjectType = raw.Identity.Type,
-                    SchemaName = raw.Identity.Schema,
-                    ObjectName = raw.Identity.Name,
-                    ObjectId = raw.Identity.ObjectId,
-                    FilePath = repoRelativePath,
-                    LastHash = hash,
-                    LastScriptedAt = _clock.UtcNow,
-                    LastRunId = run.Id,
-                    LastStatus = RunStatus.Running,
-                });
+                await ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity)).ConfigureAwait(false);
             }
         }
+
+        await GenerateDatabaseArtifactsAsync(context, database, inventory, ApplyItemAsync, cancellationToken).ConfigureAwait(false);
 
         await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
 
         context.PendingStates.AddRange(changedStates);
     }
+
+    /// <summary>
+    /// Generates the per-database manifest files (object inventory, database options, permissions)
+    /// and feeds each through the same change-detection path as a scripted object.
+    /// </summary>
+    private async Task GenerateDatabaseArtifactsAsync(
+        RunContext context, string database, IReadOnlyList<ObjectInventoryEntry> inventory,
+        Func<ScriptedObjectIdentity, string, string, Task> apply, CancellationToken cancellationToken)
+    {
+        var selection = context.Job.Selection;
+        var timeout = context.Job.Advanced.SqlCommandTimeoutSeconds;
+
+        if (selection.IncludeObjectInventory)
+        {
+            var json = ObjectInventoryWriter.Serialize(context.Connection.ServerName, database, inventory);
+            await apply(ArtifactIdentity("object-inventory"), json, RepositoryLayout.ObjectInventoryFile).ConfigureAwait(false);
+        }
+
+        if (selection.IncludeDatabaseOptions)
+        {
+            var options = await _artifactReader.ReadDatabaseOptionsAsync(
+                context.Connection, context.SqlPassword, database, timeout, cancellationToken).ConfigureAwait(false);
+            await apply(ArtifactIdentity("database-options"), options, RepositoryLayout.DatabaseOptionsFile).ConfigureAwait(false);
+        }
+
+        if (selection.IncludeDatabasePermissionsFile)
+        {
+            var permissions = await _artifactReader.ReadPermissionsAsync(
+                context.Connection, context.SqlPassword, database, timeout, cancellationToken).ConfigureAwait(false);
+            await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile).ConfigureAwait(false);
+        }
+    }
+
+    private static ScriptedObjectIdentity ArtifactIdentity(string name) =>
+        new(SqlObjectType.DatabaseArtifact, string.Empty, name);
 
     private async Task ApplyDeletionsAsync(
         RunContext context, string database, string localPath,

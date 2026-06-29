@@ -41,4 +41,9 @@ public enum SqlObjectType
 
     // --- Row-level security (scripted last: binds predicate functions to tables) ---
     SecurityPolicy = 50,
+
+    // --- Synthetic, database-scoped manifest files (object inventory, database options,
+    //     permissions). Not user-selectable and not routed through a script provider or the
+    //     path mapper; the engine generates these directly with fixed repository paths. ---
+    DatabaseArtifact = 60,
 }

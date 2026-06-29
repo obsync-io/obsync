@@ -16,6 +16,12 @@ public static class RepositoryLayout
     public const string DatabaseOptionsFile = "metadata/database-options.sql";
 
     /// <summary>
+    /// Consolidated database-scoped GRANT/DENY permission script, relative to the database root.
+    /// (Object-level permissions are also scripted inline within each object's own file.)
+    /// </summary>
+    public const string PermissionsFile = "security/permissions/permissions.sql";
+
+    /// <summary>
     /// Joins a base folder and a relative path into a clean, forward-slashed repository path
     /// with no leading, trailing, or duplicate separators.
     /// </summary>
