@@ -1,0 +1,52 @@
+<UserControl x:Class="Obsync.App.Views.JobsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <StackPanel>
+                <TextBlock Text="Sync Jobs" Style="{StaticResource PageTitle}" />
+                <TextBlock Text="Create, view, and run sync jobs" Style="{StaticResource Muted}" Margin="0,4,0,0" />
+            </StackPanel>
+            <Button Content="Create Sync Job" Style="{StaticResource PrimaryButton}"
+                    HorizontalAlignment="Right" VerticalAlignment="Top" Click="OnCreateJob" />
+        </Grid>
+
+        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0"
+                   Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0">
+            <DataGrid ItemsSource="{Binding Jobs}" AutoGenerateColumns="False" IsReadOnly="True"
+                      HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                      Background="Transparent" RowBackground="Transparent" FontSize="13"
+                      CanUserAddRows="False">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Job Name" Binding="{Binding Name}" Width="2*" />
+                    <DataGridTextColumn Header="Databases" Binding="{Binding DatabasesDisplay}" Width="2*" />
+                    <DataGridTextColumn Header="Status" Binding="{Binding RunSummary.LastStatus}" Width="*" />
+                    <DataGridTextColumn Header="Last Run" Binding="{Binding RunSummary.LastRunAt, StringFormat=g}" Width="1.5*" />
+                    <DataGridTextColumn Header="Changes" Binding="{Binding RunSummary.LastChangeCount}" Width="*" />
+                    <DataGridTemplateColumn Header="" Width="Auto">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Run Now" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                            Command="{Binding DataContext.RunNowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" />
+                                    <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                            Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Border>
+    </Grid>
+</UserControl>

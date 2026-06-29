@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <!-- Windows-only: installs as a Windows Service and uses the Security project. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UserSecretsId>dotnet-Obsync.Service-83e22bf0-0000-4030-8b7a-c7ece6af5652</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="Quartz.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Obsync.Engine\Obsync.Engine.csproj" />
+    <ProjectReference Include="..\Obsync.Scheduler\Obsync.Scheduler.csproj" />
+    <ProjectReference Include="..\Obsync.Data\Obsync.Data.csproj" />
+    <ProjectReference Include="..\Obsync.Security\Obsync.Security.csproj" />
+  </ItemGroup>
+
+</Project>

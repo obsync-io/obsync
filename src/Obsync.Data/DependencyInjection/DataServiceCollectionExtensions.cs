@@ -1,0 +1,42 @@
+using Dapper;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Obsync.Data.Repositories;
+
+namespace Obsync.Data.DependencyInjection;
+
+/// <summary>Registers the local SQLite state database, repositories, and migration runner.</summary>
+public static class DataServiceCollectionExtensions
+{
+    private static bool _dapperConfigured;
+
+    public static IServiceCollection AddObsyncData(this IServiceCollection services, string databasePath)
+    {
+        ConfigureDapper();
+
+        services.Configure<ObsyncDataOptions>(o => o.DatabasePath = databasePath);
+
+        services.TryAddSingleton<IDbConnectionFactory, SqliteConnectionFactory>();
+        services.TryAddSingleton<IDatabaseInitializer, DatabaseInitializer>();
+
+        services.TryAddSingleton<IConnectionProfileRepository, ConnectionProfileRepository>();
+        services.TryAddSingleton<IRepositoryProfileRepository, RepositoryProfileRepository>();
+        services.TryAddSingleton<IJobRepository, JobRepository>();
+        services.TryAddSingleton<IRunRepository, RunRepository>();
+        services.TryAddSingleton<IObjectStateRepository, ObjectStateRepository>();
+
+        return services;
+    }
+
+    private static void ConfigureDapper()
+    {
+        if (_dapperConfigured)
+        {
+            return;
+        }
+
+        SqlMapper.AddTypeHandler(new DateTimeOffsetTypeHandler());
+        SqlMapper.AddTypeHandler(new GuidTypeHandler());
+        _dapperConfigured = true;
+    }
+}

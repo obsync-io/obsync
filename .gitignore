@@ -1,0 +1,48 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Test / coverage
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.coveragexml
+
+# Local runtime state (never commit secrets or the local SQLite state DB)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+appsettings.*.Local.json
+secrets.json
+
+# Logs and local workspaces
+logs/
+[Ll]og/
+*.log
+workspaces/
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/

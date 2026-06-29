@@ -1,0 +1,39 @@
+<Project>
+
+  <!--
+    Common MSBuild properties applied to every project in the solution.
+    Project-specific TargetFrameworks (e.g. net10.0-windows for WPF) stay in
+    the individual .csproj files.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup Label="NuGet audit suppressions">
+    <!--
+      GHSA-2m69-gcr7-jv3q is a transitive native dependency (SQLitePCLRaw.lib.e_sqlite3)
+      pulled in by Microsoft.Data.Sqlite. No patched native package has shipped on
+      NuGet yet (2.1.11 is the latest). Suppressed narrowly (this one advisory only)
+      so the rest of the security audit stays active and fails the build. Revisit and
+      remove once an updated SQLitePCLRaw native build is published.
+    -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
+  </ItemGroup>
+
+  <PropertyGroup Label="Package / assembly metadata">
+    <Product>Obsync</Product>
+    <Company>Obsync</Company>
+    <Authors>Obsync Contributors</Authors>
+    <Copyright>Copyright (c) 2026 Obsync Contributors</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <NeutralLanguage>en</NeutralLanguage>
+  </PropertyGroup>
+
+</Project>

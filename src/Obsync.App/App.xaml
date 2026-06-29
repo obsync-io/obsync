@@ -1,0 +1,40 @@
+<Application x:Class="Obsync.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Obsync.App.ViewModels"
+             xmlns:views="clr-namespace:Obsync.App.Views"
+             xmlns:conv="clr-namespace:Obsync.App.Converters"
+             DispatcherUnhandledException="OnDispatcherUnhandledException">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Theme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <conv:StatusToBrushConverter x:Key="StatusToBrush" />
+            <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+            <conv:NullToVisibilityConverter x:Key="NullToVisibility" />
+            <conv:InverseBoolConverter x:Key="InverseBool" />
+
+            <!-- ViewModel -> View mapping (MVVM, no code-behind navigation) -->
+            <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
+                <views:DashboardView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:JobsViewModel}">
+                <views:JobsView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:ConnectionsViewModel}">
+                <views:ConnectionsView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:RepositoriesViewModel}">
+                <views:RepositoriesView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:HistoryViewModel}">
+                <views:HistoryView />
+            </DataTemplate>
+            <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+                <views:SettingsView />
+            </DataTemplate>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

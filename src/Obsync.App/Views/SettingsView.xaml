@@ -1,0 +1,27 @@
+<UserControl x:Class="Obsync.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Margin="28,24">
+        <TextBlock Text="Settings" Style="{StaticResource PageTitle}" />
+        <TextBlock Text="Application and local data locations" Style="{StaticResource Muted}" Margin="0,4,0,18" />
+
+        <Border Style="{StaticResource Card}">
+            <StackPanel>
+                <TextBlock Text="About" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                <TextBlock Text="{Binding Version}" Style="{StaticResource Body}" Margin="0,0,0,4" />
+                <TextBlock Text="Secrets are stored in Windows Credential Manager; the local state database never holds passwords or tokens."
+                           Style="{StaticResource Muted}" />
+
+                <TextBlock Text="Data locations" Style="{StaticResource SectionTitle}" Margin="0,18,0,8" />
+                <TextBlock Text="Data folder" Style="{StaticResource Muted}" />
+                <TextBlock Text="{Binding DataRoot}" Style="{StaticResource Body}" Margin="0,0,0,8" />
+                <TextBlock Text="State database" Style="{StaticResource Muted}" />
+                <TextBlock Text="{Binding DatabasePath}" Style="{StaticResource Body}" Margin="0,0,0,8" />
+                <TextBlock Text="Git workspaces" Style="{StaticResource Muted}" />
+                <TextBlock Text="{Binding WorkspacesRoot}" Style="{StaticResource Body}" Margin="0,0,0,8" />
+                <TextBlock Text="Logs" Style="{StaticResource Muted}" />
+                <TextBlock Text="{Binding LogsRoot}" Style="{StaticResource Body}" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

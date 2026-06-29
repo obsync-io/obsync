@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Windows-only: references Obsync.Security (Credential Manager / DPAPI). -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Obsync.Cli</RootNamespace>
+    <AssemblyName>obsync</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Obsync.Engine\Obsync.Engine.csproj" />
+    <ProjectReference Include="..\Obsync.Data\Obsync.Data.csproj" />
+    <ProjectReference Include="..\Obsync.Security\Obsync.Security.csproj" />
+    <ProjectReference Include="..\Obsync.Scheduler\Obsync.Scheduler.csproj" />
+  </ItemGroup>
+
+</Project>

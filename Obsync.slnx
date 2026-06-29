@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Obsync.App/Obsync.App.csproj" />
+    <Project Path="src/Obsync.Cli/Obsync.Cli.csproj" />
+    <Project Path="src/Obsync.Data/Obsync.Data.csproj" />
+    <Project Path="src/Obsync.Engine/Obsync.Engine.csproj" />
+    <Project Path="src/Obsync.Git/Obsync.Git.csproj" />
+    <Project Path="src/Obsync.GitHub/Obsync.GitHub.csproj" />
+    <Project Path="src/Obsync.Metadata/Obsync.Metadata.csproj" />
+    <Project Path="src/Obsync.Scheduler/Obsync.Scheduler.csproj" />
+    <Project Path="src/Obsync.Security/Obsync.Security.csproj" />
+    <Project Path="src/Obsync.Service/Obsync.Service.csproj" />
+    <Project Path="src/Obsync.Shared/Obsync.Shared.csproj" />
+    <Project Path="src/Obsync.Smo/Obsync.Smo.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Obsync.Engine.Tests/Obsync.Engine.Tests.csproj" />
+    <Project Path="tests/Obsync.Git.Tests/Obsync.Git.Tests.csproj" />
+    <Project Path="tests/Obsync.Integration.Tests/Obsync.Integration.Tests.csproj" />
+    <Project Path="tests/Obsync.Metadata.Tests/Obsync.Metadata.Tests.csproj" />
+    <Project Path="tests/Obsync.Shared.Tests/Obsync.Shared.Tests.csproj" />
+  </Folder>
+</Solution>

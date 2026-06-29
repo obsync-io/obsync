@@ -1,0 +1,42 @@
+<Window x:Class="Obsync.App.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Obsync" Height="760" Width="1180"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource AppBackgroundBrush}"
+        FontFamily="{StaticResource AppFontFamily}">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="224" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Left navigation rail -->
+        <Border Grid.Column="0" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="20,22,20,18">
+                    <TextBlock Text="Obsync" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
+                    <TextBlock Text="SQL → GitHub version control" Style="{StaticResource Muted}" FontSize="11" Margin="0,2,0,0" />
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Top">
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Dashboard" IsChecked="True"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Dashboard" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Jobs"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Jobs" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Connections"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Connections" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Repositories"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Repositories" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="History"
+                                 Command="{Binding NavigateCommand}" CommandParameter="History" />
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Settings"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- Content -->
+        <ContentControl Grid.Column="1" Content="{Binding CurrentView}" Margin="0" />
+    </Grid>
+</Window>

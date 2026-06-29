@@ -1,0 +1,67 @@
+<UserControl x:Class="Obsync.App.Views.ConnectionsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="Connections" Style="{StaticResource PageTitle}" />
+            <TextBlock Text="SQL Server connections used by your sync jobs" Style="{StaticResource Muted}" Margin="0,4,0,18" />
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="380" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Existing connections -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,16,0">
+                <DataGrid ItemsSource="{Binding Connections}" AutoGenerateColumns="False" IsReadOnly="True"
+                          HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
+                          Background="Transparent" RowBackground="Transparent" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
+                        <DataGridTextColumn Header="Server" Binding="{Binding ServerName}" Width="*" />
+                        <DataGridTextColumn Header="Auth" Binding="{Binding AuthenticationMode}" Width="Auto" />
+                        <DataGridTemplateColumn>
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                            Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Border>
+
+            <!-- Add / edit -->
+            <Border Grid.Column="1" Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Add a connection" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+                    <TextBlock Text="Name" Style="{StaticResource Muted}" />
+                    <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                    <TextBlock Text="Server name" Style="{StaticResource Muted}" />
+                    <TextBox Text="{Binding ServerName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                    <TextBlock Text="Authentication" Style="{StaticResource Muted}" />
+                    <ComboBox ItemsSource="{Binding AuthModes}" SelectedItem="{Binding AuthenticationMode}" Margin="0,2,0,10" />
+                    <TextBlock Text="Username (SQL login)" Style="{StaticResource Muted}" />
+                    <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
+                    <TextBlock Text="Password (SQL login)" Style="{StaticResource Muted}" />
+                    <PasswordBox x:Name="PasswordBox" PasswordChanged="OnPasswordChanged" Padding="8,6" Margin="0,2,0,10" />
+                    <CheckBox Content="Trust server certificate" IsChecked="{Binding TrustServerCertificate}" Margin="0,0,0,14" />
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Test" Style="{StaticResource SecondaryButton}" Command="{Binding TestCommand}" Margin="0,0,8,0" />
+                        <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding TestResult}" Style="{StaticResource Muted}" Margin="0,12,0,0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
