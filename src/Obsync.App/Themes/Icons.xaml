@@ -1,0 +1,41 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+    <!-- Windows 11 system icon font; falls back to the Windows 10 MDL2 set. -->
+    <FontFamily x:Key="IconFontFamily">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+    <!-- Glyph code points (referenced by key so screens never embed magic characters). -->
+    <sys:String x:Key="IconDashboard">&#xE80F;</sys:String>
+    <sys:String x:Key="IconJobs">&#xE895;</sys:String>
+    <sys:String x:Key="IconConnections">&#xE968;</sys:String>
+    <sys:String x:Key="IconRepositories">&#xE8F1;</sys:String>
+    <sys:String x:Key="IconHistory">&#xE81C;</sys:String>
+    <sys:String x:Key="IconSettings">&#xE713;</sys:String>
+
+    <sys:String x:Key="IconRun">&#xE768;</sys:String>
+    <sys:String x:Key="IconEdit">&#xE70F;</sys:String>
+    <sys:String x:Key="IconAdd">&#xE710;</sys:String>
+    <sys:String x:Key="IconDelete">&#xE74D;</sys:String>
+    <sys:String x:Key="IconBack">&#xE72B;</sys:String>
+    <sys:String x:Key="IconRefresh">&#xE72C;</sys:String>
+    <sys:String x:Key="IconOpenExternal">&#xE8A7;</sys:String>
+    <sys:String x:Key="IconCheck">&#xE73E;</sys:String>
+    <sys:String x:Key="IconWarning">&#xE7BA;</sys:String>
+    <sys:String x:Key="IconError">&#xEA39;</sys:String>
+    <sys:String x:Key="IconFolder">&#xE8B7;</sys:String>
+    <sys:String x:Key="IconDatabase">&#xE968;</sys:String>
+    <sys:String x:Key="IconBranch">&#xE8C7;</sys:String>
+    <sys:String x:Key="IconOpen">&#xE8E0;</sys:String>
+
+    <!-- Base style for an inline icon glyph. -->
+    <Style x:Key="Icon" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource IconFontFamily}" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+</ResourceDictionary>

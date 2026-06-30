@@ -12,6 +12,8 @@ namespace Obsync.App.ViewModels;
 public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
 {
     private readonly IJobRepository _jobs;
+    private readonly IConnectionProfileRepository _connections;
+    private readonly IRepositoryProfileRepository _repositories;
     private readonly ISyncEngine _engine;
 
     [ObservableProperty] private SyncJob? _selectedJob;
@@ -20,15 +22,22 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
 
     public ObservableCollection<SyncJob> Jobs { get; } = [];
 
-    public JobsViewModel(IJobRepository jobs, ISyncEngine engine)
+    public JobsViewModel(
+        IJobRepository jobs,
+        IConnectionProfileRepository connections,
+        IRepositoryProfileRepository repositories,
+        ISyncEngine engine)
     {
         _jobs = jobs;
+        _connections = connections;
+        _repositories = repositories;
         _engine = engine;
     }
 
     public async Task LoadAsync()
     {
         var jobs = await _jobs.GetAllAsync();
+        await JobDisplay.PopulateAsync(jobs, _connections, _repositories);
         Jobs.Clear();
         foreach (var job in jobs)
         {

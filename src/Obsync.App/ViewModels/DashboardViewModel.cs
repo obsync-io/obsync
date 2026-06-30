@@ -12,6 +12,8 @@ namespace Obsync.App.ViewModels;
 public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewModel
 {
     private readonly IJobRepository _jobs;
+    private readonly IConnectionProfileRepository _connections;
+    private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
     private readonly ISyncEngine _engine;
@@ -28,10 +30,13 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     public ObservableCollection<SyncJob> Jobs { get; } = [];
 
     public DashboardViewModel(
-        IJobRepository jobs, IRunRepository runs, IObjectStateRepository objectStates,
+        IJobRepository jobs, IConnectionProfileRepository connections, IRepositoryProfileRepository repositories,
+        IRunRepository runs, IObjectStateRepository objectStates,
         ISyncEngine engine, IShellNavigator navigator)
     {
         _jobs = jobs;
+        _connections = connections;
+        _repositories = repositories;
         _runs = runs;
         _objectStates = objectStates;
         _engine = engine;
@@ -82,6 +87,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     public async Task LoadAsync()
     {
         var jobs = await _jobs.GetAllAsync();
+        await JobDisplay.PopulateAsync(jobs, _connections, _repositories);
         Jobs.Clear();
         foreach (var job in jobs)
         {

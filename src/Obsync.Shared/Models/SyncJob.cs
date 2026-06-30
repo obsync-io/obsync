@@ -77,4 +77,14 @@ public sealed class SyncJob
 
     /// <summary>Comma-separated database list, for display in lists and tables.</summary>
     public string DatabasesDisplay => string.Join(", ", Databases);
+
+    // --- Transient display fields ---
+    // Populated by list view models after resolving the connection/repository profiles. These are
+    // NOT persisted (JobRepository maps columns explicitly and never serializes the whole SyncJob).
+
+    /// <summary>Human-readable source (SQL Server) for list/table views. Not persisted.</summary>
+    public string? SourceDisplay { get; set; }
+
+    /// <summary>Human-readable destination (repository · branch) for list/table views. Not persisted.</summary>
+    public string? DestinationDisplay { get; set; }
 }

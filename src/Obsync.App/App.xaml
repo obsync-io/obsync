@@ -15,6 +15,33 @@
             <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
             <conv:NullToVisibilityConverter x:Key="NullToVisibility" />
             <conv:InverseBoolConverter x:Key="InverseBool" />
+            <conv:StatusToBadgeBackgroundConverter x:Key="StatusToBadgeBackground" />
+            <conv:StatusToTextConverter x:Key="StatusToText" />
+            <conv:ChangeTypeToBrushConverter x:Key="ChangeTypeToBrush" />
+            <conv:ChangeTypeToBadgeBackgroundConverter x:Key="ChangeTypeToBadgeBackground" />
+            <conv:MsToDurationConverter x:Key="MsToDuration" />
+
+            <!-- Reusable small status badge (DataContext = RunStatus). -->
+            <DataTemplate x:Key="StatusBadgeTemplate">
+                <Border CornerRadius="{StaticResource RadiusPill}" Padding="9,3" HorizontalAlignment="Left"
+                        Background="{Binding Converter={StaticResource StatusToBadgeBackground}}">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                 Fill="{Binding Converter={StaticResource StatusToBrush}}" />
+                        <TextBlock Text="{Binding Converter={StaticResource StatusToText}}" FontSize="12"
+                                   FontWeight="SemiBold" Foreground="{Binding Converter={StaticResource StatusToBrush}}" />
+                    </StackPanel>
+                </Border>
+            </DataTemplate>
+
+            <!-- Reusable change-type badge (DataContext = ChangeType). -->
+            <DataTemplate x:Key="ChangeBadgeTemplate">
+                <Border CornerRadius="{StaticResource RadiusPill}" Padding="9,3" HorizontalAlignment="Left"
+                        Background="{Binding Converter={StaticResource ChangeTypeToBadgeBackground}}">
+                    <TextBlock Text="{Binding}" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{Binding Converter={StaticResource ChangeTypeToBrush}}" />
+                </Border>
+            </DataTemplate>
 
             <!-- ViewModel -> View mapping (MVVM, no code-behind navigation) -->
             <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
