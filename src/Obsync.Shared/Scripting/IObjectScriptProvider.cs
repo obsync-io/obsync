@@ -20,6 +20,9 @@ public sealed class ScriptRequest
 
     /// <summary>Command timeout to apply to SQL operations, in seconds.</summary>
     public int CommandTimeoutSeconds { get; init; } = 120;
+
+    /// <summary>Number of attempts (1 = no retry) for transient SQL failures while reading metadata.</summary>
+    public int MaxRetries { get; init; } = 3;
 }
 
 /// <summary>The raw (pre-normalization) script for a single object, as produced by a provider.</summary>

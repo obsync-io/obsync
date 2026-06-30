@@ -33,7 +33,14 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
     {
         var connectionString = _connectionStrings.Create(request.Profile, request.Password, request.Database);
         await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await SqlTransientErrors.RetryAsync(
+            async ct =>
+            {
+                await connection.OpenAsync(ct).ConfigureAwait(false);
+                return true;
+            },
+            request.MaxRetries,
+            cancellationToken).ConfigureAwait(false);
 
         foreach (var type in request.Types)
         {
@@ -90,7 +97,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
 
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             if (await reader.IsDBNullAsync(3, cancellationToken).ConfigureAwait(false))
@@ -125,7 +132,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             if (await reader.IsDBNullAsync(3, cancellationToken).ConfigureAwait(false))
@@ -154,7 +161,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             """;
 
         await using var command = CreateCommand(connection, sql, request);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             if (await reader.IsDBNullAsync(2, cancellationToken).ConfigureAwait(false))
@@ -188,7 +195,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var name = reader.GetString(0);
@@ -218,7 +225,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var schema = reader.GetString(0);
@@ -249,7 +256,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var schema = reader.GetString(0);
@@ -293,6 +300,10 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
 
         return builder.ToString();
     }
+
+    private static Task<SqlDataReader> ExecuteReaderWithRetryAsync(
+        SqlCommand command, int maxRetries, CancellationToken cancellationToken) =>
+        SqlTransientErrors.RetryAsync(ct => command.ExecuteReaderAsync(ct), maxRetries, cancellationToken);
 
     private static SqlCommand CreateCommand(SqlConnection connection, string sql, ScriptRequest request)
     {

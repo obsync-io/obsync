@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Obsync.Shared.Results;
@@ -32,7 +33,7 @@ public sealed class GitHubService : IGitHubService
         try
         {
             var client = CreateClient(token);
-            var user = await client.User.Current().ConfigureAwait(false);
+            var user = await WithRetryAsync(() => client.User.Current(), cancellationToken).ConfigureAwait(false);
             return Result.Success(user.Login);
         }
         catch (AuthorizationException)
@@ -52,8 +53,9 @@ public sealed class GitHubService : IGitHubService
         try
         {
             var client = CreateClient(token);
-            var repositories = await client.Repository.GetAllForCurrent(
-                new RepositoryRequest { Sort = RepositorySort.FullName }).ConfigureAwait(false);
+            var repositories = await WithRetryAsync(
+                () => client.Repository.GetAllForCurrent(new RepositoryRequest { Sort = RepositorySort.FullName }),
+                cancellationToken).ConfigureAwait(false);
 
             var mapped = repositories
                 .Select(r => new GitHubRepository(r.Owner.Login, r.Name, r.DefaultBranch ?? "main", r.Private))
@@ -72,7 +74,7 @@ public sealed class GitHubService : IGitHubService
         try
         {
             var client = CreateClient(token);
-            var branches = await client.Repository.Branch.GetAll(owner, name).ConfigureAwait(false);
+            var branches = await WithRetryAsync(() => client.Repository.Branch.GetAll(owner, name), cancellationToken).ConfigureAwait(false);
             return Result.Success<IReadOnlyList<string>>([.. branches.Select(b => b.Name)]);
         }
         catch (ApiException ex)
@@ -83,6 +85,40 @@ public sealed class GitHubService : IGitHubService
 
     private static GitHubClient CreateClient(string token) =>
         new(Product) { Credentials = new Credentials(token) };
+
+    /// <summary>
+    /// Runs an Octokit call with a short, growing backoff on transient failures (server 5xx,
+    /// secondary rate limits, transport blips). Permanent failures — bad credentials, 4xx, the
+    /// primary rate limit — are not retried and surface to the caller's catch immediately.
+    /// </summary>
+    private static async Task<T> WithRetryAsync<T>(Func<Task<T>> action, CancellationToken cancellationToken, int maxAttempts = 3)
+    {
+        var attempt = 0;
+        while (true)
+        {
+            attempt++;
+            try
+            {
+                return await action().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < maxAttempts && IsTransient(ex))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool IsTransient(Exception exception) => exception switch
+    {
+        // Primary rate limit resets minutes away — retrying soon cannot help, so surface it.
+        RateLimitExceededException => false,
+        // Secondary ("abuse") rate limit clears quickly; a short backoff is worthwhile.
+        AbuseException => true,
+        ApiException api => (int)api.StatusCode >= 500,
+        HttpRequestException => true,
+        TimeoutException => true,
+        _ => false,
+    };
 
     /// <summary>The web URL for a commit, used for the "Open in GitHub" links.</summary>
     public static string BuildCommitUrl(string owner, string name, string sha) =>

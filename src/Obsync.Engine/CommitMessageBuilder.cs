@@ -34,7 +34,11 @@ internal static class CommitMessageBuilder
 
     private static void AppendCategory(StringBuilder body, string title, IReadOnlyList<ObjectChange> changes, ChangeType type)
     {
-        var matching = changes.Where(c => c.ChangeType == type).ToList();
+        // Sort by path so the body is deterministic regardless of the parallel processing order.
+        var matching = changes
+            .Where(c => c.ChangeType == type)
+            .OrderBy(c => c.RelativePath, StringComparer.Ordinal)
+            .ToList();
         if (matching.Count == 0)
         {
             return;

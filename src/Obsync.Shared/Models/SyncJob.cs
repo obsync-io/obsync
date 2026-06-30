@@ -3,13 +3,16 @@ namespace Obsync.Shared.Models;
 /// <summary>Performance and reliability knobs surfaced under "Advanced settings".</summary>
 public sealed class JobAdvancedOptions
 {
-    /// <summary>Max databases/object-types scripted concurrently. 0 = auto (based on CPU count).</summary>
+    /// <summary>Max objects scripted concurrently per database. 0 = auto (based on CPU count).</summary>
     public int MaxParallelWorkers { get; set; }
 
     /// <summary>SQL command timeout per query, in seconds.</summary>
     public int SqlCommandTimeoutSeconds { get; set; } = 120;
 
-    /// <summary>Number of retries for transient Git/GitHub failures.</summary>
+    /// <summary>Number of attempts for transient SQL failures (deadlocks, timeouts, connection blips).</summary>
+    public int SqlRetryCount { get; set; } = 3;
+
+    /// <summary>Number of attempts for transient Git network failures (clone/fetch/push).</summary>
     public int GitRetryCount { get; set; } = 3;
 }
 

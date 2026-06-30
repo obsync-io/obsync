@@ -11,6 +11,14 @@ public sealed class SqlTransientErrorsTests
         Assert.False(SqlTransientErrors.IsTransient(new InvalidOperationException("permission denied")));
 
     [Fact]
+    public void IsTransient_WrappedTransientInner_IsTrue() =>
+        Assert.True(SqlTransientErrors.IsTransient(new InvalidOperationException("wrapper", new TimeoutException())));
+
+    [Fact]
+    public void IsTransient_WrappedNonTransientInner_IsFalse() =>
+        Assert.False(SqlTransientErrors.IsTransient(new InvalidOperationException("wrapper", new InvalidOperationException())));
+
+    [Fact]
     public async Task RetryAsync_RetriesTransientFailureThenSucceeds()
     {
         var attempts = 0;

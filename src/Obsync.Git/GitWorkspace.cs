@@ -15,6 +15,9 @@ public sealed class GitWorkspaceContext
 
     public string CommitterName { get; init; } = "Obsync";
     public string CommitterEmail { get; init; } = "obsync@localhost";
+
+    /// <summary>Number of attempts (1 = no retry) for transient network operations (clone/fetch/push).</summary>
+    public int NetworkRetryCount { get; init; } = 3;
 }
 
 /// <summary>The outcome of a commit attempt.</summary>
@@ -129,7 +132,7 @@ public sealed class GitWorkspace : IGitWorkspace
             : Result.Failure($"git push failed: {Summarize(push.StandardError)}");
     }
 
-    private Task<GitCommandResult> RunNetworkAsync(
+    private async Task<GitCommandResult> RunNetworkAsync(
         string workingDirectory, GitWorkspaceContext context, IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
         // Authentication is injected per-command via http.extraheader so the token is never
@@ -142,7 +145,23 @@ public sealed class GitWorkspace : IGitWorkspace
         }
 
         full.AddRange(args);
-        return _git.RunAsync(workingDirectory, full, cancellationToken);
+
+        var maxAttempts = Math.Max(1, context.NetworkRetryCount);
+        var attempt = 0;
+        while (true)
+        {
+            attempt++;
+            var result = await _git.RunAsync(workingDirectory, full, cancellationToken).ConfigureAwait(false);
+            if (result.Success || attempt >= maxAttempts || !GitTransientErrors.IsTransient(result.StandardError))
+            {
+                return result;
+            }
+
+            _logger.LogWarning(
+                "Transient git network failure on '{Op}' (attempt {Attempt}/{Max}); retrying.",
+                args.Count > 0 ? args[0] : "?", attempt, maxAttempts);
+            await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static string Summarize(string error)

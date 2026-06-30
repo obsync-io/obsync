@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -176,6 +178,7 @@ public sealed class SyncEngine : ISyncEngine
             AuthorizationHeader = context.GitToken is null ? null : GitHubService.BuildAuthorizationHeader(context.GitToken),
             CommitterName = "Obsync",
             CommitterEmail = _options.CommitterEmail,
+            NetworkRetryCount = context.Job.Advanced.GitRetryCount,
         };
 
         context.Report(SyncPhase.PreparingRepository, "Preparing the GitHub workspace…");
@@ -208,25 +211,29 @@ public sealed class SyncEngine : ISyncEngine
 
         var prior = (await _objectStates.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false))
             .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var changedStates = new List<TrackedObjectState>();
-        var inventory = new List<ObjectInventoryEntry>();
+
+        // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
+        // `prior` is only read during processing, so a plain dictionary is safe to share.
+        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var changedStates = new ConcurrentBag<TrackedObjectState>();
+        var inventory = new ConcurrentBag<ObjectInventoryEntry>();
 
         // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
         // database artifact). Artifacts ride the same change-detection path so an options- or
         // permissions-only change still produces a commit, while an unchanged run still produces none.
-        async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath)
+        // Runs concurrently across workers for objects, then sequentially for the trailing artifacts.
+        async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath, CancellationToken ct)
         {
             var isArtifact = identity.Type == SqlObjectType.DatabaseArtifact;
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
             var hash = _hasher.ComputeHash(script);
             var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
             var key = StateKey(identity);
-            seen.Add(key);
+            seen.TryAdd(key, 0);
 
             if (!isArtifact)
             {
-                context.Scanned++;
+                context.IncrementScanned();
                 inventory.Add(new ObjectInventoryEntry(
                     identity.Type.ToString(), identity.Schema, identity.Name, relativePath, hash));
             }
@@ -238,16 +245,16 @@ public sealed class SyncEngine : ISyncEngine
                 return;
             }
 
-            await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, cancellationToken)
+            await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, ct)
                 .ConfigureAwait(false);
 
             if (changeType == ChangeType.Added)
             {
-                context.Added++;
+                context.IncrementAdded();
             }
             else
             {
-                context.Modified++;
+                context.IncrementModified();
             }
 
             context.Changes.Add(new ObjectChange
@@ -279,6 +286,35 @@ public sealed class SyncEngine : ISyncEngine
 
         context.Report(SyncPhase.Scripting, $"Scripting objects in {database}…");
 
+        var workers = context.Job.Advanced.MaxParallelWorkers > 0
+            ? context.Job.Advanced.MaxParallelWorkers
+            : Environment.ProcessorCount;
+
+        // A single producer streams from the providers (one SqlDataReader at a time) into a bounded
+        // channel; the worker pool normalizes, hashes, diffs, and writes objects in parallel.
+        await ChannelPipeline.RunAsync(
+            StreamProvidersAsync(context, database, types, cancellationToken),
+            (raw, ct) => ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
+            workers,
+            cancellationToken).ConfigureAwait(false);
+
+        // Artifacts and deletions run after the parallel phase, so they touch the accumulators alone.
+        await GenerateDatabaseArtifactsAsync(context, database, [.. inventory], ApplyItemAsync, cancellationToken).ConfigureAwait(false);
+
+        await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
+
+        context.PendingStates.AddRange(changedStates);
+    }
+
+    /// <summary>
+    /// Streams every requested object across providers in sequence — metadata fast-path first, then
+    /// SMO — yielding one <see cref="RawScriptedObject"/> at a time. A single consumer (the pipeline
+    /// producer) advances this, so the providers' SqlDataReaders are never touched concurrently.
+    /// </summary>
+    private async IAsyncEnumerable<RawScriptedObject> StreamProvidersAsync(
+        RunContext context, string database, IReadOnlyList<SqlObjectType> types,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         foreach (var provider in _scriptProviders)
         {
             var providerTypes = types.Where(t => SqlObjectTypeCatalog.Get(t).Strategy == provider.Strategy).ToList();
@@ -295,19 +331,14 @@ public sealed class SyncEngine : ISyncEngine
                 Types = providerTypes,
                 Selection = context.Job.Selection,
                 CommandTimeoutSeconds = context.Job.Advanced.SqlCommandTimeoutSeconds,
+                MaxRetries = context.Job.Advanced.SqlRetryCount,
             };
 
             await foreach (var raw in provider.ScriptAsync(request, cancellationToken).ConfigureAwait(false))
             {
-                await ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity)).ConfigureAwait(false);
+                yield return raw;
             }
         }
-
-        await GenerateDatabaseArtifactsAsync(context, database, inventory, ApplyItemAsync, cancellationToken).ConfigureAwait(false);
-
-        await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
-
-        context.PendingStates.AddRange(changedStates);
     }
 
     /// <summary>
@@ -316,7 +347,7 @@ public sealed class SyncEngine : ISyncEngine
     /// </summary>
     private async Task GenerateDatabaseArtifactsAsync(
         RunContext context, string database, IReadOnlyList<ObjectInventoryEntry> inventory,
-        Func<ScriptedObjectIdentity, string, string, Task> apply, CancellationToken cancellationToken)
+        Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply, CancellationToken cancellationToken)
     {
         var selection = context.Job.Selection;
         var timeout = context.Job.Advanced.SqlCommandTimeoutSeconds;
@@ -324,21 +355,21 @@ public sealed class SyncEngine : ISyncEngine
         if (selection.IncludeObjectInventory)
         {
             var json = ObjectInventoryWriter.Serialize(context.Connection.ServerName, database, inventory);
-            await apply(ArtifactIdentity("object-inventory"), json, RepositoryLayout.ObjectInventoryFile).ConfigureAwait(false);
+            await apply(ArtifactIdentity("object-inventory"), json, RepositoryLayout.ObjectInventoryFile, cancellationToken).ConfigureAwait(false);
         }
 
         if (selection.IncludeDatabaseOptions)
         {
             var options = await _artifactReader.ReadDatabaseOptionsAsync(
                 context.Connection, context.SqlPassword, database, timeout, cancellationToken).ConfigureAwait(false);
-            await apply(ArtifactIdentity("database-options"), options, RepositoryLayout.DatabaseOptionsFile).ConfigureAwait(false);
+            await apply(ArtifactIdentity("database-options"), options, RepositoryLayout.DatabaseOptionsFile, cancellationToken).ConfigureAwait(false);
         }
 
         if (selection.IncludeDatabasePermissionsFile)
         {
             var permissions = await _artifactReader.ReadPermissionsAsync(
                 context.Connection, context.SqlPassword, database, timeout, cancellationToken).ConfigureAwait(false);
-            await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile).ConfigureAwait(false);
+            await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -347,7 +378,7 @@ public sealed class SyncEngine : ISyncEngine
 
     private async Task ApplyDeletionsAsync(
         RunContext context, string database, string localPath,
-        Dictionary<string, TrackedObjectState> prior, HashSet<string> seen, CancellationToken cancellationToken)
+        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen, CancellationToken cancellationToken)
     {
         if (!context.Job.Selection.RemoveDroppedObjects)
         {
@@ -356,7 +387,7 @@ public sealed class SyncEngine : ISyncEngine
 
         foreach (var (key, state) in prior)
         {
-            if (seen.Contains(key))
+            if (seen.ContainsKey(key))
             {
                 continue;
             }
@@ -367,7 +398,7 @@ public sealed class SyncEngine : ISyncEngine
                 File.Delete(absolute);
             }
 
-            context.Deleted++;
+            context.IncrementDeleted();
             context.Changes.Add(new ObjectChange
             {
                 ChangeType = ChangeType.Deleted,
@@ -403,7 +434,7 @@ public sealed class SyncEngine : ISyncEngine
         run.ObjectsScanned = context.Scanned;
 
         context.Report(SyncPhase.Committing, "Creating commit…");
-        var (subject, body) = CommitMessageBuilder.Build(run, context.Job, context.Changes);
+        var (subject, body) = CommitMessageBuilder.Build(run, context.Job, [.. context.Changes]);
         var commit = await _gitWorkspace.CommitAllAsync(gitContext, subject, body, cancellationToken).ConfigureAwait(false);
 
         if (!commit.Success)
@@ -500,12 +531,24 @@ public sealed class SyncEngine : ISyncEngine
         public string? SqlPassword { get; }
         public string? GitToken { get; }
 
-        public int Scanned { get; set; }
-        public int Added { get; set; }
-        public int Modified { get; set; }
-        public int Deleted { get; set; }
+        private int _scanned;
+        private int _added;
+        private int _modified;
+        private int _deleted;
 
-        public List<ObjectChange> Changes { get; } = [];
+        // Counters are bumped from many worker threads, so reads/writes go through Interlocked.
+        public int Scanned => Volatile.Read(ref _scanned);
+        public int Added => Volatile.Read(ref _added);
+        public int Modified => Volatile.Read(ref _modified);
+        public int Deleted => Volatile.Read(ref _deleted);
+
+        public void IncrementScanned() => Interlocked.Increment(ref _scanned);
+        public void IncrementAdded() => Interlocked.Increment(ref _added);
+        public void IncrementModified() => Interlocked.Increment(ref _modified);
+        public void IncrementDeleted() => Interlocked.Increment(ref _deleted);
+
+        // Changes are added concurrently by workers; Logs and PendingStates only from single-threaded stages.
+        public ConcurrentBag<ObjectChange> Changes { get; } = new();
         public List<SyncRunLog> Logs { get; } = [];
         public List<TrackedObjectState> PendingStates { get; } = [];
 

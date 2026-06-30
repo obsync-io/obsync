@@ -32,7 +32,8 @@ public static class SqlTransientErrors
     {
         SqlException sql => sql.Errors.Cast<SqlError>().Any(e => TransientNumbers.Contains(e.Number)),
         TimeoutException => true,
-        _ => false,
+        // Unwrap wrappers (e.g. SMO's ConnectionFailureException) that carry a transient SqlException inside.
+        _ => exception.InnerException is not null && IsTransient(exception.InnerException),
     };
 
     /// <summary>
