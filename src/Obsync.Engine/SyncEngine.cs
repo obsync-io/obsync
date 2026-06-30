@@ -154,6 +154,16 @@ public sealed class SyncEngine : ISyncEngine
 
     private async Task ExecuteAsync(SyncRun run, RunContext context, CancellationToken cancellationToken)
     {
+        // Pull request commit mode is a planned feature (see CommitMode.PullRequest). It is not wired
+        // up yet, so fail fast and clearly rather than scripting a run that would silently never push.
+        if (context.Job.CommitMode == CommitMode.PullRequest)
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage = "Pull request commit mode is not yet supported. Use direct commit.";
+            context.Log(SyncLogLevel.Error, run.ErrorMessage);
+            return;
+        }
+
         context.Report(SyncPhase.Connecting, $"Connecting to {context.Connection.ServerName}…");
 
         var branch = string.IsNullOrWhiteSpace(context.Job.Branch) ? context.Repository.DefaultBranch : context.Job.Branch!;
@@ -417,24 +427,18 @@ public sealed class SyncEngine : ISyncEngine
         run.CommitUrl = GitHubService.BuildCommitUrl(context.Repository.Owner, context.Repository.RepositoryName, sha);
         context.Log(SyncLogLevel.Info, $"Created commit {sha[..Math.Min(7, sha.Length)]}.");
 
-        if (context.Job.CommitMode == CommitMode.DirectCommit)
+        // Only direct-commit jobs reach here; pull request mode is rejected up front in ExecuteAsync.
+        context.Report(SyncPhase.Pushing, "Pushing to GitHub…");
+        var push = await _gitWorkspace.PushAsync(gitContext, cancellationToken).ConfigureAwait(false);
+        if (push.IsFailure)
         {
-            context.Report(SyncPhase.Pushing, "Pushing to GitHub…");
-            var push = await _gitWorkspace.PushAsync(gitContext, cancellationToken).ConfigureAwait(false);
-            if (push.IsFailure)
-            {
-                run.Status = RunStatus.Warning;
-                context.Log(SyncLogLevel.Warning, "Commit created locally but the push to GitHub failed.", push.Error);
-            }
-            else
-            {
-                run.Status = RunStatus.Succeeded;
-                context.Log(SyncLogLevel.Info, "Pushed to GitHub.");
-            }
+            run.Status = RunStatus.Warning;
+            context.Log(SyncLogLevel.Warning, "Commit created locally but the push to GitHub failed.", push.Error);
         }
         else
         {
             run.Status = RunStatus.Succeeded;
+            context.Log(SyncLogLevel.Info, "Pushed to GitHub.");
         }
 
         await PersistStatesAsync(context, run.Status, commit.CommitSha, cancellationToken).ConfigureAwait(false);
