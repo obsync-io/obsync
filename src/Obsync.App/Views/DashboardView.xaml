@@ -44,6 +44,8 @@
             <Border Style="{StaticResource Card}" Margin="0,20,0,0">
                 <StackPanel>
                     <TextBlock Text="Sync Jobs" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,0,0,10"
+                               Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
                     <DataGrid ItemsSource="{Binding Jobs}" AutoGenerateColumns="False" IsReadOnly="True"
                               HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
                               Background="Transparent" RowBackground="Transparent" FontSize="13">
@@ -54,6 +56,20 @@
                             <DataGridTextColumn Header="Last Run" Binding="{Binding RunSummary.LastRunAt, StringFormat=g}" Width="1.5*" />
                             <DataGridTextColumn Header="Changes" Binding="{Binding RunSummary.LastChangeCount}" Width="*" />
                             <DataGridTextColumn Header="Next Run" Binding="{Binding RunSummary.NextRunAt, StringFormat=g}" Width="1.5*" />
+                            <DataGridTemplateColumn Header="" Width="Auto">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Open" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                                    Command="{Binding DataContext.OpenCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}" />
+                                            <Button Content="Run Now" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                                    Command="{Binding DataContext.RunNowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                 </StackPanel>

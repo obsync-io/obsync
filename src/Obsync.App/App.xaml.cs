@@ -39,8 +39,13 @@ public partial class App : Application
         await _host.Services.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
 
         var window = _host.Services.GetRequiredService<MainWindow>();
-        window.DataContext = _host.Services.GetRequiredService<MainViewModel>();
+        var mainViewModel = _host.Services.GetRequiredService<MainViewModel>();
+        window.DataContext = mainViewModel;
         window.Show();
+
+        // Triggered after construction so the dashboard (which depends on IShellNavigator == this
+        // view model) is not resolved while the shell itself is still being built.
+        await mainViewModel.InitializeAsync();
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

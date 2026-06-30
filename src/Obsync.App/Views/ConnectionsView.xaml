@@ -30,9 +30,14 @@
                         <DataGridTemplateColumn>
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
-                                            Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                            CommandParameter="{Binding}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="Edit" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                                Command="{Binding DataContext.EditCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                        <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                                Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}" />
+                                    </StackPanel>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
@@ -43,7 +48,7 @@
             <!-- Add / edit -->
             <Border Grid.Column="1" Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="Add a connection" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
+                    <TextBlock Text="{Binding EditorTitle}" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
                     <TextBlock Text="Name" Style="{StaticResource Muted}" />
                     <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
                     <TextBlock Text="Server name" Style="{StaticResource Muted}" />
@@ -52,12 +57,14 @@
                     <ComboBox ItemsSource="{Binding AuthModes}" SelectedItem="{Binding AuthenticationMode}" Margin="0,2,0,10" />
                     <TextBlock Text="Username (SQL login)" Style="{StaticResource Muted}" />
                     <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
-                    <TextBlock Text="Password (SQL login)" Style="{StaticResource Muted}" />
+                    <TextBlock Text="{Binding PasswordHint}" Style="{StaticResource Muted}" />
                     <PasswordBox x:Name="PasswordBox" PasswordChanged="OnPasswordChanged" Padding="8,6" Margin="0,2,0,10" />
                     <CheckBox Content="Trust server certificate" IsChecked="{Binding TrustServerCertificate}" Margin="0,0,0,14" />
                     <StackPanel Orientation="Horizontal">
                         <Button Content="Test" Style="{StaticResource SecondaryButton}" Command="{Binding TestCommand}" Margin="0,0,8,0" />
                         <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" />
+                        <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Command="{Binding CancelEditCommand}"
+                                Margin="8,0,0,0" Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
                     <TextBlock Text="{Binding TestResult}" Style="{StaticResource Muted}" Margin="0,12,0,0" />
                 </StackPanel>

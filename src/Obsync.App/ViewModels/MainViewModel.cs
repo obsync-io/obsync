@@ -4,51 +4,34 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Obsync.App.ViewModels;
 
-/// <summary>The shell view model: owns the section view models and drives left-rail navigation.</summary>
+/// <summary>The shell view model: drives left-rail navigation between the section view models.</summary>
 public sealed partial class MainViewModel : ObservableObject, IShellNavigator
 {
     private readonly IServiceProvider _services;
-    private readonly DashboardViewModel _dashboard;
-    private readonly JobsViewModel _jobs;
-    private readonly ConnectionsViewModel _connections;
-    private readonly RepositoriesViewModel _repositories;
-    private readonly HistoryViewModel _history;
-    private readonly SettingsViewModel _settings;
 
     [ObservableProperty]
     private object? _currentView;
 
-    public MainViewModel(
-        IServiceProvider services,
-        DashboardViewModel dashboard,
-        JobsViewModel jobs,
-        ConnectionsViewModel connections,
-        RepositoriesViewModel repositories,
-        HistoryViewModel history,
-        SettingsViewModel settings)
-    {
-        _services = services;
-        _dashboard = dashboard;
-        _jobs = jobs;
-        _connections = connections;
-        _repositories = repositories;
-        _history = history;
-        _settings = settings;
+    // Section view models are resolved lazily from the container rather than injected, so that a
+    // section that depends on IShellNavigator (e.g. the dashboard's "Open job") does not form a
+    // construction-time cycle with this view model. The first navigation is triggered after
+    // construction (see InitializeAsync) for the same reason.
+    public MainViewModel(IServiceProvider services) => _services = services;
 
-        _ = NavigateAsync("Dashboard");
-    }
+    /// <summary>Shows the initial section. Called once after the shell is constructed and shown.</summary>
+    public Task InitializeAsync() => NavigateAsync("Dashboard");
 
     [RelayCommand]
     private async Task NavigateAsync(string section)
     {
         CurrentView = section switch
         {
-            "Jobs" => _jobs,
-            "Connections" => _connections,
-            "Repositories" => _repositories,
-            "History" => _history,
-            "Settings" => _settings,
-            _ => _dashboard,
+            "Jobs" => _services.GetRequiredService<JobsViewModel>(),
+            "Connections" => _services.GetRequiredService<ConnectionsViewModel>(),
+            "Repositories" => _services.GetRequiredService<RepositoriesViewModel>(),
+            "History" => _services.GetRequiredService<HistoryViewModel>(),
+            "Settings" => _services.GetRequiredService<SettingsViewModel>(),
+            _ => _services.GetRequiredService<DashboardViewModel>(),
         };
 
         if (CurrentView is IAsyncViewModel asyncViewModel)

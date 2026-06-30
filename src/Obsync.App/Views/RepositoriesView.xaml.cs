@@ -6,7 +6,29 @@ namespace Obsync.App.Views;
 
 public partial class RepositoriesView : UserControl
 {
-    public RepositoriesView() => InitializeComponent();
+    private RepositoriesViewModel? _subscribed;
+
+    public RepositoriesView()
+    {
+        InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (_subscribed is not null)
+        {
+            _subscribed.SecretInputShouldClear -= OnSecretInputShouldClear;
+        }
+
+        _subscribed = DataContext as RepositoriesViewModel;
+        if (_subscribed is not null)
+        {
+            _subscribed.SecretInputShouldClear += OnSecretInputShouldClear;
+        }
+    }
+
+    private void OnSecretInputShouldClear(object? sender, EventArgs e) => TokenBox.Clear();
 
     private void OnTokenChanged(object sender, RoutedEventArgs e)
     {

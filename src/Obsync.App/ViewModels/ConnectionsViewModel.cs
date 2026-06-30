@@ -17,6 +17,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
 
+    private Guid? _editingId;
+    private DateTimeOffset _editingCreatedAt;
+
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private string _serverName = string.Empty;
     [ObservableProperty] private SqlAuthenticationMode _authenticationMode = SqlAuthenticationMode.WindowsIntegrated;
@@ -24,6 +27,7 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
     [ObservableProperty] private bool _trustServerCertificate = true;
     [ObservableProperty] private string? _testResult;
     [ObservableProperty] private bool _isBusy;
+    [ObservableProperty] private bool _isEditing;
 
     /// <summary>Set from the view's PasswordBox; never bound directly.</summary>
     public string Password { get; set; } = string.Empty;
@@ -32,6 +36,9 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
     public IReadOnlyList<SqlAuthenticationMode> AuthModes { get; } =
         [SqlAuthenticationMode.WindowsIntegrated, SqlAuthenticationMode.SqlLogin];
 
+    /// <summary>Raised when the view should clear its PasswordBox (after a save, edit, or cancel).</summary>
+    public event EventHandler? SecretInputShouldClear;
+
     public ConnectionsViewModel(
         IConnectionProfileRepository repository, ISqlServerProbe probe, ICredentialStore credentialStore, IClock clock)
     {
@@ -39,6 +46,15 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
         _probe = probe;
         _credentialStore = credentialStore;
         _clock = clock;
+    }
+
+    public string EditorTitle => IsEditing ? "Edit connection" : "Add a connection";
+    public string PasswordHint => IsEditing ? "Password (leave blank to keep the saved one)" : "Password (SQL login)";
+
+    partial void OnIsEditingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(EditorTitle));
+        OnPropertyChanged(nameof(PasswordHint));
     }
 
     public async Task LoadAsync()
@@ -72,6 +88,30 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
     }
 
     [RelayCommand]
+    private void Edit(SqlConnectionProfile? connection)
+    {
+        if (connection is null)
+        {
+            return;
+        }
+
+        _editingId = connection.Id;
+        _editingCreatedAt = connection.CreatedAt;
+        Name = connection.Name;
+        ServerName = connection.ServerName;
+        AuthenticationMode = connection.AuthenticationMode;
+        Username = connection.Username ?? string.Empty;
+        TrustServerCertificate = connection.TrustServerCertificate;
+        Password = string.Empty;
+        IsEditing = true;
+        TestResult = null;
+        SecretInputShouldClear?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void CancelEdit() => ResetEditor();
+
+    [RelayCommand]
     private async Task SaveAsync()
     {
         if (string.IsNullOrWhiteSpace(Name) || string.IsNullOrWhiteSpace(ServerName))
@@ -81,17 +121,26 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
         }
 
         var profile = BuildProfile();
-        profile.CreatedAt = _clock.UtcNow;
+        profile.Id = _editingId ?? profile.Id;
+        profile.CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt;
         profile.UpdatedAt = _clock.UtcNow;
         await _repository.UpsertAsync(profile);
 
-        if (AuthenticationMode == SqlAuthenticationMode.SqlLogin && !string.IsNullOrEmpty(Password))
+        if (AuthenticationMode == SqlAuthenticationMode.SqlLogin)
         {
-            _credentialStore.Store(CredentialKeys.SqlPassword(profile.Id), Password);
+            if (!string.IsNullOrEmpty(Password))
+            {
+                _credentialStore.Store(CredentialKeys.SqlPassword(profile.Id), Password);
+            }
+        }
+        else
+        {
+            // Switched away from SQL login — drop any stored password so none is left orphaned.
+            _credentialStore.Delete(CredentialKeys.SqlPassword(profile.Id));
         }
 
         TestResult = "Saved.";
-        Password = string.Empty;
+        ResetEditor();
         await LoadAsync();
     }
 
@@ -105,7 +154,26 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
 
         _credentialStore.Delete(CredentialKeys.SqlPassword(connection.Id));
         await _repository.DeleteAsync(connection.Id);
+        if (_editingId == connection.Id)
+        {
+            ResetEditor();
+        }
+
         await LoadAsync();
+    }
+
+    private void ResetEditor()
+    {
+        _editingId = null;
+        _editingCreatedAt = default;
+        Name = string.Empty;
+        ServerName = string.Empty;
+        AuthenticationMode = SqlAuthenticationMode.WindowsIntegrated;
+        Username = string.Empty;
+        TrustServerCertificate = true;
+        Password = string.Empty;
+        IsEditing = false;
+        SecretInputShouldClear?.Invoke(this, EventArgs.Empty);
     }
 
     private SqlConnectionProfile BuildProfile() => new()
