@@ -12,26 +12,68 @@
         </Grid.ColumnDefinitions>
 
         <!-- Left navigation rail -->
-        <Border Grid.Column="0" Background="{StaticResource CardBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+        <Border Grid.Column="0" Background="{StaticResource CardBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
             <DockPanel>
-                <StackPanel DockPanel.Dock="Top" Margin="20,22,20,18">
-                    <TextBlock Text="Obsync" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}" />
-                    <TextBlock Text="SQL → GitHub version control" Style="{StaticResource Muted}" FontSize="11" Margin="0,2,0,0" />
+                <!-- Brand block -->
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="20,22,20,22">
+                    <Border Width="36" Height="36" CornerRadius="{StaticResource RadiusControl}"
+                            Background="{StaticResource AccentBrush}">
+                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconBranch}"
+                                   Foreground="White" FontSize="18" />
+                    </Border>
+                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="Obsync" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimaryBrush}" />
+                        <TextBlock Text="SQL → GitHub version control" Style="{StaticResource Caption}"
+                                   Margin="0,1,0,0" />
+                    </StackPanel>
                 </StackPanel>
 
-                <StackPanel DockPanel.Dock="Top">
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Dashboard" IsChecked="True"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Dashboard" />
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Jobs"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Jobs" />
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Connections"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Connections" />
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Repositories"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Repositories" />
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="History"
-                                 Command="{Binding NavigateCommand}" CommandParameter="History" />
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" Content="Settings"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Settings" />
+                <!-- Navigation items -->
+                <StackPanel DockPanel.Dock="Top" Margin="0,4,0,0">
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" IsChecked="True"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Dashboard">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDashboard}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="Dashboard" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Jobs">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="Jobs" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Connections">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconConnections}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="Connections" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Repositories">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="Repositories" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Command="{Binding NavigateCommand}" CommandParameter="History">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconHistory}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="History" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Settings">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconSettings}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="Settings" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
                 </StackPanel>
             </DockPanel>
         </Border>

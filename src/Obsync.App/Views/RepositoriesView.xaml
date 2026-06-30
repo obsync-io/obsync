@@ -15,27 +15,30 @@
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="380" />
+                <ColumnDefinition Width="400" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,16,0">
-                <DataGrid ItemsSource="{Binding Repositories}" AutoGenerateColumns="False" IsReadOnly="True"
-                          HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
-                          Background="Transparent" RowBackground="Transparent" CanUserAddRows="False">
+            <!-- Existing repositories -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,18,0" Padding="0">
+                <DataGrid ItemsSource="{Binding Repositories}">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
                         <DataGridTextColumn Header="Repository" Binding="{Binding FullName}" Width="*" />
                         <DataGridTextColumn Header="Branch" Binding="{Binding DefaultBranch}" Width="Auto" />
-                        <DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="" Width="Auto">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="Edit" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit"
                                                 Command="{Binding DataContext.EditCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}" />
-                                        <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete"
                                                 Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}" />
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
+                                        </Button>
                                     </StackPanel>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
@@ -44,26 +47,34 @@
                 </DataGrid>
             </Border>
 
+            <!-- Add / edit -->
             <Border Grid.Column="1" Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="{Binding EditorTitle}" Style="{StaticResource SectionTitle}" Margin="0,0,0,12" />
-                    <TextBlock Text="Name" Style="{StaticResource Muted}" />
-                    <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
-                    <TextBlock Text="Owner" Style="{StaticResource Muted}" />
-                    <TextBox Text="{Binding Owner, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
-                    <TextBlock Text="Repository name" Style="{StaticResource Muted}" />
-                    <TextBox Text="{Binding RepositoryName, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
-                    <TextBlock Text="Default branch" Style="{StaticResource Muted}" />
-                    <TextBox Text="{Binding DefaultBranch, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,10" />
-                    <TextBlock Text="{Binding TokenHint}" Style="{StaticResource Muted}" />
-                    <PasswordBox x:Name="TokenBox" PasswordChanged="OnTokenChanged" Padding="8,6" Margin="0,2,0,14" />
+                    <TextBlock Text="{Binding EditorTitle}" Style="{StaticResource SectionTitle}" Margin="0,0,0,18" />
+
+                    <TextBlock Text="NAME" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <TextBlock Text="OWNER" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding Owner, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <TextBlock Text="REPOSITORY NAME" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding RepositoryName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <TextBlock Text="DEFAULT BRANCH" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding DefaultBranch, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <TextBlock Text="{Binding TokenHint}" Style="{StaticResource Caption}" />
+                    <PasswordBox x:Name="TokenBox" PasswordChanged="OnTokenChanged" Margin="0,4,0,18" />
+
                     <StackPanel Orientation="Horizontal">
                         <Button Content="Validate" Style="{StaticResource SecondaryButton}" Command="{Binding ValidateCommand}" Margin="0,0,8,0" />
                         <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" />
-                        <Button Content="Cancel" Style="{StaticResource SecondaryButton}" Command="{Binding CancelEditCommand}"
+                        <Button Content="Cancel" Style="{StaticResource SubtleButton}" Command="{Binding CancelEditCommand}"
                                 Margin="8,0,0,0" Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
-                    <TextBlock Text="{Binding ValidationResult}" Style="{StaticResource Muted}" Margin="0,12,0,0" />
+
+                    <TextBlock Text="{Binding ValidationResult}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,16,0,0" />
                 </StackPanel>
             </Border>
         </Grid>

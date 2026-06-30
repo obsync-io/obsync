@@ -12,18 +12,30 @@
             <TextBlock Text="Runs, commits, and changed objects" Style="{StaticResource Muted}" Margin="0,4,0,18" />
         </StackPanel>
 
-        <Border Grid.Row="1" Style="{StaticResource Card}">
-            <DataGrid ItemsSource="{Binding Runs}" AutoGenerateColumns="False" IsReadOnly="True"
-                      HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
-                      Background="Transparent" RowBackground="Transparent" CanUserAddRows="False" FontSize="13">
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0">
+            <DataGrid ItemsSource="{Binding Runs}">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Job" Binding="{Binding JobName}" Width="2*" />
-                    <DataGridTextColumn Header="Run" Binding="{Binding RunKey}" Width="1.5*" />
-                    <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*" />
-                    <DataGridTextColumn Header="Started" Binding="{Binding StartedAt, StringFormat=g}" Width="1.5*" />
+                    <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, StringFormat=g}" Width="1.6*" />
+                    <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" />
                     <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" />
-                    <DataGridTextColumn Header="Changes" Binding="{Binding ChangeCount}" Width="*" />
-                    <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.5*" />
+                    <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" />
+                    <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.4*">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTemplateColumn Header="Status" Width="1.2*">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ContentControl Content="{Binding Status}" ContentTemplate="{StaticResource StatusBadgeTemplate}"
+                                                VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                 </DataGrid.Columns>
             </DataGrid>
         </Border>

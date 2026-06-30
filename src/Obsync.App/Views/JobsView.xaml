@@ -8,47 +8,121 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
+        <!-- Header -->
         <Grid Grid.Row="0">
-            <StackPanel>
+            <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="Sync Jobs" Style="{StaticResource PageTitle}" />
                 <TextBlock Text="Create, view, and run sync jobs" Style="{StaticResource Muted}" Margin="0,4,0,0" />
             </StackPanel>
-            <Button Content="Create Sync Job" Style="{StaticResource PrimaryButton}"
-                    HorizontalAlignment="Right" VerticalAlignment="Top" Click="OnCreateJob" />
+            <Button Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                    Click="OnCreateJob">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconAdd}" Foreground="White" FontSize="14" />
+                    <TextBlock Text="Create Sync Job" Margin="8,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
         </Grid>
 
         <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0"
                    Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
 
+        <!-- Jobs table -->
         <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0">
-            <DataGrid ItemsSource="{Binding Jobs}" AutoGenerateColumns="False" IsReadOnly="True"
-                      HeadersVisibility="Column" GridLinesVisibility="None" BorderThickness="0"
-                      Background="Transparent" RowBackground="Transparent" FontSize="13"
-                      CanUserAddRows="False">
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="Job Name" Binding="{Binding Name}" Width="2*" />
-                    <DataGridTextColumn Header="Databases" Binding="{Binding DatabasesDisplay}" Width="2*" />
-                    <DataGridTextColumn Header="Status" Binding="{Binding RunSummary.LastStatus}" Width="*" />
-                    <DataGridTextColumn Header="Last Run" Binding="{Binding RunSummary.LastRunAt, StringFormat=g}" Width="1.5*" />
-                    <DataGridTextColumn Header="Changes" Binding="{Binding RunSummary.LastChangeCount}" Width="*" />
-                    <DataGridTemplateColumn Header="" Width="Auto">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Content="Open" Style="{StaticResource SecondaryButton}" Margin="4,3" Click="OnOpenJob" />
-                                    <Button Content="Run Now" Style="{StaticResource SecondaryButton}" Margin="4,3"
-                                            Command="{Binding DataContext.RunNowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                            CommandParameter="{Binding}" />
-                                    <Button Content="Edit" Style="{StaticResource SecondaryButton}" Margin="4,3" Click="OnEditJob" />
-                                    <Button Content="Delete" Style="{StaticResource SecondaryButton}" Margin="4,3"
-                                            Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                            CommandParameter="{Binding}" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                </DataGrid.Columns>
-            </DataGrid>
+            <Grid>
+                <DataGrid ItemsSource="{Binding Jobs}">
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Job Name" Width="2*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Source" Width="2*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding SourceDisplay}" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Destination" Width="2*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding DestinationDisplay}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Status" Width="*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <ContentControl Content="{Binding RunSummary.LastStatus}" ContentTemplate="{StaticResource StatusBadgeTemplate}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Last Run" Width="1.5*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding RunSummary.LastRunAt, StringFormat=g}" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Changes" Width="*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding RunSummary.LastChangeCount}" Style="{StaticResource Body}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Next Run" Width="1.5*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding RunSummary.NextRunAt, StringFormat=g}" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Actions" Width="Auto">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Open" Click="OnOpenJob">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconOpen}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Run Now" Margin="2,0,0,0"
+                                                Command="{Binding DataContext.RunNowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRun}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit" Margin="2,0,0,0" Click="OnEditJob">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" Margin="2,0,0,0"
+                                                Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
+                                        </Button>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- Empty state -->
+                <TextBlock Text="No sync jobs yet. Create your first job to start versioning SQL objects to GitHub."
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           TextAlignment="Center" MaxWidth="360" Margin="0,48,0,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Jobs.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </Grid>
         </Border>
     </Grid>
 </UserControl>
