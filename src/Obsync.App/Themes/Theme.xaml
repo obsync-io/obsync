@@ -8,6 +8,7 @@
         <ResourceDictionary Source="Typography.xaml" />
         <ResourceDictionary Source="Icons.xaml" />
         <ResourceDictionary Source="Controls.xaml" />
+        <ResourceDictionary Source="BrandLogo.xaml" />
     </ResourceDictionary.MergedDictionaries>
 
 </ResourceDictionary>
