@@ -53,11 +53,13 @@
         <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
     </Style>
 
-    <!-- Default for any unstyled TextBlock -->
+    <!-- Default for any unstyled TextBlock. Deliberately does NOT set Foreground: the app-wide
+         default text colour comes from the Window (inherited), so a bare TextBlock placed inside a
+         coloured button (e.g. a white-on-accent PrimaryButton label) inherits the button's
+         foreground instead of being forced to the dark primary ink. -->
     <Style TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
         <Setter Property="FontSize" Value="13" />
-        <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
     </Style>
 
 </ResourceDictionary>

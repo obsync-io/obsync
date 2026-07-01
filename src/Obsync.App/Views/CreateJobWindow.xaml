@@ -5,6 +5,7 @@
         WindowStartupLocation="CenterOwner"
         Icon="/Assets/Obsync_Icon.png"
         Background="{StaticResource AppBackgroundBrush}"
+        Foreground="{StaticResource TextPrimaryBrush}"
         FontFamily="{StaticResource AppFontFamily}"
         UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display"

@@ -6,105 +6,92 @@
             <TextBlock Text="Dashboard" Style="{StaticResource PageTitle}" />
             <TextBlock Text="High-level health and recent activity" Style="{StaticResource Muted}" Margin="0,4,0,20" />
 
-            <!-- Metric cards -->
-            <UniformGrid Rows="1" Columns="5">
+            <!-- Metric cards: a WrapPanel of fixed-width cards so they reflow onto a second row on
+                 narrow windows instead of squeezing. Inside each card a DockPanel keeps the caption
+                 from overlapping the icon chip (it trims with an ellipsis if the card is narrow). -->
+            <WrapPanel>
                 <!-- Total Sync Jobs -->
-                <Border Style="{StaticResource Card}" Margin="0,0,16,0">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Total Sync Jobs" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding TotalJobs}" Style="{StaticResource MetricValue}" Margin="0,6,0,0" />
-                        </StackPanel>
-                        <Border Grid.Column="1" Width="38" Height="38" VerticalAlignment="Top"
-                                CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource AccentSoftBrush}">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}"
-                                       Foreground="{StaticResource AccentBrush}" FontSize="18" />
-                        </Border>
-                    </Grid>
+                <Border Style="{StaticResource Card}" Width="220" Margin="0,0,16,16">
+                    <StackPanel>
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Width="36" Height="36" VerticalAlignment="Top"
+                                    CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource AccentSoftBrush}">
+                                <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}"
+                                           Foreground="{StaticResource AccentBrush}" FontSize="18" />
+                            </Border>
+                            <TextBlock Text="Total Sync Jobs" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding TotalJobs}" Style="{StaticResource MetricValue}" Margin="0,10,0,0" />
+                    </StackPanel>
                 </Border>
 
                 <!-- Successful Last Runs -->
-                <Border Style="{StaticResource Card}" Margin="0,0,16,0">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Successful Last Runs" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding SuccessfulLastRuns}" Style="{StaticResource MetricValue}" Margin="0,6,0,0" />
-                        </StackPanel>
-                        <Border Grid.Column="1" Width="38" Height="38" VerticalAlignment="Top"
-                                CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource SuccessSoftBrush}">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
-                                       Foreground="{StaticResource SuccessBrush}" FontSize="18" />
-                        </Border>
-                    </Grid>
+                <Border Style="{StaticResource Card}" Width="220" Margin="0,0,16,16">
+                    <StackPanel>
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Width="36" Height="36" VerticalAlignment="Top"
+                                    CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource SuccessSoftBrush}">
+                                <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
+                                           Foreground="{StaticResource SuccessBrush}" FontSize="18" />
+                            </Border>
+                            <TextBlock Text="Successful Last Runs" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding SuccessfulLastRuns}" Style="{StaticResource MetricValue}" Margin="0,10,0,0" />
+                    </StackPanel>
                 </Border>
 
                 <!-- Failed Jobs -->
-                <Border Style="{StaticResource Card}" Margin="0,0,16,0">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Failed Jobs" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding FailedJobs}" Style="{StaticResource MetricValue}" Margin="0,6,0,0" />
-                        </StackPanel>
-                        <Border Grid.Column="1" Width="38" Height="38" VerticalAlignment="Top"
-                                CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource ErrorSoftBrush}">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconError}"
-                                       Foreground="{StaticResource ErrorBrush}" FontSize="18" />
-                        </Border>
-                    </Grid>
+                <Border Style="{StaticResource Card}" Width="220" Margin="0,0,16,16">
+                    <StackPanel>
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Width="36" Height="36" VerticalAlignment="Top"
+                                    CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource ErrorSoftBrush}">
+                                <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconError}"
+                                           Foreground="{StaticResource ErrorBrush}" FontSize="18" />
+                            </Border>
+                            <TextBlock Text="Failed Jobs" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding FailedJobs}" Style="{StaticResource MetricValue}" Margin="0,10,0,0" />
+                    </StackPanel>
                 </Border>
 
                 <!-- Objects Tracked -->
-                <Border Style="{StaticResource Card}" Margin="0,0,16,0">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Objects Tracked" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding ObjectsTracked}" Style="{StaticResource MetricValue}" Margin="0,6,0,0" />
-                        </StackPanel>
-                        <Border Grid.Column="1" Width="38" Height="38" VerticalAlignment="Top"
-                                CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource NeutralSoftBrush}">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDatabase}"
-                                       Foreground="{StaticResource TextMutedBrush}" FontSize="18" />
-                        </Border>
-                    </Grid>
+                <Border Style="{StaticResource Card}" Width="220" Margin="0,0,16,16">
+                    <StackPanel>
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Width="36" Height="36" VerticalAlignment="Top"
+                                    CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource NeutralSoftBrush}">
+                                <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDatabase}"
+                                           Foreground="{StaticResource TextMutedBrush}" FontSize="18" />
+                            </Border>
+                            <TextBlock Text="Objects Tracked" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding ObjectsTracked}" Style="{StaticResource MetricValue}" Margin="0,10,0,0" />
+                    </StackPanel>
                 </Border>
 
-                <!-- Latest GitHub Commit -->
-                <Border Style="{StaticResource Card}">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Latest GitHub Commit" Style="{StaticResource Caption}" />
-                            <!-- No open-commit command on the VM, so the short SHA is rendered as static BodyStrong text. -->
-                            <TextBlock Text="{Binding LatestCommit}" Style="{StaticResource BodyStrong}"
-                                       FontSize="20" Margin="0,8,0,0" />
-                        </StackPanel>
-                        <Border Grid.Column="1" Width="38" Height="38" VerticalAlignment="Top"
-                                CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource AccentSoftBrush}">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconBranch}"
-                                       Foreground="{StaticResource AccentBrush}" FontSize="18" />
-                        </Border>
-                    </Grid>
+                <!-- Latest Commit -->
+                <Border Style="{StaticResource Card}" Width="220" Margin="0,0,16,16">
+                    <StackPanel>
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right" Width="36" Height="36" VerticalAlignment="Top"
+                                    CornerRadius="{StaticResource RadiusControl}" Background="{StaticResource AccentSoftBrush}">
+                                <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconBranch}"
+                                           Foreground="{StaticResource AccentBrush}" FontSize="18" />
+                            </Border>
+                            <TextBlock Text="Latest Commit" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                        </DockPanel>
+                        <!-- No open-commit command on the VM, so the short SHA is rendered as static BodyStrong text. -->
+                        <TextBlock Text="{Binding LatestCommit}" Style="{StaticResource BodyStrong}"
+                                   FontSize="20" Margin="0,10,0,0" />
+                    </StackPanel>
                 </Border>
-            </UniformGrid>
+            </WrapPanel>
 
             <!-- Getting started (shown only when there are no jobs yet) -->
             <Border Margin="0,20,0,0">
