@@ -129,6 +129,58 @@ public sealed class ChangeTypeToBadgeBackgroundConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Maps a <see cref="ConnectionTestStatus"/> to a friendly label.</summary>
+public sealed class ConnectionStatusToTextConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        ConnectionTestStatus.Connected => "Connected",
+        ConnectionTestStatus.Failed => "Failed",
+        _ => "Not tested",
+    };
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Maps a <see cref="ConnectionTestStatus"/> to its strong status brush.</summary>
+public sealed class ConnectionStatusToBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var key = value switch
+        {
+            ConnectionTestStatus.Connected => "SuccessBrush",
+            ConnectionTestStatus.Failed => "ErrorBrush",
+            _ => "TextMutedBrush",
+        };
+
+        return Application.Current.TryFindResource(key) as Brush ?? Brushes.Gray;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Maps a <see cref="ConnectionTestStatus"/> to its soft badge background brush.</summary>
+public sealed class ConnectionStatusToBadgeBackgroundConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var key = value switch
+        {
+            ConnectionTestStatus.Connected => "SuccessSoftBrush",
+            ConnectionTestStatus.Failed => "ErrorSoftBrush",
+            _ => "NeutralSoftBrush",
+        };
+
+        return Application.Current.TryFindResource(key) as Brush ?? Brushes.Transparent;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>Turns an enum value into friendly display text: <c>WindowsIntegrated</c> → "Windows
 /// Integrated", <c>ProgrammabilityOnly</c> → "Programmability Only", <c>SqlLogin</c> → "SQL Login".</summary>
 public sealed class EnumDisplayConverter : IValueConverter

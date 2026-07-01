@@ -1,0 +1,110 @@
+<UserControl x:Class="Obsync.App.Views.ServersView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="28,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Grid Grid.Row="0">
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Servers" Style="{StaticResource PageTitle}" />
+                <TextBlock Text="The SQL Server instances Obsync connects to" Style="{StaticResource Muted}" Margin="0,4,0,0" />
+            </StackPanel>
+            <Button Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="OnAddServer">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconAdd}" Foreground="White" FontSize="14" />
+                    <TextBlock Text="Add server" Margin="8,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0" TextWrapping="Wrap"
+                   Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+
+        <!-- Servers table -->
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0" Padding="0">
+            <Grid>
+                <DataGrid ItemsSource="{Binding Servers}">
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Name" Width="1.4*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Server / instance" Width="2*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding ServerName}" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Authentication" Width="1.2*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding AuthenticationMode, Converter={StaticResource EnumDisplay}}" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Status" Width="1.5*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <ContentControl Content="{Binding LastTestStatus}" ContentTemplate="{StaticResource ConnectionStatusBadgeTemplate}" HorizontalAlignment="Left" />
+                                        <TextBlock Text="{Binding LastTestedAt, StringFormat='tested {0:g}'}" Style="{StaticResource Caption}" Margin="0,3,0,0"
+                                                   ToolTip="{Binding LastTestDetail}"
+                                                   Visibility="{Binding LastTestedAt, Converter={StaticResource NullToVisibility}}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Actions" Width="Auto">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Test connection"
+                                                Command="{Binding DataContext.TestCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRefresh}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit" Margin="2,0,0,0" Click="OnEditServer">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" Margin="2,0,0,0" Click="OnDeleteServer">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
+                                        </Button>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- Empty state -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="380" Margin="24">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Servers.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Border Width="52" Height="52" CornerRadius="14" Background="{StaticResource PanelBrush}" HorizontalAlignment="Center">
+                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconConnections}" FontSize="24" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="No servers yet" Style="{StaticResource SectionTitle}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,16,0,0" />
+                    <TextBlock Text="Add your first SQL Server to connect Obsync to your databases." Style="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <Button Content="Add server" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Margin="0,18,0,0" Click="OnAddServer" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

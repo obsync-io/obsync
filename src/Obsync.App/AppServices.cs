@@ -21,11 +21,12 @@ public static class AppServices
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());
         services.AddSingleton<DashboardViewModel>();
         services.AddSingleton<JobsViewModel>();
-        services.AddSingleton<ConnectionsViewModel>();
+        services.AddSingleton<ServersViewModel>();
         services.AddSingleton<RepositoriesViewModel>();
         services.AddSingleton<HistoryViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddTransient<CreateJobViewModel>();
+        services.AddTransient<ServerDialogViewModel>();
         services.AddTransient<JobDetailViewModel>();
         services.AddSingleton<MainWindow>();
 

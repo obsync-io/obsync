@@ -27,6 +27,15 @@ public sealed class SqlConnectionProfile
 
     public int ConnectTimeoutSeconds { get; set; } = 30;
 
+    /// <summary>Outcome of the most recent connectivity test (persisted for at-a-glance health).</summary>
+    public ConnectionTestStatus LastTestStatus { get; set; } = ConnectionTestStatus.Untested;
+
+    /// <summary>When the connection was last tested; null if never.</summary>
+    public DateTimeOffset? LastTestedAt { get; set; }
+
+    /// <summary>Detail of the last test: the server edition/version on success, or the error on failure.</summary>
+    public string? LastTestDetail { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 

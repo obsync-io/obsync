@@ -27,7 +27,7 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         CurrentView = section switch
         {
             "Jobs" => _services.GetRequiredService<JobsViewModel>(),
-            "Connections" => _services.GetRequiredService<ConnectionsViewModel>(),
+            "Servers" => _services.GetRequiredService<ServersViewModel>(),
             "Repositories" => _services.GetRequiredService<RepositoriesViewModel>(),
             "History" => _services.GetRequiredService<HistoryViewModel>(),
             "Settings" => _services.GetRequiredService<SettingsViewModel>(),

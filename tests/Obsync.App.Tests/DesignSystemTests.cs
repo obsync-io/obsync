@@ -181,7 +181,7 @@ public sealed class DesignSystemTests
         ("DashboardView", () => new Obsync.App.Views.DashboardView()),
         ("JobsView", () => new Obsync.App.Views.JobsView()),
         ("JobDetailView", () => new Obsync.App.Views.JobDetailView()),
-        ("ConnectionsView", () => new Obsync.App.Views.ConnectionsView()),
+        ("ServersView", () => new Obsync.App.Views.ServersView()),
         ("RepositoriesView", () => new Obsync.App.Views.RepositoriesView()),
         ("HistoryView", () => new Obsync.App.Views.HistoryView()),
         ("SettingsView", () => new Obsync.App.Views.SettingsView()),

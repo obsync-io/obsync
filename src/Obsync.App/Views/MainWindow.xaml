@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Obsync" Height="760" Width="1180"
         WindowStartupLocation="CenterScreen"
-        Icon="/Assets/Obsync_Icon.png"
+        Icon="pack://application:,,,/Obsync.App;component/Assets/Obsync_Icon.png"
         Background="{StaticResource AppBackgroundBrush}"
         Foreground="{StaticResource TextPrimaryBrush}"
         FontFamily="{StaticResource AppFontFamily}"
@@ -46,10 +46,10 @@
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Connections">
+                                 Command="{Binding NavigateCommand}" CommandParameter="Servers">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconConnections}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Connections" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Servers" Margin="12,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"

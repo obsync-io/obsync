@@ -12,6 +12,19 @@ public enum SqlAuthenticationMode
     // Azure AD / Entra ID is planned for a later release.
 }
 
+/// <summary>The outcome of the most recent connectivity test for a server profile.</summary>
+public enum ConnectionTestStatus
+{
+    /// <summary>The connection has not been tested yet.</summary>
+    Untested = 0,
+
+    /// <summary>The last test reached the server successfully.</summary>
+    Connected = 1,
+
+    /// <summary>The last test failed to reach the server.</summary>
+    Failed = 2,
+}
+
 /// <summary>How Obsync authenticates to GitHub.</summary>
 public enum GitHubAuthMode
 {

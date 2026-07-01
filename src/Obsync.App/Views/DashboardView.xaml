@@ -124,8 +124,8 @@
                                 </StackPanel>
                                 <TextBlock Text="Add a SQL Server connection" Style="{StaticResource BodyStrong}" Margin="0,14,0,0" TextWrapping="Wrap" />
                                 <TextBlock Text="Point Obsync at the database you want to track." Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap" />
-                                <Button Content="Add connection" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,14,0,0"
-                                        Tag="Connections" Click="OnGoToSection" />
+                                <Button Content="Add server" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                                        Tag="Servers" Click="OnGoToSection" />
                             </StackPanel>
                         </Border>
 

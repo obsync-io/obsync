@@ -88,8 +88,6 @@ public sealed class FrontendWiringTests
         };
 
         var repository = Substitute.For<IConnectionProfileRepository>();
-        repository.GetAllAsync(Arg.Any<CancellationToken>()).Returns(
-            Task.FromResult<IReadOnlyList<SqlConnectionProfile>>([profile]));
 
         var credentials = Substitute.For<ICredentialStore>();
         credentials.Retrieve(CredentialKeys.SqlPassword(profile.Id)).Returns("stored-secret");
@@ -99,10 +97,8 @@ public sealed class FrontendWiringTests
         probe.TestConnectionAsync(Arg.Any<SqlConnectionProfile>(), Arg.Do<string?>(p => passwordSentToProbe = p), Arg.Any<CancellationToken>())
             .Returns(Result.Failure<SqlServerInfo>("ignored — we only assert the password"));
 
-        var vm = new ConnectionsViewModel(repository, probe, credentials, Substitute.For<IClock>());
-        await vm.LoadAsync();
-
-        vm.EditCommand.Execute(profile);   // blanks the password box (keep-existing-secret semantics)
+        var vm = new ServerDialogViewModel(repository, probe, credentials, Substitute.For<IClock>());
+        vm.LoadForEdit(profile);   // blanks the password (keep-existing-secret semantics), enters edit mode
         await vm.TestCommand.ExecuteAsync(null);
 
         Assert.Equal("stored-secret", passwordSentToProbe);

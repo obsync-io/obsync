@@ -1,4 +1,5 @@
 using Dapper;
+using Obsync.Shared;
 using Obsync.Shared.Models;
 
 namespace Obsync.Data.Repositories;
@@ -9,7 +10,9 @@ public sealed class ConnectionProfileRepository : IConnectionProfileRepository
     private const string SelectColumns = """
         SELECT id AS Id, name AS Name, server_name AS ServerName, auth_mode AS AuthenticationMode,
                username AS Username, encrypt AS Encrypt, trust_server_certificate AS TrustServerCertificate,
-               connect_timeout_seconds AS ConnectTimeoutSeconds, created_at AS CreatedAt, updated_at AS UpdatedAt
+               connect_timeout_seconds AS ConnectTimeoutSeconds, last_test_status AS LastTestStatus,
+               last_tested_at AS LastTestedAt, last_test_detail AS LastTestDetail,
+               created_at AS CreatedAt, updated_at AS UpdatedAt
         FROM connection_profiles
         """;
 
@@ -42,14 +45,16 @@ public sealed class ConnectionProfileRepository : IConnectionProfileRepository
             """
             INSERT INTO connection_profiles
                 (id, name, server_name, auth_mode, username, encrypt, trust_server_certificate,
-                 connect_timeout_seconds, created_at, updated_at)
+                 connect_timeout_seconds, last_test_status, last_tested_at, last_test_detail, created_at, updated_at)
             VALUES
-                ($id, $name, $server, $auth, $user, $encrypt, $trust, $timeout, $created, $updated)
+                ($id, $name, $server, $auth, $user, $encrypt, $trust, $timeout, $status, $testedAt, $detail, $created, $updated)
             ON CONFLICT (id) DO UPDATE SET
                 name = excluded.name, server_name = excluded.server_name, auth_mode = excluded.auth_mode,
                 username = excluded.username, encrypt = excluded.encrypt,
                 trust_server_certificate = excluded.trust_server_certificate,
-                connect_timeout_seconds = excluded.connect_timeout_seconds, updated_at = excluded.updated_at;
+                connect_timeout_seconds = excluded.connect_timeout_seconds,
+                last_test_status = excluded.last_test_status, last_tested_at = excluded.last_tested_at,
+                last_test_detail = excluded.last_test_detail, updated_at = excluded.updated_at;
             """,
             new
             {
@@ -61,9 +66,27 @@ public sealed class ConnectionProfileRepository : IConnectionProfileRepository
                 encrypt = profile.Encrypt ? 1 : 0,
                 trust = profile.TrustServerCertificate ? 1 : 0,
                 timeout = profile.ConnectTimeoutSeconds,
+                status = (int)profile.LastTestStatus,
+                testedAt = profile.LastTestedAt,
+                detail = profile.LastTestDetail,
                 created = profile.CreatedAt,
                 updated = profile.UpdatedAt,
             },
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task UpdateTestStatusAsync(
+        Guid id, ConnectionTestStatus status, DateTimeOffset testedAt, string? detail,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE connection_profiles
+            SET last_test_status = $status, last_tested_at = $testedAt, last_test_detail = $detail
+            WHERE id = $id;
+            """,
+            new { id = id.ToString(), status = (int)status, testedAt, detail },
             cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 

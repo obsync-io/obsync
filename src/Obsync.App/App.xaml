@@ -21,6 +21,9 @@
             <conv:ChangeTypeToBadgeBackgroundConverter x:Key="ChangeTypeToBadgeBackground" />
             <conv:MsToDurationConverter x:Key="MsToDuration" />
             <conv:EnumDisplayConverter x:Key="EnumDisplay" />
+            <conv:ConnectionStatusToTextConverter x:Key="ConnectionStatusToText" />
+            <conv:ConnectionStatusToBrushConverter x:Key="ConnectionStatusToBrush" />
+            <conv:ConnectionStatusToBadgeBackgroundConverter x:Key="ConnectionStatusToBadgeBackground" />
 
             <!-- Reusable small status badge (DataContext = RunStatus, or null for a never-run job).
                  FallbackValue covers the null-content case, where the empty-path binding yields
@@ -46,6 +49,19 @@
                 </Border>
             </DataTemplate>
 
+            <!-- Server connection status badge (DataContext = ConnectionTestStatus). -->
+            <DataTemplate x:Key="ConnectionStatusBadgeTemplate">
+                <Border CornerRadius="{StaticResource RadiusPill}" Padding="9,3" HorizontalAlignment="Left"
+                        Background="{Binding Converter={StaticResource ConnectionStatusToBadgeBackground}}">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                 Fill="{Binding Converter={StaticResource ConnectionStatusToBrush}}" />
+                        <TextBlock Text="{Binding Converter={StaticResource ConnectionStatusToText}}" FontSize="12"
+                                   FontWeight="SemiBold" Foreground="{Binding Converter={StaticResource ConnectionStatusToBrush}}" />
+                    </StackPanel>
+                </Border>
+            </DataTemplate>
+
             <!-- ViewModel -> View mapping (MVVM, no code-behind navigation) -->
             <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
                 <views:DashboardView />
@@ -56,8 +72,8 @@
             <DataTemplate DataType="{x:Type vm:JobDetailViewModel}">
                 <views:JobDetailView />
             </DataTemplate>
-            <DataTemplate DataType="{x:Type vm:ConnectionsViewModel}">
-                <views:ConnectionsView />
+            <DataTemplate DataType="{x:Type vm:ServersViewModel}">
+                <views:ServersView />
             </DataTemplate>
             <DataTemplate DataType="{x:Type vm:RepositoriesViewModel}">
                 <views:RepositoriesView />
