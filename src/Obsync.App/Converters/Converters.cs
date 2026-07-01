@@ -129,6 +129,26 @@ public sealed class ChangeTypeToBadgeBackgroundConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Turns an enum value into friendly display text: <c>WindowsIntegrated</c> → "Windows
+/// Integrated", <c>ProgrammabilityOnly</c> → "Programmability Only", <c>SqlLogin</c> → "SQL Login".</summary>
+public sealed class EnumDisplayConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is null)
+        {
+            return string.Empty;
+        }
+
+        var text = value.ToString() ?? string.Empty;
+        var spaced = System.Text.RegularExpressions.Regex.Replace(text, "(?<=[a-z0-9])(?=[A-Z])", " ");
+        return spaced.Replace("Sql", "SQL", StringComparison.Ordinal);
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>Formats a duration in milliseconds as <c>hh:mm:ss</c>.</summary>
 public sealed class MsToDurationConverter : IValueConverter
 {

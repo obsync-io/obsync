@@ -20,6 +20,7 @@
             <conv:ChangeTypeToBrushConverter x:Key="ChangeTypeToBrush" />
             <conv:ChangeTypeToBadgeBackgroundConverter x:Key="ChangeTypeToBadgeBackground" />
             <conv:MsToDurationConverter x:Key="MsToDuration" />
+            <conv:EnumDisplayConverter x:Key="EnumDisplay" />
 
             <!-- Reusable small status badge (DataContext = RunStatus, or null for a never-run job).
                  FallbackValue covers the null-content case, where the empty-path binding yields

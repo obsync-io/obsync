@@ -12,13 +12,16 @@
     <!-- ============================================================= -->
     <!-- Surfaces                                                      -->
     <!-- ============================================================= -->
+    <!-- Flat, crisp card: a hairline border instead of a drop shadow. A DropShadowEffect on a
+         content container forces WPF to rasterize the card AND its text into an intermediate
+         layer, which drops ClearType and makes the text look blurry — so cards stay effect-free. -->
     <Style x:Key="Card" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource CardBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{StaticResource RadiusCard}" />
         <Setter Property="Padding" Value="{StaticResource CardPadding}" />
-        <Setter Property="Effect" Value="{DynamicResource CardShadow}" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
     </Style>
 
     <!-- Soft inset panel: no shadow, gray background (for sub-areas/checklists/callouts). -->

@@ -106,8 +106,93 @@
                 </Border>
             </UniformGrid>
 
-            <!-- Jobs table -->
-            <Border Style="{StaticResource Card}" Margin="0,20,0,0">
+            <!-- Getting started (shown only when there are no jobs yet) -->
+            <Border Margin="0,20,0,0">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource Card}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Jobs.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <StackPanel>
+                    <TextBlock Text="Set up your first sync" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="Three quick steps to start versioning SQL Server objects to GitHub."
+                               Style="{StaticResource Muted}" Margin="0,4,0,0" />
+
+                    <UniformGrid Rows="1" Columns="3" Margin="0,20,0,0">
+                        <!-- Step 1 -->
+                        <Border Style="{StaticResource Panel}" Margin="0,0,12,0" Padding="18">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="28" Height="28" CornerRadius="14" Background="{StaticResource AccentSoftBrush}">
+                                        <TextBlock Text="1" Style="{StaticResource BodyStrong}" Foreground="{StaticResource AccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconConnections}" FontSize="18"
+                                               Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                                </StackPanel>
+                                <TextBlock Text="Add a SQL Server connection" Style="{StaticResource BodyStrong}" Margin="0,14,0,0" TextWrapping="Wrap" />
+                                <TextBlock Text="Point Obsync at the database you want to track." Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                <Button Content="Add connection" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                                        Tag="Connections" Click="OnGoToSection" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 2 -->
+                        <Border Style="{StaticResource Panel}" Margin="0,0,12,0" Padding="18">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="28" Height="28" CornerRadius="14" Background="{StaticResource AccentSoftBrush}">
+                                        <TextBlock Text="2" Style="{StaticResource BodyStrong}" Foreground="{StaticResource AccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" FontSize="18"
+                                               Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                                </StackPanel>
+                                <TextBlock Text="Add a GitHub repository" Style="{StaticResource BodyStrong}" Margin="0,14,0,0" TextWrapping="Wrap" />
+                                <TextBlock Text="Choose where versioned objects are committed." Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                <Button Content="Add repository" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                                        Tag="Repositories" Click="OnGoToSection" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Step 3 -->
+                        <Border Style="{StaticResource Panel}" Padding="18">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="28" Height="28" CornerRadius="14" Background="{StaticResource AccentSoftBrush}">
+                                        <TextBlock Text="3" Style="{StaticResource BodyStrong}" Foreground="{StaticResource AccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}" FontSize="18"
+                                               Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                                </StackPanel>
+                                <TextBlock Text="Create a sync job" Style="{StaticResource BodyStrong}" Margin="0,14,0,0" TextWrapping="Wrap" />
+                                <TextBlock Text="Connect a source and destination, then run it." Style="{StaticResource Muted}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                <Button Content="Create Sync Job" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                                        Click="OnCreateJob" />
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+                </StackPanel>
+            </Border>
+
+            <!-- Jobs table (shown once at least one job exists) -->
+            <Border Margin="0,20,0,0">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource Card}">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Jobs.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
                 <StackPanel>
                     <TextBlock Text="Sync Jobs" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
                     <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,0,0,8"

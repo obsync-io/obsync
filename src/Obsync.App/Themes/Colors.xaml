@@ -52,8 +52,4 @@
     <Thickness x:Key="PagePadding">28,24</Thickness>
     <Thickness x:Key="CardPadding">20</Thickness>
 
-    <!-- The single, subtle elevation used only on top-level cards -->
-    <DropShadowEffect x:Key="CardShadow" Color="#0F172A" BlurRadius="14" ShadowDepth="2"
-                      Direction="270" Opacity="0.06" RenderingBias="Quality" />
-
 </ResourceDictionary>

@@ -108,11 +108,9 @@
                 </DataGrid>
 
                 <!-- Empty state -->
-                <TextBlock Text="No sync jobs yet. Create your first job to start versioning SQL objects to GitHub."
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           TextAlignment="Center" MaxWidth="360" Margin="0,48,0,0">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="400" Margin="0,48,0,0">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Collapsed" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding Jobs.Count}" Value="0">
@@ -120,8 +118,15 @@
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                    </StackPanel.Style>
+                    <Border Width="52" Height="52" CornerRadius="14" Background="{StaticResource PanelBrush}" HorizontalAlignment="Center">
+                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}" FontSize="24" Foreground="{StaticResource TextMutedBrush}" />
+                    </Border>
+                    <TextBlock Text="No sync jobs yet" Style="{StaticResource SectionTitle}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,16,0,0" />
+                    <TextBlock Text="Create your first sync job to start versioning SQL Server objects to GitHub."
+                               Style="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,6,0,0" />
+                    <Button Content="Create Sync Job" Style="{StaticResource PrimaryButton}" Click="OnCreateJob" HorizontalAlignment="Center" Margin="0,18,0,0" />
+                </StackPanel>
             </Grid>
         </Border>
     </Grid>

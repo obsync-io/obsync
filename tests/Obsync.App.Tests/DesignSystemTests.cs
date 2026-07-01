@@ -17,7 +17,7 @@ public sealed class DesignSystemTests
     private static readonly string[] ExpectedKeys =
     [
         "AccentBrush", "CardBrush", "BorderBrush", "PanelBrush", "SuccessSoftBrush", "AccentSoftBrush",
-        "AppFontFamily", "IconFontFamily", "CardShadow", "RadiusCard", "RadiusPill", "CardPadding",
+        "AppFontFamily", "IconFontFamily", "RadiusCard", "RadiusPill", "CardPadding",
         "PageTitle", "SectionTitle", "MetricValue", "Body", "BodyStrong", "Muted", "Caption", "Icon",
         "Card", "Panel", "Divider", "PrimaryButton", "SecondaryButton", "SubtleButton",
         "IconButton", "LinkButton", "NavButton",

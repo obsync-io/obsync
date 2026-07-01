@@ -5,7 +5,10 @@
         WindowStartupLocation="CenterOwner"
         Icon="/Assets/Obsync_Icon.png"
         Background="{StaticResource AppBackgroundBrush}"
-        FontFamily="{StaticResource AppFontFamily}">
+        FontFamily="{StaticResource AppFontFamily}"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
     <Grid Margin="28">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -372,7 +375,13 @@
                         <TextBlock Text="Choose which database objects to version." Style="{StaticResource Caption}" Margin="0,0,0,18" />
 
                         <TextBlock Text="PRESET" Style="{StaticResource Caption}" />
-                        <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}" Margin="0,4,0,0" />
+                        <ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}" Margin="0,4,0,0">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
 
                         <StackPanel Visibility="{Binding IsCustomPreset, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="OBJECT TYPES" Style="{StaticResource Caption}" Margin="0,18,0,0" />
@@ -420,7 +429,13 @@
                         <TextBlock Text="How often this job runs." Style="{StaticResource Caption}" Margin="0,0,0,18" />
 
                         <TextBlock Text="CADENCE" Style="{StaticResource Caption}" />
-                        <ComboBox ItemsSource="{Binding ScheduleKinds}" SelectedItem="{Binding SelectedScheduleKind}" Margin="0,4,0,16" />
+                        <ComboBox ItemsSource="{Binding ScheduleKinds}" SelectedItem="{Binding SelectedScheduleKind}" Margin="0,4,0,16">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
 
                         <StackPanel Visibility="{Binding ShowHourly, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="EVERY N HOURS" Style="{StaticResource Caption}" />
@@ -434,7 +449,13 @@
 
                         <StackPanel Visibility="{Binding ShowWeekday, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="DAY OF WEEK" Style="{StaticResource Caption}" />
-                            <ComboBox ItemsSource="{Binding DaysOfWeek}" SelectedItem="{Binding SelectedDayOfWeek}" Margin="0,4,0,16" />
+                            <ComboBox ItemsSource="{Binding DaysOfWeek}" SelectedItem="{Binding SelectedDayOfWeek}" Margin="0,4,0,16">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
                         </StackPanel>
 
                         <StackPanel Visibility="{Binding ShowCron, Converter={StaticResource BoolToVisibility}}">

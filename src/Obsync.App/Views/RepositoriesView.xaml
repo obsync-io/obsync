@@ -20,6 +20,7 @@
 
             <!-- Existing repositories -->
             <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,18,0" Padding="0">
+                <Grid>
                 <DataGrid ItemsSource="{Binding Repositories}">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
@@ -45,6 +46,26 @@
                         </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
+
+                <!-- Empty state -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360" Margin="24">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Repositories.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Border Width="52" Height="52" CornerRadius="14" Background="{StaticResource PanelBrush}" HorizontalAlignment="Center">
+                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" FontSize="24" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="No repositories yet" Style="{StaticResource SectionTitle}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,16,0,0" />
+                    <TextBlock Text="Add your first GitHub repository using the form on the right." Style="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+                </Grid>
             </Border>
 
             <!-- Add / edit -->

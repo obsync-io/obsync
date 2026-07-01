@@ -5,7 +5,10 @@
         WindowStartupLocation="CenterScreen"
         Icon="/Assets/Obsync_Icon.png"
         Background="{StaticResource AppBackgroundBrush}"
-        FontFamily="{StaticResource AppFontFamily}">
+        FontFamily="{StaticResource AppFontFamily}"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="224" />
@@ -16,17 +19,12 @@
         <Border Grid.Column="0" Background="{StaticResource CardBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
             <DockPanel>
-                <!-- Brand block -->
-                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="20,22,20,22">
-                    <Image Source="/Assets/Obsync_Icon.png" Width="34" Height="34"
+                <!-- Brand block: icon mark + wordmark (no tagline). -->
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="22,24,20,26" VerticalAlignment="Center">
+                    <Image Source="/Assets/Obsync_Icon.png" Width="32" Height="32"
                            RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
-                    <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
-                        <!-- The Obsync wordmark rendered from the brand vector (crisp at any DPI). -->
-                        <Image Source="{StaticResource ObsyncWordmark}" Height="19"
-                               HorizontalAlignment="Left" Stretch="Uniform" />
-                        <TextBlock Text="SQL → GitHub version control" Style="{StaticResource Caption}"
-                                   Margin="0,3,0,0" />
-                    </StackPanel>
+                    <Image Source="{StaticResource ObsyncWordmark}" Height="20" Margin="11,0,0,0"
+                           VerticalAlignment="Center" Stretch="Uniform" />
                 </StackPanel>
 
                 <!-- Navigation items -->
