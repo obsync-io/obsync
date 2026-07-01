@@ -1,12 +1,14 @@
 using System.Windows;
+using System.Windows.Controls;
 
 namespace Obsync.App.Tests;
 
 /// <summary>
-/// Loads the split design-system ResourceDictionary on an STA thread. Because WPF resolves a
-/// dictionary's <c>StaticResource</c> references at load time, this throws if any cross-file
-/// reference (Controls → Colors/Typography/Icons) is broken — catching missing-resource errors
-/// that would otherwise only surface as a crash when the app starts on a real desktop.
+/// A headless WPF smoke test: on an STA thread it constructs the real <see cref="Obsync.App.App"/>
+/// (loading the full resource graph — theme + converters + templates), asserts the key design-system
+/// resources resolve, and then measures/arranges every screen so that control templates are applied.
+/// Template application is where WPF surfaces errors like an unset <c>Foreground</c> or a broken
+/// resource reference, so this reproduces view-load crashes that a plain build cannot catch.
 /// </summary>
 public sealed class DesignSystemTests
 {
@@ -17,40 +19,59 @@ public sealed class DesignSystemTests
         "PageTitle", "SectionTitle", "MetricValue", "Body", "BodyStrong", "Muted", "Caption", "Icon",
         "Card", "Panel", "Divider", "PrimaryButton", "SecondaryButton", "SubtleButton",
         "IconButton", "LinkButton", "NavButton",
+        // App-level resources (converters + reusable templates)
+        "StatusToBrush", "MsToDuration", "StatusBadgeTemplate", "ChangeBadgeTemplate",
     ];
 
     [Fact]
-    public void Theme_LoadsAndResolvesAllReferences()
+    public void App_LoadsResourcesAndRendersEveryView()
     {
-        Exception? error = null;
+        Exception? fatal = null;
         var missing = new List<string>();
+        var renderFailures = new List<string>();
 
         var thread = new Thread(() =>
         {
             try
             {
-                // An Application registers the "application://" pack scheme used by the Source URI.
-                if (Application.Current is null)
-                {
-                    _ = new Application();
-                }
-
-                var dictionary = new ResourceDictionary
-                {
-                    Source = new Uri("pack://application:,,,/Obsync.App;component/Themes/Theme.xaml", UriKind.Absolute),
-                };
+                var app = Application.Current ?? CreateApp();
 
                 foreach (var key in ExpectedKeys)
                 {
-                    if (Find(dictionary, key) is null)
+                    if (app.TryFindResource(key) is null)
                     {
                         missing.Add(key);
+                    }
+                }
+
+                foreach (var (name, create) in Views())
+                {
+                    try
+                    {
+                        var view = create();
+                        // Rooting the view under a Window connects it to Application.Resources for
+                        // StaticResource lookups (as MainWindow does at runtime). No Show() — that
+                        // would need a desktop; construction + layout is enough to apply templates.
+                        _ = new Window { Width = 1280, Height = 880, Content = view };
+                        view.Measure(new Size(1280, 880));
+                        view.Arrange(new Rect(0, 0, 1280, 880));
+                        view.UpdateLayout();
+                    }
+                    catch (Exception ex)
+                    {
+                        var chain = new List<string>();
+                        for (var e = ex; e is not null; e = e.InnerException)
+                        {
+                            chain.Add($"{e.GetType().Name}: {e.Message}");
+                        }
+
+                        renderFailures.Add($"{name}: {string.Join(" <-- ", chain)}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                error = ex;
+                fatal = ex;
             }
         });
 
@@ -58,25 +79,26 @@ public sealed class DesignSystemTests
         thread.Start();
         thread.Join();
 
-        Assert.True(error is null, $"Loading the design system threw: {error}");
+        Assert.True(fatal is null, $"WPF initialization failed: {fatal}");
         Assert.True(missing.Count == 0, $"Missing design-system resources: {string.Join(", ", missing)}");
+        Assert.True(renderFailures.Count == 0, $"View render failures:\n{string.Join("\n", renderFailures)}");
     }
 
-    private static object? Find(ResourceDictionary dictionary, string key)
+    private static Application CreateApp()
     {
-        if (dictionary.Contains(key))
-        {
-            return dictionary[key];
-        }
-
-        foreach (var merged in dictionary.MergedDictionaries)
-        {
-            if (Find(merged, key) is { } found)
-            {
-                return found;
-            }
-        }
-
-        return null;
+        var app = new Obsync.App.App();
+        app.InitializeComponent();
+        return app;
     }
+
+    private static IEnumerable<(string Name, Func<UIElement> Create)> Views() =>
+    [
+        ("DashboardView", () => new Obsync.App.Views.DashboardView()),
+        ("JobsView", () => new Obsync.App.Views.JobsView()),
+        ("JobDetailView", () => new Obsync.App.Views.JobDetailView()),
+        ("ConnectionsView", () => new Obsync.App.Views.ConnectionsView()),
+        ("RepositoriesView", () => new Obsync.App.Views.RepositoriesView()),
+        ("HistoryView", () => new Obsync.App.Views.HistoryView()),
+        ("SettingsView", () => new Obsync.App.Views.SettingsView()),
+    ];
 }
