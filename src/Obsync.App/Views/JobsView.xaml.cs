@@ -33,6 +33,19 @@ public partial class JobsView : UserControl
         }
     }
 
+    private void OnDeleteJob(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SyncJob job && DataContext is JobsViewModel jobs)
+        {
+            if (AppDialog.Confirm(Window.GetWindow(this), "Delete sync job",
+                $"Delete the sync job “{job.Name}”? This removes the job and its run history. The server and repository are not affected.",
+                "Delete", destructive: true))
+            {
+                jobs.DeleteCommand.Execute(job);
+            }
+        }
+    }
+
     private async Task ReloadAsync()
     {
         if (DataContext is JobsViewModel jobs)

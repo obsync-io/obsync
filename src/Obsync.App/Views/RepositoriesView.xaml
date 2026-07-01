@@ -35,9 +35,7 @@
                                                 CommandParameter="{Binding}">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
                                         </Button>
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete"
-                                                Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" Click="OnDeleteRepo">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
                                         </Button>
                                     </StackPanel>

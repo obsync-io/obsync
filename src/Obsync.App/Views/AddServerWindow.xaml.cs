@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Extensions.DependencyInjection;
+using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.Shared.Models;
 
@@ -17,6 +18,11 @@ public partial class AddServerWindow : Window
         if (serverToEdit is not null)
         {
             viewModel.LoadForEdit(serverToEdit);
+        }
+        else if (LocalServerDetector.Detect() is { } localServer)
+        {
+            // Pre-fill a detected local SQL Server so the common case is one click.
+            viewModel.ServerName = localServer;
         }
 
         var window = new AddServerWindow { DataContext = viewModel, Owner = owner };

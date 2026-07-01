@@ -28,10 +28,9 @@ public partial class ServersView : UserControl
     {
         if (((FrameworkElement)sender).DataContext is SqlConnectionProfile server && DataContext is ServersViewModel viewModel)
         {
-            var confirm = MessageBox.Show(
+            if (AppDialog.Confirm(Window.GetWindow(this), "Delete server",
                 $"Delete the server “{server.Name}”? Sync jobs that use it will need a different server.",
-                "Delete server", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-            if (confirm == MessageBoxResult.OK)
+                "Delete", destructive: true))
             {
                 viewModel.DeleteCommand.Execute(server);
             }

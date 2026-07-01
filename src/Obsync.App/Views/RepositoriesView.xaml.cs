@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using Obsync.App.ViewModels;
+using Obsync.Shared.Models;
 
 namespace Obsync.App.Views;
 
@@ -41,6 +42,19 @@ public partial class RepositoriesView : UserControl
     }
 
     private void OnSecretInputShouldClear(object? sender, EventArgs e) => TokenBox.Clear();
+
+    private void OnDeleteRepo(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is GitRepositoryProfile repository && DataContext is RepositoriesViewModel viewModel)
+        {
+            if (AppDialog.Confirm(Window.GetWindow(this), "Delete repository",
+                $"Delete the repository “{repository.Name}”? Sync jobs that use it will need a different repository.",
+                "Delete", destructive: true))
+            {
+                viewModel.DeleteCommand.Execute(repository);
+            }
+        }
+    }
 
     private void OnTokenChanged(object sender, RoutedEventArgs e)
     {

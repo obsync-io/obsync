@@ -95,9 +95,7 @@
                                         <Button Style="{StaticResource IconButton}" ToolTip="Edit" Margin="2,0,0,0" Click="OnEditJob">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
                                         </Button>
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" Margin="2,0,0,0"
-                                                Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" Margin="2,0,0,0" Click="OnDeleteJob">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
                                         </Button>
                                     </StackPanel>

@@ -52,7 +52,7 @@ public partial class App : Application
             // Startup failed before the window is up — surface it and exit rather than leaving a
             // windowless process alive (ShutdownMode.OnLastWindowClose would never fire).
             Log.Fatal(ex, "Obsync failed to start.");
-            MessageBox.Show(Describe(ex), "Obsync — startup failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            Views.AppDialog.Error(null, "Obsync — startup failed", Describe(ex));
             Shutdown(1);
             return;
         }
@@ -65,7 +65,7 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        MessageBox.Show(Describe(e.Exception), "Obsync", MessageBoxButton.OK, MessageBoxImage.Error);
+        Views.AppDialog.Error(Current.MainWindow, "Obsync", Describe(e.Exception));
         Log.Error(e.Exception, "Unhandled UI exception.");
         e.Handled = true;
     }
