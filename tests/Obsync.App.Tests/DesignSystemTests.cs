@@ -140,6 +140,35 @@ public sealed class DesignSystemTests
         return null;
     }
 
+    [Fact]
+    public void BrandIcon_ResourceLoadsFromPack()
+    {
+        Exception? error = null;
+        var pixelWidth = 0;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                _ = Application.Current ?? CreateApp();
+                var uri = new Uri("pack://application:,,,/Obsync.App;component/Assets/Obsync_Icon.png", UriKind.Absolute);
+                var bitmap = new System.Windows.Media.Imaging.BitmapImage(uri);
+                pixelWidth = bitmap.PixelWidth; // forces decode — throws if the resource is missing
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.True(error is null, $"Loading the brand icon resource threw: {error}");
+        Assert.True(pixelWidth > 0, "The brand icon resource decoded to zero width.");
+    }
+
     private static Application CreateApp()
     {
         var app = new Obsync.App.App();

@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Obsync" Height="760" Width="1180"
         WindowStartupLocation="CenterScreen"
+        Icon="/Assets/Obsync_Icon.png"
         Background="{StaticResource AppBackgroundBrush}"
         FontFamily="{StaticResource AppFontFamily}">
     <Grid>
@@ -17,11 +18,8 @@
             <DockPanel>
                 <!-- Brand block -->
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="20,22,20,22">
-                    <Border Width="36" Height="36" CornerRadius="{StaticResource RadiusControl}"
-                            Background="{StaticResource AccentBrush}">
-                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconBranch}"
-                                   Foreground="White" FontSize="18" />
-                    </Border>
+                    <Image Source="/Assets/Obsync_Icon.png" Width="36" Height="36"
+                           RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
                     <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="Obsync" FontSize="18" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextPrimaryBrush}" />

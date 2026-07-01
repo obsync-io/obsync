@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>Assets\Obsync.ico</ApplicationIcon>
     <!-- XAML-generated partial classes can trip nullable analysis; keep the app
          building while still surfacing warnings. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
@@ -18,6 +18,13 @@
     <PackageReference Include="Serilog.Settings.Configuration" />
     <PackageReference Include="Serilog.Sinks.Console" />
     <PackageReference Include="Serilog.Sinks.File" />
+  </ItemGroup>
+
+  <ItemGroup Label="Branding">
+    <!-- The brand mark used for the window/taskbar icon and the in-app logo. -->
+    <Resource Include="Assets\Obsync_Icon.png" />
+    <!-- Source-of-truth vector logo; kept for reference (WPF renders the PNG at runtime). -->
+    <None Include="Assets\Obsync_Logo.svg" />
   </ItemGroup>
 
   <ItemGroup>

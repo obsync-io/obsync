@@ -8,8 +8,9 @@
     <Color x:Key="PanelColor">#F1F5F9</Color>
     <Color x:Key="TextPrimaryColor">#111827</Color>
     <Color x:Key="TextMutedColor">#6B7280</Color>
-    <Color x:Key="AccentColor">#2563EB</Color>
-    <Color x:Key="AccentHoverColor">#1D4ED8</Color>
+    <!-- Brand blue (matches the Obsync logo/icon). -->
+    <Color x:Key="AccentColor">#1B17FF</Color>
+    <Color x:Key="AccentHoverColor">#1512D6</Color>
     <Color x:Key="SuccessColor">#16A34A</Color>
     <Color x:Key="WarningColor">#D97706</Color>
     <Color x:Key="ErrorColor">#DC2626</Color>
@@ -18,7 +19,7 @@
     <Color x:Key="SuccessSoftColor">#E7F5EC</Color>
     <Color x:Key="WarningSoftColor">#FBF0E1</Color>
     <Color x:Key="ErrorSoftColor">#FBE9E9</Color>
-    <Color x:Key="AccentSoftColor">#E8F0FE</Color>
+    <Color x:Key="AccentSoftColor">#EBEAFF</Color>
     <Color x:Key="NeutralSoftColor">#F1F5F9</Color>
     <Color x:Key="RowHoverColor">#F8FAFC</Color>
 
