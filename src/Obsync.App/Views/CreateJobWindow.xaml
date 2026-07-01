@@ -348,7 +348,7 @@
                         <TextBlock Text="JOB NAME" Style="{StaticResource Caption}" />
                         <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
 
-                        <TextBlock Text="SQL CONNECTION" Style="{StaticResource Caption}" />
+                        <TextBlock Text="SERVER" Style="{StaticResource Caption}" />
                         <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection}"
                                   DisplayMemberPath="Name" Margin="0,4,0,10" />
                         <Button Content="Load databases" Style="{StaticResource SecondaryButton}"

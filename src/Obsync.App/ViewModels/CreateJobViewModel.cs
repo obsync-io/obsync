@@ -219,7 +219,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     {
         if (SelectedConnection is null)
         {
-            StatusMessage = "Select a connection first.";
+            StatusMessage = "Select a server first.";
             return;
         }
 
@@ -298,7 +298,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private string? ValidateStep(int step) => step switch
     {
         1 when string.IsNullOrWhiteSpace(Name) => "Enter a job name.",
-        1 when SelectedConnection is null => "Select a SQL connection.",
+        1 when SelectedConnection is null => "Select a server.",
         1 when !Databases.Any(d => d.IsSelected) => "Select at least one database.",
         2 when IsCustomPreset && !ObjectTypes.Any(t => t.IsSelected) => "Select at least one object type for the Custom preset.",
         3 when SelectedRepository is null => "Select a destination repository.",
