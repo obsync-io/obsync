@@ -149,6 +149,10 @@ public sealed partial class JobDetailViewModel : ObservableObject
             };
             await LoadAsync(Job.Id);
         }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Run failed — {ex.Message}";
+        }
         finally
         {
             IsBusy = false;

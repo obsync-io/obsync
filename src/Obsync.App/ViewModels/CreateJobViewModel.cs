@@ -44,8 +44,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
 
-    private Guid _editingJobId;
-    private DateTimeOffset _createdAt;
+    private SyncJob? _editingJob;
 
     [ObservableProperty] private int _currentStep = 1;
     [ObservableProperty] private bool _isEditMode;
@@ -185,8 +184,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public void InitializeForEdit(SyncJob job)
     {
         IsEditMode = true;
-        _editingJobId = job.Id;
-        _createdAt = job.CreatedAt;
+        _editingJob = job;
 
         Name = job.Name;
         SelectedConnection = Connections.FirstOrDefault(c => c.Id == job.ConnectionProfileId);
@@ -225,6 +223,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
             return;
         }
 
+        if (IsBusy)
+        {
+            return;
+        }
+
         IsBusy = true;
         StatusMessage = "Loading databases…";
         try
@@ -248,6 +251,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
             }
 
             StatusMessage = $"Found {result.Value.Count} database(s).";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not load databases — {ex.Message}";
         }
         finally
         {
@@ -349,6 +356,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [RelayCommand]
     private async Task SaveAsync()
     {
+        if (IsBusy)
+        {
+            return;
+        }
+
         for (var step = 1; step <= 4; step++)
         {
             var error = ValidateStep(step);
@@ -361,27 +373,30 @@ public sealed partial class CreateJobViewModel : ObservableObject
         }
 
         var selectedDatabases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
-        var selection = new ObjectSelectionProfile { Preset = SelectedPreset };
+
+        // When editing, mutate the existing job so fields the wizard does not surface
+        // (Description, Enabled, CommitMode, Advanced options, RunSummary, and the non-preset
+        // Selection settings) are preserved instead of being reset to defaults by the upsert.
+        var job = IsEditMode && _editingJob is not null ? _editingJob : new SyncJob();
+        job.Name = Name.Trim();
+        job.ConnectionProfileId = SelectedConnection!.Id;
+        job.RepositoryProfileId = SelectedRepository!.Id;
+        job.Databases = selectedDatabases;
+        job.Branch = string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim();
+        job.DestinationFolder = EffectiveDestinationFolder(selectedDatabases);
+        job.LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim();
+        job.Selection.Preset = SelectedPreset;
         if (IsCustomPreset)
         {
-            selection.CustomTypes = [.. ObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)];
+            job.Selection.CustomTypes = [.. ObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)];
         }
 
-        var job = new SyncJob
+        job.Schedule = BuildSchedule();
+        job.UpdatedAt = _clock.UtcNow;
+        if (!IsEditMode)
         {
-            Id = IsEditMode ? _editingJobId : Guid.NewGuid(),
-            Name = Name.Trim(),
-            ConnectionProfileId = SelectedConnection!.Id,
-            RepositoryProfileId = SelectedRepository!.Id,
-            Databases = selectedDatabases,
-            Branch = string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim(),
-            DestinationFolder = EffectiveDestinationFolder(selectedDatabases),
-            LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim(),
-            Selection = selection,
-            Schedule = BuildSchedule(),
-            CreatedAt = IsEditMode ? _createdAt : _clock.UtcNow,
-            UpdatedAt = _clock.UtcNow,
-        };
+            job.CreatedAt = _clock.UtcNow;
+        }
 
         IsBusy = true;
         try
@@ -391,6 +406,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
             // jobs on demand via Run Now.
             await _jobs.UpsertAsync(job);
             Saved?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not save the job — {ex.Message}";
         }
         finally
         {

@@ -11,20 +11,32 @@ public partial class RepositoriesView : UserControl
     public RepositoriesView()
     {
         InitializeComponent();
-        DataContextChanged += OnDataContextChanged;
+
+        // Subscribe on Loaded / unsubscribe on Unloaded so the (singleton) view model does not
+        // retain this recreated-per-navigation view — and its secret-bearing PasswordBox — after
+        // the user navigates away.
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
-    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        Unsubscribe();
+        if (DataContext is RepositoriesViewModel viewModel)
+        {
+            _subscribed = viewModel;
+            viewModel.SecretInputShouldClear += OnSecretInputShouldClear;
+        }
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e) => Unsubscribe();
+
+    private void Unsubscribe()
     {
         if (_subscribed is not null)
         {
             _subscribed.SecretInputShouldClear -= OnSecretInputShouldClear;
-        }
-
-        _subscribed = DataContext as RepositoriesViewModel;
-        if (_subscribed is not null)
-        {
-            _subscribed.SecretInputShouldClear += OnSecretInputShouldClear;
+            _subscribed = null;
         }
     }
 

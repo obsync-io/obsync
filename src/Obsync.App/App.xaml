@@ -21,15 +21,17 @@
             <conv:ChangeTypeToBadgeBackgroundConverter x:Key="ChangeTypeToBadgeBackground" />
             <conv:MsToDurationConverter x:Key="MsToDuration" />
 
-            <!-- Reusable small status badge (DataContext = RunStatus). -->
+            <!-- Reusable small status badge (DataContext = RunStatus, or null for a never-run job).
+                 FallbackValue covers the null-content case, where the empty-path binding yields
+                 UnsetValue and the converter is skipped — the badge then reads as a neutral "Not run". -->
             <DataTemplate x:Key="StatusBadgeTemplate">
                 <Border CornerRadius="{StaticResource RadiusPill}" Padding="9,3" HorizontalAlignment="Left"
-                        Background="{Binding Converter={StaticResource StatusToBadgeBackground}}">
+                        Background="{Binding Converter={StaticResource StatusToBadgeBackground}, FallbackValue={StaticResource NeutralSoftBrush}}">
                     <StackPanel Orientation="Horizontal">
                         <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
-                                 Fill="{Binding Converter={StaticResource StatusToBrush}}" />
-                        <TextBlock Text="{Binding Converter={StaticResource StatusToText}}" FontSize="12"
-                                   FontWeight="SemiBold" Foreground="{Binding Converter={StaticResource StatusToBrush}}" />
+                                 Fill="{Binding Converter={StaticResource StatusToBrush}, FallbackValue={StaticResource TextMutedBrush}}" />
+                        <TextBlock Text="{Binding Converter={StaticResource StatusToText}, FallbackValue=Not run}" FontSize="12"
+                                   FontWeight="SemiBold" Foreground="{Binding Converter={StaticResource StatusToBrush}, FallbackValue={StaticResource TextMutedBrush}}" />
                     </StackPanel>
                 </Border>
             </DataTemplate>

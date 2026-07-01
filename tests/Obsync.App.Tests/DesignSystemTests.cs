@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using Obsync.Shared;
 
 namespace Obsync.App.Tests;
 
@@ -82,6 +84,60 @@ public sealed class DesignSystemTests
         Assert.True(fatal is null, $"WPF initialization failed: {fatal}");
         Assert.True(missing.Count == 0, $"Missing design-system resources: {string.Join(", ", missing)}");
         Assert.True(renderFailures.Count == 0, $"View render failures:\n{string.Join("\n", renderFailures)}");
+    }
+
+    [Fact]
+    public void StatusBadge_RendersLabel_ForNullStatus()
+    {
+        string? renderedText = null;
+        Exception? error = null;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var app = Application.Current ?? CreateApp();
+                var template = (DataTemplate)app.FindResource("StatusBadgeTemplate");
+                var content = new ContentControl { Content = (RunStatus?)null, ContentTemplate = template };
+                _ = new Window { Width = 200, Height = 100, Content = content };
+                content.Measure(new Size(200, 100));
+                content.Arrange(new Rect(0, 0, 200, 100));
+                content.UpdateLayout();
+                renderedText = FirstTextBlockText(content);
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.True(error is null, $"Rendering the null-status badge threw: {error}");
+        // A never-run job has a null RunStatus. The badge must still render a "Not run" label —
+        // this asserts the behavior so a regression (blank status cell) is caught.
+        Assert.Equal("Not run", renderedText);
+    }
+
+    private static string? FirstTextBlockText(DependencyObject root)
+    {
+        if (root is TextBlock { Text.Length: > 0 } tb)
+        {
+            return tb.Text;
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            if (FirstTextBlockText(VisualTreeHelper.GetChild(root, i)) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
     }
 
     private static Application CreateApp()

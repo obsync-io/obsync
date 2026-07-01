@@ -22,27 +22,42 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        ObsyncPaths.EnsureCreated();
 
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
-            .WriteTo.File(System.IO.Path.Combine(ObsyncPaths.LogsRoot, "app-.log"), rollingInterval: RollingInterval.Day)
-            .CreateLogger();
+        MainViewModel mainViewModel;
+        try
+        {
+            ObsyncPaths.EnsureCreated();
 
-        _host = Host.CreateDefaultBuilder()
-            .UseSerilog()
-            .ConfigureServices(services =>
-                services.AddObsyncApp(ObsyncPaths.DatabasePath, ObsyncPaths.WorkspacesRoot))
-            .Build();
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Information()
+                .WriteTo.File(System.IO.Path.Combine(ObsyncPaths.LogsRoot, "app-.log"), rollingInterval: RollingInterval.Day)
+                .CreateLogger();
 
-        await _host.StartAsync();
-        await _host.Services.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
+            _host = Host.CreateDefaultBuilder()
+                .UseSerilog()
+                .ConfigureServices(services =>
+                    services.AddObsyncApp(ObsyncPaths.DatabasePath, ObsyncPaths.WorkspacesRoot))
+                .Build();
 
-        var window = _host.Services.GetRequiredService<MainWindow>();
-        var mainViewModel = _host.Services.GetRequiredService<MainViewModel>();
-        window.DataContext = mainViewModel;
-        window.Show();
+            await _host.StartAsync();
+            await _host.Services.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
 
+            var window = _host.Services.GetRequiredService<MainWindow>();
+            mainViewModel = _host.Services.GetRequiredService<MainViewModel>();
+            window.DataContext = mainViewModel;
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            // Startup failed before the window is up — surface it and exit rather than leaving a
+            // windowless process alive (ShutdownMode.OnLastWindowClose would never fire).
+            Log.Fatal(ex, "Obsync failed to start.");
+            MessageBox.Show(Describe(ex), "Obsync — startup failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
+
+        // The window is shown; a failure here is non-fatal and handled by the dispatcher handler.
         // Triggered after construction so the dashboard (which depends on IShellNavigator == this
         // view model) is not resolved while the shell itself is still being built.
         await mainViewModel.InitializeAsync();
@@ -50,9 +65,21 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        MessageBox.Show(e.Exception.Message, "Obsync", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(Describe(e.Exception), "Obsync", MessageBoxButton.OK, MessageBoxImage.Error);
         Log.Error(e.Exception, "Unhandled UI exception.");
         e.Handled = true;
+    }
+
+    /// <summary>The innermost exception message — DI/reflection failures wrap the real cause.</summary>
+    private static string Describe(Exception exception)
+    {
+        var current = exception;
+        while (current.InnerException is not null)
+        {
+            current = current.InnerException;
+        }
+
+        return current.Message;
     }
 
     protected override async void OnExit(ExitEventArgs e)

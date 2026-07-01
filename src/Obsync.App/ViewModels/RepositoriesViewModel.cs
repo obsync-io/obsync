@@ -73,12 +73,21 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
             return;
         }
 
+        if (IsBusy)
+        {
+            return;
+        }
+
         IsBusy = true;
         ValidationResult = "Validating…";
         try
         {
             var result = await _gitHub.ValidateTokenAsync(Token);
             ValidationResult = result.IsSuccess ? $"Valid — authenticated as {result.Value}." : result.Error;
+        }
+        catch (Exception ex)
+        {
+            ValidationResult = $"Validation failed — {ex.Message}";
         }
         finally
         {
@@ -119,27 +128,44 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
             return;
         }
 
-        var profile = new GitRepositoryProfile
+        if (IsBusy)
         {
-            Id = _editingId ?? Guid.NewGuid(),
-            Name = Name.Trim(),
-            Owner = Owner.Trim(),
-            RepositoryName = RepositoryName.Trim(),
-            RemoteUrl = _editingRemoteUrl,
-            DefaultBranch = string.IsNullOrWhiteSpace(DefaultBranch) ? "main" : DefaultBranch.Trim(),
-            CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt,
-            UpdatedAt = _clock.UtcNow,
-        };
-        await _repository.UpsertAsync(profile);
-
-        if (!string.IsNullOrEmpty(Token))
-        {
-            _credentialStore.Store(CredentialKeys.GitHubToken(profile.Id), Token);
+            return;
         }
 
-        ValidationResult = "Saved.";
-        ResetEditor();
-        await LoadAsync();
+        IsBusy = true;
+        try
+        {
+            var profile = new GitRepositoryProfile
+            {
+                Id = _editingId ?? Guid.NewGuid(),
+                Name = Name.Trim(),
+                Owner = Owner.Trim(),
+                RepositoryName = RepositoryName.Trim(),
+                RemoteUrl = _editingRemoteUrl,
+                DefaultBranch = string.IsNullOrWhiteSpace(DefaultBranch) ? "main" : DefaultBranch.Trim(),
+                CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt,
+                UpdatedAt = _clock.UtcNow,
+            };
+            await _repository.UpsertAsync(profile);
+
+            if (!string.IsNullOrEmpty(Token))
+            {
+                _credentialStore.Store(CredentialKeys.GitHubToken(profile.Id), Token);
+            }
+
+            ValidationResult = "Saved.";
+            ResetEditor();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            ValidationResult = $"Could not save — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     [RelayCommand]

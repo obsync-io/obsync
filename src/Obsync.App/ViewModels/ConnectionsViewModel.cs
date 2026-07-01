@@ -70,21 +70,48 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
     [RelayCommand]
     private async Task TestAsync()
     {
+        if (IsBusy)
+        {
+            return;
+        }
+
         IsBusy = true;
         TestResult = "Testing…";
         try
         {
             var profile = BuildProfile();
-            var password = AuthenticationMode == SqlAuthenticationMode.SqlLogin ? Password : null;
-            var result = await _probe.TestConnectionAsync(profile, password);
+            var result = await _probe.TestConnectionAsync(profile, ResolveTestPassword());
             TestResult = result.IsSuccess
                 ? $"Connected — {result.Value.Edition} ({result.Value.ProductVersion})."
                 : result.Error;
+        }
+        catch (Exception ex)
+        {
+            TestResult = $"Test failed — {ex.Message}";
         }
         finally
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// The password to test with: the typed value if present, otherwise (when editing) the secret
+    /// already stored for this profile — so testing an existing SQL login without retyping works.
+    /// </summary>
+    private string? ResolveTestPassword()
+    {
+        if (AuthenticationMode != SqlAuthenticationMode.SqlLogin)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(Password))
+        {
+            return Password;
+        }
+
+        return _editingId is { } id ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(id)) : Password;
     }
 
     [RelayCommand]
@@ -120,28 +147,45 @@ public sealed partial class ConnectionsViewModel : ObservableObject, IAsyncViewM
             return;
         }
 
-        var profile = BuildProfile();
-        profile.Id = _editingId ?? profile.Id;
-        profile.CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt;
-        profile.UpdatedAt = _clock.UtcNow;
-        await _repository.UpsertAsync(profile);
-
-        if (AuthenticationMode == SqlAuthenticationMode.SqlLogin)
+        if (IsBusy)
         {
-            if (!string.IsNullOrEmpty(Password))
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var profile = BuildProfile();
+            profile.Id = _editingId ?? profile.Id;
+            profile.CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt;
+            profile.UpdatedAt = _clock.UtcNow;
+            await _repository.UpsertAsync(profile);
+
+            if (AuthenticationMode == SqlAuthenticationMode.SqlLogin)
             {
-                _credentialStore.Store(CredentialKeys.SqlPassword(profile.Id), Password);
+                if (!string.IsNullOrEmpty(Password))
+                {
+                    _credentialStore.Store(CredentialKeys.SqlPassword(profile.Id), Password);
+                }
             }
-        }
-        else
-        {
-            // Switched away from SQL login — drop any stored password so none is left orphaned.
-            _credentialStore.Delete(CredentialKeys.SqlPassword(profile.Id));
-        }
+            else
+            {
+                // Switched away from SQL login — drop any stored password so none is left orphaned.
+                _credentialStore.Delete(CredentialKeys.SqlPassword(profile.Id));
+            }
 
-        TestResult = "Saved.";
-        ResetEditor();
-        await LoadAsync();
+            TestResult = "Saved.";
+            ResetEditor();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            TestResult = $"Could not save — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     [RelayCommand]

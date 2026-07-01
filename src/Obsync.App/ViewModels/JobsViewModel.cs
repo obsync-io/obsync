@@ -68,6 +68,10 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
             };
             await LoadAsync();
         }
+        catch (Exception ex)
+        {
+            StatusMessage = $"{job.Name}: run failed — {ex.Message}";
+        }
         finally
         {
             IsBusy = false;
