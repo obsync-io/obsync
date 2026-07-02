@@ -39,6 +39,13 @@ public sealed class SyncRun
 
     public string? CommitSha { get; set; }
     public string? CommitUrl { get; set; }
+
+    /// <summary>The opened pull request's web URL (<see cref="CommitMode.PullRequest"/> runs only).</summary>
+    public string? PullRequestUrl { get; set; }
+
+    /// <summary>The opened pull request's number (<see cref="CommitMode.PullRequest"/> runs only).</summary>
+    public int? PullRequestNumber { get; set; }
+
     public string? ErrorMessage { get; set; }
 
     /// <summary>Total changed objects (added + modified + deleted).</summary>

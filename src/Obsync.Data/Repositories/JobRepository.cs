@@ -38,6 +38,7 @@ public sealed class JobRepository : IJobRepository
         public string DestinationFolder { get; set; } = string.Empty;
         public long CommitMode { get; set; }
         public string? LocalExportPath { get; set; }
+        public string? ReviewersJson { get; set; }
         public string SelectionJson { get; set; } = "{}";
         public string ScheduleJson { get; set; } = "{}";
         public string AdvancedJson { get; set; } = "{}";
@@ -50,7 +51,8 @@ public sealed class JobRepository : IJobRepository
         SELECT id AS Id, name AS Name, description AS Description, enabled AS Enabled,
                connection_profile_id AS ConnectionProfileId, repository_profile_id AS RepositoryProfileId,
                databases_json AS DatabasesJson, branch AS Branch, destination_folder AS DestinationFolder,
-               commit_mode AS CommitMode, local_export_path AS LocalExportPath, selection_json AS SelectionJson,
+               commit_mode AS CommitMode, local_export_path AS LocalExportPath, reviewers_json AS ReviewersJson,
+               selection_json AS SelectionJson,
                schedule_json AS ScheduleJson, advanced_json AS AdvancedJson, run_summary_json AS RunSummaryJson,
                created_at AS CreatedAt, updated_at AS UpdatedAt
         FROM jobs
@@ -81,10 +83,10 @@ public sealed class JobRepository : IJobRepository
             """
             INSERT INTO jobs
                 (id, name, description, enabled, connection_profile_id, repository_profile_id, databases_json,
-                 branch, destination_folder, commit_mode, local_export_path, selection_json, schedule_json,
+                 branch, destination_folder, commit_mode, local_export_path, reviewers_json, selection_json, schedule_json,
                  advanced_json, run_summary_json, created_at, updated_at)
             VALUES
-                ($id, $name, $desc, $enabled, $conn, $repo, $dbs, $branch, $folder, $commit, $local,
+                ($id, $name, $desc, $enabled, $conn, $repo, $dbs, $branch, $folder, $commit, $local, $reviewers,
                  $selection, $schedule, $advanced, $summary, $created, $updated)
             ON CONFLICT (id) DO UPDATE SET
                 name = excluded.name, description = excluded.description, enabled = excluded.enabled,
@@ -92,6 +94,7 @@ public sealed class JobRepository : IJobRepository
                 repository_profile_id = excluded.repository_profile_id, databases_json = excluded.databases_json,
                 branch = excluded.branch, destination_folder = excluded.destination_folder,
                 commit_mode = excluded.commit_mode, local_export_path = excluded.local_export_path,
+                reviewers_json = excluded.reviewers_json,
                 selection_json = excluded.selection_json, schedule_json = excluded.schedule_json,
                 advanced_json = excluded.advanced_json,
                 -- run_summary_json is intentionally NOT overwritten here: it is owned by the engine
@@ -112,6 +115,7 @@ public sealed class JobRepository : IJobRepository
                 folder = job.DestinationFolder,
                 commit = (int)job.CommitMode,
                 local = job.LocalExportPath,
+                reviewers = ObsyncJson.Serialize(job.Reviewers),
                 selection = ObsyncJson.Serialize(job.Selection),
                 schedule = ObsyncJson.Serialize(job.Schedule),
                 advanced = ObsyncJson.Serialize(job.Advanced),
@@ -170,6 +174,7 @@ public sealed class JobRepository : IJobRepository
             DestinationFolder = row.DestinationFolder,
             CommitMode = (CommitMode)row.CommitMode,
             LocalExportPath = row.LocalExportPath,
+            Reviewers = string.IsNullOrEmpty(row.ReviewersJson) ? [] : ObsyncJson.Deserialize<List<string>>(row.ReviewersJson),
             Selection = selection,
             Schedule = ObsyncJson.Deserialize<ScheduleProfile>(row.ScheduleJson),
             Advanced = ObsyncJson.Deserialize<JobAdvancedOptions>(row.AdvancedJson),

@@ -42,6 +42,7 @@ public sealed class RunRepository : IRunRepository
                completed_at AS CompletedAt, duration_ms AS DurationMs, objects_scanned AS ObjectsScanned,
                objects_added AS ObjectsAdded, objects_modified AS ObjectsModified, objects_deleted AS ObjectsDeleted,
                objects_failed AS ObjectsFailed, commit_sha AS CommitSha, commit_url AS CommitUrl,
+               pr_url AS PullRequestUrl, pr_number AS PullRequestNumber,
                error_message AS ErrorMessage
         FROM runs
         """;
@@ -54,10 +55,10 @@ public sealed class RunRepository : IRunRepository
             INSERT INTO runs
                 (id, run_key, job_id, job_name, trigger, triggered_by, status, server_name, databases, started_at, completed_at,
                  duration_ms, objects_scanned, objects_added, objects_modified, objects_deleted, objects_failed,
-                 commit_sha, commit_url, error_message)
+                 commit_sha, commit_url, pr_url, pr_number, error_message)
             VALUES
                 ($id, $key, $job, $jobName, $trigger, $triggeredBy, $status, $server, $dbs, $started, $completed, $duration,
-                 $scanned, $added, $modified, $deleted, $failed, $sha, $url, $error);
+                 $scanned, $added, $modified, $deleted, $failed, $sha, $url, $prUrl, $prNumber, $error);
             """,
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
@@ -71,7 +72,7 @@ public sealed class RunRepository : IRunRepository
                 status = $status, completed_at = $completed, duration_ms = $duration,
                 objects_scanned = $scanned, objects_added = $added, objects_modified = $modified,
                 objects_deleted = $deleted, objects_failed = $failed, commit_sha = $sha, commit_url = $url,
-                error_message = $error
+                pr_url = $prUrl, pr_number = $prNumber, error_message = $error
             WHERE id = $id;
             """,
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
@@ -231,6 +232,8 @@ public sealed class RunRepository : IRunRepository
         failed = run.ObjectsFailed,
         sha = run.CommitSha,
         url = run.CommitUrl,
+        prUrl = run.PullRequestUrl,
+        prNumber = run.PullRequestNumber,
         error = run.ErrorMessage,
     };
 

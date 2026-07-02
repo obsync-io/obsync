@@ -64,6 +64,13 @@ public sealed class SyncJob
     /// <summary>Optional local path to also save the scripted output to.</summary>
     public string? LocalExportPath { get; set; }
 
+    /// <summary>
+    /// GitHub usernames to request as reviewers on the pull request (<see cref="CommitMode.PullRequest"/>
+    /// only). Empty for direct-commit jobs. Requesting a review is best-effort — an unknown username
+    /// is logged as a warning and never fails the run.
+    /// </summary>
+    public List<string> Reviewers { get; set; } = [];
+
     // --- What &amp; when ---
     public ObjectSelectionProfile Selection { get; set; } = new();
     public ScheduleProfile Schedule { get; set; } = new();
