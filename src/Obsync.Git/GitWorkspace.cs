@@ -7,7 +7,17 @@ namespace Obsync.Git;
 public sealed class GitWorkspaceContext
 {
     public required string RemoteUrl { get; init; }
+
+    /// <summary>The branch that is checked out, committed to, and pushed. In pull-request mode this is
+    /// the per-run head branch; in direct-commit mode it is the target branch.</summary>
     public required string Branch { get; init; }
+
+    /// <summary>
+    /// When set, pull-request mode: <see cref="Branch"/> is created fresh off this base branch each
+    /// run (the base is the PR target and must already exist on the remote). Null = direct-commit mode.
+    /// </summary>
+    public string? BaseBranch { get; init; }
+
     public required string LocalPath { get; init; }
 
     /// <summary>Full HTTP header value used for authentication, e.g. "AUTHORIZATION: basic &lt;base64&gt;". Never logged.</summary>
@@ -82,6 +92,26 @@ public sealed class GitWorkspace : IGitWorkspace
             {
                 return Result.Failure($"git fetch failed: {Summarize(fetch.StandardError)}");
             }
+        }
+
+        // Pull request mode: create a fresh per-run head branch at the base branch's tip. The base
+        // must already exist on the remote (it's what the PR targets); the per-run head does not, so
+        // the direct-mode stranded-commit preservation below does not apply.
+        if (context.BaseBranch is not null)
+        {
+            var baseExists = (await _git.RunAsync(
+                context.LocalPath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{context.BaseBranch}"], cancellationToken)
+                .ConfigureAwait(false)).Success;
+            if (!baseExists)
+            {
+                return Result.Failure($"The base branch '{context.BaseBranch}' does not exist on the remote.");
+            }
+
+            var headCheckout = await _git.RunAsync(
+                context.LocalPath, ["checkout", "-B", context.Branch, $"origin/{context.BaseBranch}"], cancellationToken).ConfigureAwait(false);
+            return headCheckout.Success
+                ? Result.Success()
+                : Result.Failure($"git checkout failed: {Summarize(headCheckout.StandardError)}");
         }
 
         var remoteBranchExists = (await _git.RunAsync(

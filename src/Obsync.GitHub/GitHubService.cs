@@ -20,7 +20,11 @@ public sealed record GitHubRepository(string Owner, string Name, string DefaultB
 public sealed record TokenPermissionReport(
     bool TokenValid, string? Login, bool RepositoryFound, bool CanRead, bool CanWrite, string? Detail);
 
-/// <summary>Checks GitHub tokens and reads repository/branch metadata via Octokit.</summary>
+/// <summary>An opened pull request. <see cref="ReviewerWarning"/> is set when the PR opened but
+/// requesting one or more reviewers failed (a non-fatal condition).</summary>
+public sealed record PullRequestInfo(int Number, string HtmlUrl, string? ReviewerWarning);
+
+/// <summary>Checks GitHub tokens, reads repository/branch metadata, and opens pull requests via Octokit.</summary>
 public interface IGitHubService
 {
     /// <summary>
@@ -33,6 +37,15 @@ public interface IGitHubService
 
     Task<Result<IReadOnlyList<GitHubRepository>>> GetRepositoriesAsync(string token, CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<string>>> GetBranchesAsync(string token, string owner, string name, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a pull request from <paramref name="headBranch"/> into <paramref name="baseBranch"/> and,
+    /// if <paramref name="reviewers"/> is non-empty, requests them (best-effort). A failed
+    /// <see cref="Result"/> means the PR itself could not be opened (e.g. missing PR permission).
+    /// </summary>
+    Task<Result<PullRequestInfo>> CreatePullRequestAsync(
+        string token, string owner, string name, string title, string headBranch, string baseBranch,
+        string body, IReadOnlyList<string> reviewers, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IGitHubService" />
@@ -121,6 +134,55 @@ public sealed class GitHubService : IGitHubService
             return Result.Failure<IReadOnlyList<string>>($"GitHub error: {ex.Message}");
         }
     }
+
+    public async Task<Result<PullRequestInfo>> CreatePullRequestAsync(
+        string token, string owner, string name, string title, string headBranch, string baseBranch,
+        string body, IReadOnlyList<string> reviewers, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var client = CreateClient(token);
+            var pr = await WithRetryAsync(
+                () => client.PullRequest.Create(owner, name, new NewPullRequest(title, headBranch, baseBranch) { Body = body }),
+                cancellationToken).ConfigureAwait(false);
+
+            string? reviewerWarning = null;
+            if (reviewers.Count > 0)
+            {
+                try
+                {
+                    await WithRetryAsync(
+                        () => client.PullRequest.ReviewRequest.Create(owner, name, pr.Number, new PullRequestReviewRequest(reviewers, [])),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (ApiException ex)
+                {
+                    // The PR is already open; a bad/unknown reviewer must not fail it.
+                    reviewerWarning = $"The pull request opened, but requesting reviewers failed: {ex.Message}";
+                    _logger.LogWarning("Requesting reviewers for PR #{Number} failed: {Message}", pr.Number, ex.Message);
+                }
+            }
+
+            return Result.Success(new PullRequestInfo(pr.Number, pr.HtmlUrl, reviewerWarning));
+        }
+        catch (AuthorizationException)
+        {
+            return Result.Failure<PullRequestInfo>("The token was rejected by GitHub. Check that it is valid and not expired.");
+        }
+        catch (ApiException ex)
+        {
+            _logger.LogWarning("Opening the pull request failed: {Message}", ex.Message);
+            return Result.Failure<PullRequestInfo>(ExplainPullRequestFailure(ex));
+        }
+    }
+
+    /// <summary>Turns a PR-create API failure into a short, actionable message.</summary>
+    private static string ExplainPullRequestFailure(ApiException ex) => (int)ex.StatusCode switch
+    {
+        403 => "GitHub denied opening the pull request — the token needs Pull requests: write permission on this repository.",
+        422 => $"GitHub could not open the pull request: {ex.Message}", // e.g. a PR already exists, or no diff between base and head
+        _ => $"GitHub error opening the pull request: {ex.Message}",
+    };
 
     private static GitHubClient CreateClient(string token) =>
         new(Product) { Credentials = new Credentials(token) };
