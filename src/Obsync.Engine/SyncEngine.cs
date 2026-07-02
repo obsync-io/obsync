@@ -35,6 +35,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
     private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IGitWorkspace _gitWorkspace;
+    private readonly IGitHubService _gitHub;
     private readonly ICredentialStore _credentialStore;
     private readonly IScriptNormalizer _normalizer;
     private readonly IObjectHasher _hasher;
@@ -52,6 +53,7 @@ public sealed class SyncEngine : ISyncEngine
         IEnumerable<IObjectScriptProvider> scriptProviders,
         IDatabaseArtifactReader artifactReader,
         IGitWorkspace gitWorkspace,
+        IGitHubService gitHub,
         ICredentialStore credentialStore,
         IScriptNormalizer normalizer,
         IObjectHasher hasher,
@@ -68,6 +70,7 @@ public sealed class SyncEngine : ISyncEngine
         _scriptProviders = [.. scriptProviders];
         _artifactReader = artifactReader;
         _gitWorkspace = gitWorkspace;
+        _gitHub = gitHub;
         _credentialStore = credentialStore;
         _normalizer = normalizer;
         _hasher = hasher;
@@ -165,15 +168,6 @@ public sealed class SyncEngine : ISyncEngine
 
     private async Task ExecuteAsync(SyncRun run, RunContext context, CancellationToken cancellationToken)
     {
-        // Pull request commit mode is a planned feature (see CommitMode.PullRequest). It is not wired
-        // up yet, so fail fast and clearly rather than scripting a run that would silently never push.
-        if (context.Job.CommitMode == CommitMode.PullRequest)
-        {
-            run.Status = RunStatus.Failed;
-            run.ErrorMessage = "Pull request commit mode is not yet supported. Use direct commit.";
-            context.Log(SyncLogLevel.Error, run.ErrorMessage);
-            return;
-        }
 
         // Fail fast with an actionable message when a required secret is missing. The usual cause is
         // that the Windows service runs under a different account than the app that saved the
@@ -203,12 +197,17 @@ public sealed class SyncEngine : ISyncEngine
 
         context.Report(SyncPhase.Connecting, $"Connecting to {context.Connection.ServerName}…");
 
-        var branch = string.IsNullOrWhiteSpace(context.Job.Branch) ? context.Repository.DefaultBranch : context.Job.Branch!;
+        var baseBranch = string.IsNullOrWhiteSpace(context.Job.Branch) ? context.Repository.DefaultBranch : context.Job.Branch!;
+        var isPullRequest = context.Job.CommitMode == CommitMode.PullRequest;
+        // Pull request mode commits to a fresh per-run head branch cut from the base; direct mode
+        // commits straight to the base branch.
+        var headBranch = isPullRequest ? HeadBranchName(context.Job.Name, run.RunKey) : baseBranch;
         var localPath = Path.Combine(_options.WorkspacesRoot, context.Repository.Id.ToString("N"));
         var gitContext = new GitWorkspaceContext
         {
             RemoteUrl = context.Repository.EffectiveRemoteUrl,
-            Branch = branch,
+            Branch = headBranch,
+            BaseBranch = isPullRequest ? baseBranch : null,
             LocalPath = localPath,
             AuthorizationHeader = context.GitToken is null ? null : GitHubService.BuildAuthorizationHeader(context.GitToken),
             CommitterName = "Obsync",
@@ -507,14 +506,17 @@ public sealed class SyncEngine : ISyncEngine
 
         if (!hasChanges)
         {
-            // No object changes this run. Two things can still need doing:
+            var isPullRequest = gitContext.BaseBranch is not null;
+
+            // No object changes this run. In DIRECT mode two things can still need doing:
             //  1) A prior run may have committed but failed to push — re-push it now (never lose work).
             //  2) If RunOnlyIfChanges is off, record a "heartbeat" empty commit that a sync ran.
-            if (!context.Job.Schedule.RunOnlyIfChanges)
+            // In PR mode the head branch is fresh each run, so no changes simply means no PR.
+            if (!isPullRequest && !context.Job.Schedule.RunOnlyIfChanges)
             {
                 await CommitAndPushAsync(run, context, gitContext, allowEmpty: true, cancellationToken).ConfigureAwait(false);
             }
-            else if (await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
+            else if (!isPullRequest && await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
             {
                 context.Log(SyncLogLevel.Info, "No new changes, but a previous commit was never pushed — pushing it now.");
                 await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
@@ -568,11 +570,72 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
+
+        // Pull request mode: the head branch is now pushed — open the PR against the base branch.
+        if (gitContext.BaseBranch is not null && run.Status == RunStatus.Succeeded)
+        {
+            await OpenPullRequestAsync(run, context, gitContext, subject, body, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task OpenPullRequestAsync(
+        SyncRun run, RunContext context, GitWorkspaceContext gitContext, string title, string body, CancellationToken cancellationToken)
+    {
+        context.Report(SyncPhase.Pushing, "Opening the pull request…");
+        var result = await _gitHub.CreatePullRequestAsync(
+            context.GitToken!, context.Repository.Owner, context.Repository.RepositoryName,
+            title, gitContext.Branch, gitContext.BaseBranch!, body, context.Job.Reviewers, cancellationToken).ConfigureAwait(false);
+
+        if (result.IsFailure)
+        {
+            // The head branch pushed but the PR did not open — a partial success the user must act on.
+            run.Status = RunStatus.Warning;
+            run.ErrorMessage = result.Error;
+            context.Log(SyncLogLevel.Warning, $"The branch pushed, but opening the pull request failed. {result.Error}");
+            return;
+        }
+
+        var pr = result.Value;
+        run.PullRequestUrl = pr.HtmlUrl;
+        run.PullRequestNumber = pr.Number;
+        context.Log(SyncLogLevel.Info, $"Opened pull request #{pr.Number}. {pr.HtmlUrl}");
+        if (pr.ReviewerWarning is not null)
+        {
+            context.Log(SyncLogLevel.Warning, pr.ReviewerWarning);
+        }
+    }
+
+    /// <summary>
+    /// The per-run head branch name for pull-request mode, e.g. <c>obsync/salesdb-sync/20260702-230000</c>.
+    /// Deterministic given the job name and run key.
+    /// </summary>
+    public static string HeadBranchName(string jobName, string runKey)
+    {
+        var slug = Slugify(jobName);
+        return $"obsync/{(slug.Length == 0 ? "job" : slug)}/{runKey}";
+    }
+
+    // Lowercase, collapse non-alphanumeric runs to single dashes, trim dashes — a ref-safe slug.
+    private static string Slugify(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+            }
+            else if (builder.Length > 0 && builder[^1] != '-')
+            {
+                builder.Append('-');
+            }
+        }
+
+        return builder.ToString().Trim('-');
     }
 
     private async Task PushAsync(SyncRun run, RunContext context, GitWorkspaceContext gitContext, CancellationToken cancellationToken)
     {
-        // Only direct-commit jobs reach here; pull request mode is rejected up front in ExecuteAsync.
         context.Report(SyncPhase.Pushing, "Pushing to GitHub…");
         var push = await _gitWorkspace.PushAsync(gitContext, cancellationToken).ConfigureAwait(false);
         if (push.IsFailure)
