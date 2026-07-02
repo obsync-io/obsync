@@ -67,6 +67,11 @@
                         Visibility="{Binding HasCommitLink, Converter={StaticResource BoolToVisibility}}" />
                 <TextBlock Style="{StaticResource Body}" Text="{Binding LastCommitSha}" VerticalAlignment="Center"
                            Visibility="{Binding ShowCommitShaOnly, Converter={StaticResource BoolToVisibility}}" />
+                <TextBlock Style="{StaticResource Muted}" Text="  ·  " VerticalAlignment="Center"
+                           Visibility="{Binding HasPullRequest, Converter={StaticResource BoolToVisibility}}" />
+                <Button Style="{StaticResource LinkButton}" Content="{Binding PullRequestLabel}"
+                        Command="{Binding OpenPullRequestCommand}" VerticalAlignment="Center"
+                        Visibility="{Binding HasPullRequest, Converter={StaticResource BoolToVisibility}}" />
             </StackPanel>
 
             <!-- Live status message from the most recent action -->

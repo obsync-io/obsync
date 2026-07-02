@@ -42,6 +42,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
     [ObservableProperty] private string _nextRunText = "—";
     [ObservableProperty] private string? _lastCommitSha;
     [ObservableProperty] private string? _lastCommitUrl;
+    [ObservableProperty] private string? _pullRequestUrl;
+    [ObservableProperty] private int? _pullRequestNumber;
     [ObservableProperty] private bool _showTechnicalLogs;
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
@@ -106,6 +108,16 @@ public sealed partial class JobDetailViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowCommitShaOnly));
     }
 
+    /// <summary>True when the last run opened a pull request (renders the "PR #n" link).</summary>
+    public bool HasPullRequest => !string.IsNullOrEmpty(PullRequestUrl);
+
+    /// <summary>The PR link label, e.g. "PR #42".</summary>
+    public string PullRequestLabel => PullRequestNumber is { } number ? $"PR #{number}" : "Pull request";
+
+    partial void OnPullRequestUrlChanged(string? value) => OnPropertyChanged(nameof(HasPullRequest));
+
+    partial void OnPullRequestNumberChanged(int? value) => OnPropertyChanged(nameof(PullRequestLabel));
+
     partial void OnShowTechnicalLogsChanged(bool value) => RefreshLogs();
 
     public async Task LoadAsync(Guid jobId)
@@ -143,6 +155,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         LastError = latest?.Status is RunStatus.Warning or RunStatus.Failed ? latest.ErrorMessage : null;
         LastCommitSha = latest?.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : null;
         LastCommitUrl = latest?.CommitUrl;
+        PullRequestUrl = latest?.PullRequestUrl;
+        PullRequestNumber = latest?.PullRequestNumber;
 
         Changes.Clear();
         _allLogs.Clear();
@@ -250,6 +264,15 @@ public sealed partial class JobDetailViewModel : ObservableObject
         if (!string.IsNullOrEmpty(LastCommitUrl))
         {
             OpenUrl(LastCommitUrl);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenPullRequest()
+    {
+        if (!string.IsNullOrEmpty(PullRequestUrl))
+        {
+            OpenUrl(PullRequestUrl);
         }
     }
 

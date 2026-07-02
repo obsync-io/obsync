@@ -420,6 +420,23 @@
                         <TextBlock Text="BRANCH" Style="{StaticResource Caption}" />
                         <TextBox Text="{Binding Branch, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
 
+                        <TextBlock Text="COMMIT MODE" Style="{StaticResource Caption}" />
+                        <ComboBox ItemsSource="{Binding CommitModes}" SelectedItem="{Binding SelectedCommitMode}" Margin="0,4,0,4">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="Pull request: each run with changes commits to a new branch and opens a PR into the branch above."
+                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                   Visibility="{Binding IsPullRequest, Converter={StaticResource BoolToVisibility}}" />
+
+                        <StackPanel Visibility="{Binding IsPullRequest, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="REVIEWERS (OPTIONAL, COMMA-SEPARATED GITHUB USERNAMES)" Style="{StaticResource Caption}" />
+                            <TextBox Text="{Binding Reviewers, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                        </StackPanel>
+
                         <TextBlock Text="DESTINATION FOLDER" Style="{StaticResource Caption}" />
                         <TextBlock Text="Blank = environments/&lt;server&gt;/&lt;database&gt;" Style="{StaticResource Caption}" Margin="0,2,0,0" />
                         <TextBox Text="{Binding DestinationFolder, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />

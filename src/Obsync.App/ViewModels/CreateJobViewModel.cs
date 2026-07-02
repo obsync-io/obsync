@@ -57,6 +57,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private string _branch = "main";
     [ObservableProperty] private string _destinationFolder = string.Empty;
     [ObservableProperty] private string? _localExportPath;
+    [ObservableProperty] private CommitMode _selectedCommitMode = CommitMode.DirectCommit;
+    [ObservableProperty] private string _reviewers = string.Empty;
 
     [ObservableProperty] private ScheduleKind _selectedScheduleKind = ScheduleKind.Manual;
     [ObservableProperty] private int _intervalHours = 1;
@@ -78,6 +80,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public IReadOnlyList<ObjectSelectionPreset> Presets { get; } = Enum.GetValues<ObjectSelectionPreset>();
     public IReadOnlyList<ScheduleKind> ScheduleKinds { get; } = Enum.GetValues<ScheduleKind>();
     public IReadOnlyList<DayOfWeek> DaysOfWeek { get; } = Enum.GetValues<DayOfWeek>();
+    public IReadOnlyList<CommitMode> CommitModes { get; } = Enum.GetValues<CommitMode>();
+
+    /// <summary>True when the pull-request commit mode is selected (shows the reviewers field).</summary>
+    public bool IsPullRequest => SelectedCommitMode == CommitMode.PullRequest;
+
+    partial void OnSelectedCommitModeChanged(CommitMode value) => OnPropertyChanged(nameof(IsPullRequest));
 
     public event EventHandler? Saved;
 
@@ -195,6 +203,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         Branch = job.Branch ?? SelectedRepository?.DefaultBranch ?? "main";
         DestinationFolder = job.DestinationFolder;
         LocalExportPath = job.LocalExportPath;
+        SelectedCommitMode = job.CommitMode;
+        Reviewers = string.Join(", ", job.Reviewers);
         SelectedPreset = job.Selection.Preset;
 
         Databases.Clear();
@@ -329,10 +339,23 @@ public sealed partial class CreateJobViewModel : ObservableObject
         ReviewItems.Add(new ReviewItem("Folder", EffectiveDestinationFolder(databases)));
         ReviewItems.Add(new ReviewItem("Schedule", BuildSchedule().Describe()));
         ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges ? "Commit only when changes are detected" : "Always create a run"));
-        ReviewItems.Add(new ReviewItem("Commit mode", "Direct commit & push"));
+        ReviewItems.Add(new ReviewItem("Commit mode",
+            SelectedCommitMode == CommitMode.PullRequest ? $"Pull request → {Branch}" : "Direct commit & push"));
+        if (SelectedCommitMode == CommitMode.PullRequest && ParseReviewers(Reviewers) is { Count: > 0 } reviewers)
+        {
+            ReviewItems.Add(new ReviewItem("Reviewers", string.Join(", ", reviewers)));
+        }
         ReviewItems.Add(new ReviewItem("Security",
             "SQL password and GitHub token are read from Windows Credential Manager; never written to disk or logs."));
     }
+
+    // Parse the reviewers textbox: split on commas/whitespace/semicolons, strip a leading '@',
+    // drop blanks, de-dupe case-insensitively.
+    private static List<string> ParseReviewers(string raw) =>
+        [.. raw.Split([',', ';', ' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(r => r.TrimStart('@'))
+            .Where(r => r.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 
     private string EffectiveDestinationFolder(IReadOnlyList<string> databases) =>
         string.IsNullOrWhiteSpace(DestinationFolder)
@@ -378,8 +401,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         var selectedDatabases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
 
         // When editing, mutate the existing job so fields the wizard does not surface
-        // (Description, Enabled, CommitMode, Advanced options, RunSummary, and the non-preset
-        // Selection settings) are preserved instead of being reset to defaults by the upsert.
+        // (Description, Enabled, Advanced options, RunSummary, and the non-preset Selection settings)
+        // are preserved instead of being reset to defaults by the upsert.
         var job = IsEditMode && _editingJob is not null ? _editingJob : new SyncJob();
         job.Name = Name.Trim();
         job.ConnectionProfileId = SelectedConnection!.Id;
@@ -388,6 +411,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         job.Branch = string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim();
         job.DestinationFolder = EffectiveDestinationFolder(selectedDatabases);
         job.LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim();
+        job.CommitMode = SelectedCommitMode;
+        job.Reviewers = SelectedCommitMode == CommitMode.PullRequest ? ParseReviewers(Reviewers) : [];
         job.Selection.Preset = SelectedPreset;
         if (IsCustomPreset)
         {
