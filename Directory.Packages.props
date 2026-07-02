@@ -61,6 +61,10 @@
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
   </ItemGroup>
 
+  <ItemGroup Label="Windows service management">
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.9" />
+  </ItemGroup>
+
   <ItemGroup Label="CLI">
     <PackageVersion Include="System.CommandLine" Version="2.0.9" />
   </ItemGroup>
