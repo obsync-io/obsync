@@ -1,8 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
+using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.App.Views;
+using Obsync.Data.Repositories;
 using Obsync.Engine.DependencyInjection;
 using Obsync.Security.DependencyInjection;
+using Obsync.Shared.Abstractions;
 
 namespace Obsync.App;
 
@@ -16,6 +19,13 @@ public static class AppServices
     {
         services.AddObsyncSecurity();
         services.AddObsyncCore(databasePath, options => options.WorkspacesRoot = workspacesRoot);
+
+        // Single owner of run execution: per-job concurrency guard + shared live state across screens.
+        services.AddSingleton<IJobRunCoordinator, JobRunCoordinator>();
+
+        // Enterprise audit trail. Registered here (app composition root) because every audited
+        // action originates in the app; the writer stamps the actor and timestamp itself.
+        services.AddSingleton<IAuditWriter, AuditWriter>();
 
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());

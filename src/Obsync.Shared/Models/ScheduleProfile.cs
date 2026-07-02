@@ -26,6 +26,49 @@ public sealed class ScheduleProfile
     /// <summary>Skip committing when no object changes are detected (a run still records history).</summary>
     public bool RunOnlyIfChanges { get; set; } = true;
 
+    /// <summary>
+    /// Computes the next run time after <paramref name="fromUtc"/> for the standard cadences
+    /// (hourly/daily/weekly), in local time. Returns null for manual schedules and for
+    /// <see cref="ScheduleKind.Cron"/> (whose exact next fire is computed by the scheduler, which
+    /// owns a cron engine). This is a dependency-free preview used by the app and the engine so the
+    /// "Next run" column is populated without pulling a cron library into every layer.
+    /// </summary>
+    public DateTimeOffset? GetNextRun(DateTimeOffset fromUtc)
+    {
+        var now = fromUtc.ToLocalTime();
+        switch (Kind)
+        {
+            case ScheduleKind.Hourly:
+            {
+                var step = IntervalHours <= 0 ? 1 : IntervalHours;
+                var candidate = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, 0, 0, now.Offset).AddHours(1);
+                while (candidate.Hour % step != 0)
+                {
+                    candidate = candidate.AddHours(1);
+                }
+
+                return candidate;
+            }
+
+            case ScheduleKind.Daily:
+            {
+                var candidate = new DateTimeOffset(now.Year, now.Month, now.Day, TimeOfDay.Hour, TimeOfDay.Minute, 0, now.Offset);
+                return candidate <= now ? candidate.AddDays(1) : candidate;
+            }
+
+            case ScheduleKind.Weekly:
+            {
+                var candidate = new DateTimeOffset(now.Year, now.Month, now.Day, TimeOfDay.Hour, TimeOfDay.Minute, 0, now.Offset);
+                var daysUntil = ((int)DayOfWeek - (int)now.DayOfWeek + 7) % 7;
+                candidate = candidate.AddDays(daysUntil);
+                return candidate <= now ? candidate.AddDays(7) : candidate;
+            }
+
+            default:
+                return null; // Manual (no schedule) or Cron (scheduler computes the exact fire time).
+        }
+    }
+
     /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
     public string Describe() => Kind switch
     {

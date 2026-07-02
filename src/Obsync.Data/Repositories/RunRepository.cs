@@ -10,6 +10,13 @@ public interface IRunRepository
 {
     Task InsertAsync(SyncRun run, CancellationToken cancellationToken = default);
     Task UpdateAsync(SyncRun run, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Marks runs left in <see cref="RunStatus.Running"/> since before <paramref name="staleBefore"/>
+    /// as failed. A run executes in-process, so any still "Running" after the app restarts is orphaned
+    /// (e.g. the app was killed mid-run, or a past concurrency bug). Returns how many were reconciled.
+    /// </summary>
+    Task<int> FailStaleRunningAsync(DateTimeOffset staleBefore, DateTimeOffset completedAt, string reason, CancellationToken cancellationToken = default);
     Task<SyncRun?> GetAsync(Guid runId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SyncRun>> GetForJobAsync(Guid jobId, int limit = 50, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SyncRun>> GetRecentAsync(int limit = 20, CancellationToken cancellationToken = default);
@@ -30,6 +37,7 @@ public sealed class RunRepository : IRunRepository
 
     private const string SelectRun = """
         SELECT id AS Id, run_key AS RunKey, job_id AS JobId, job_name AS JobName, trigger AS Trigger,
+               triggered_by AS TriggeredBy,
                status AS Status, server_name AS ServerName, databases AS Databases, started_at AS StartedAt,
                completed_at AS CompletedAt, duration_ms AS DurationMs, objects_scanned AS ObjectsScanned,
                objects_added AS ObjectsAdded, objects_modified AS ObjectsModified, objects_deleted AS ObjectsDeleted,
@@ -44,11 +52,11 @@ public sealed class RunRepository : IRunRepository
         await connection.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO runs
-                (id, run_key, job_id, job_name, trigger, status, server_name, databases, started_at, completed_at,
+                (id, run_key, job_id, job_name, trigger, triggered_by, status, server_name, databases, started_at, completed_at,
                  duration_ms, objects_scanned, objects_added, objects_modified, objects_deleted, objects_failed,
                  commit_sha, commit_url, error_message)
             VALUES
-                ($id, $key, $job, $jobName, $trigger, $status, $server, $dbs, $started, $completed, $duration,
+                ($id, $key, $job, $jobName, $trigger, $triggeredBy, $status, $server, $dbs, $started, $completed, $duration,
                  $scanned, $added, $modified, $deleted, $failed, $sha, $url, $error);
             """,
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
@@ -67,6 +75,27 @@ public sealed class RunRepository : IRunRepository
             WHERE id = $id;
             """,
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> FailStaleRunningAsync(
+        DateTimeOffset staleBefore, DateTimeOffset completedAt, string reason, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE runs
+            SET status = $failed, completed_at = $completed, error_message = $reason
+            WHERE status = $running AND started_at < $stale;
+            """,
+            new
+            {
+                failed = (int)RunStatus.Failed,
+                running = (int)RunStatus.Running,
+                completed = completedAt,
+                reason,
+                stale = staleBefore,
+            },
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
     public async Task<SyncRun?> GetAsync(Guid runId, CancellationToken cancellationToken = default)
@@ -188,6 +217,7 @@ public sealed class RunRepository : IRunRepository
         job = run.JobId.ToString(),
         jobName = run.JobName,
         trigger = (int)run.Trigger,
+        triggeredBy = run.TriggeredBy,
         status = (int)run.Status,
         server = run.ServerName,
         dbs = run.Databases,

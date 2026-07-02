@@ -40,7 +40,8 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- Node 1 · Source -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                            AutomationProperties.Name="Step 1: Source">
                     <Grid Width="30" Height="30">
                         <Border CornerRadius="15" BorderThickness="1.5">
                             <Border.Style>
@@ -97,7 +98,8 @@
                 </Border>
 
                 <!-- Node 2 · Objects -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                            AutomationProperties.Name="Step 2: Objects">
                     <Grid Width="30" Height="30">
                         <Border CornerRadius="15" BorderThickness="1.5">
                             <Border.Style>
@@ -169,7 +171,8 @@
                 </Border>
 
                 <!-- Node 3 · Destination -->
-                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center"
+                            AutomationProperties.Name="Step 3: Destination">
                     <Grid Width="30" Height="30">
                         <Border CornerRadius="15" BorderThickness="1.5">
                             <Border.Style>
@@ -236,7 +239,8 @@
                 </Border>
 
                 <!-- Node 4 · Schedule -->
-                <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="6" Orientation="Horizontal" VerticalAlignment="Center"
+                            AutomationProperties.Name="Step 4: Schedule">
                     <Grid Width="30" Height="30">
                         <Border CornerRadius="15" BorderThickness="1.5">
                             <Border.Style>
@@ -298,7 +302,8 @@
                 </Border>
 
                 <!-- Node 5 · Review -->
-                <StackPanel Grid.Column="8" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="8" Orientation="Horizontal" VerticalAlignment="Center"
+                            AutomationProperties.Name="Step 5: Review">
                     <Grid Width="30" Height="30">
                         <Border CornerRadius="15" BorderThickness="1.5">
                             <Border.Style>
@@ -352,7 +357,8 @@
                         <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection}"
                                   DisplayMemberPath="Name" Margin="0,4,0,10" />
                         <Button Content="Load databases" Style="{StaticResource SecondaryButton}"
-                                HorizontalAlignment="Left" Command="{Binding LoadDatabasesCommand}" Margin="0,0,0,16" />
+                                HorizontalAlignment="Left" Command="{Binding LoadDatabasesCommand}" Margin="0,0,0,16"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
 
                         <TextBlock Text="DATABASES" Style="{StaticResource Caption}" />
                         <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,4,0,0">
@@ -440,12 +446,14 @@
 
                         <StackPanel Visibility="{Binding ShowHourly, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="EVERY N HOURS" Style="{StaticResource Caption}" />
-                            <TextBox Text="{Binding IntervalHours, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                            <TextBox Text="{Binding IntervalHours, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16"
+                                     MaxLength="3" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
                         </StackPanel>
 
                         <StackPanel Visibility="{Binding ShowDayTime, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="TIME OF DAY (HH:MM)" Style="{StaticResource Caption}" />
-                            <TextBox Text="{Binding TimeOfDay, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                            <TextBox Text="{Binding TimeOfDay, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16"
+                                     MaxLength="5" PreviewTextInput="OnTimeInput" DataObject.Pasting="OnPasteTime" />
                         </StackPanel>
 
                         <StackPanel Visibility="{Binding ShowWeekday, Converter={StaticResource BoolToVisibility}}">
@@ -508,6 +516,7 @@
                 <Button Content="Next" Style="{StaticResource PrimaryButton}" Command="{Binding NextCommand}"
                         Visibility="{Binding ShowNext, Converter={StaticResource BoolToVisibility}}" />
                 <Button Content="Save Job" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"
+                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}"
                         Visibility="{Binding IsLastStep, Converter={StaticResource BoolToVisibility}}" />
             </StackPanel>
         </Grid>

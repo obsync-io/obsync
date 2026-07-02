@@ -18,6 +18,7 @@ public sealed partial class ServerDialogViewModel : ObservableObject
     private readonly ISqlServerProbe _probe;
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
+    private readonly IAuditWriter _audit;
 
     private Guid? _editingId;
     private DateTimeOffset _editingCreatedAt;
@@ -46,12 +47,14 @@ public sealed partial class ServerDialogViewModel : ObservableObject
     public event EventHandler? Saved;
 
     public ServerDialogViewModel(
-        IConnectionProfileRepository repository, ISqlServerProbe probe, ICredentialStore credentialStore, IClock clock)
+        IConnectionProfileRepository repository, ISqlServerProbe probe, ICredentialStore credentialStore, IClock clock,
+        IAuditWriter audit)
     {
         _repository = repository;
         _probe = probe;
         _credentialStore = credentialStore;
         _clock = clock;
+        _audit = audit;
     }
 
     public string Title => IsEditMode ? "Edit server" : "Add a server";
@@ -156,6 +159,9 @@ public sealed partial class ServerDialogViewModel : ObservableObject
             {
                 _credentialStore.Delete(CredentialKeys.SqlPassword(profile.Id));
             }
+
+            await _audit.WriteAsync(
+                IsEditMode ? AuditAction.ServerEdited : AuditAction.ServerAdded, "Server", profile.Id.ToString(), profile.Name);
 
             Saved?.Invoke(this, EventArgs.Empty);
         }

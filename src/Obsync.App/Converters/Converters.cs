@@ -201,6 +201,46 @@ public sealed class EnumDisplayConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Converts a <see cref="DateTimeOffset"/> (or nullable) to the user's local time, formatted
+/// with the general "g" pattern. Returns an empty string for null so grids show a blank cell rather
+/// than a raw UTC value. Used everywhere timestamps appear so the UI is consistently local time.</summary>
+public sealed class LocalDateTimeConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        DateTimeOffset dto => dto.LocalDateTime.ToString("g", culture),
+        _ => string.Empty,
+    };
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Maps a collection count to visibility: a positive count is Visible, zero/null Collapsed.
+/// Used to hide a DataGrid (and its header row) when the list is empty so the empty-state panel is
+/// the only thing shown.</summary>
+public sealed class CountToVisibilityConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is int n && n > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// <summary>Returns true when the bound section name equals the <c>ConverterParameter</c>. Drives the
+/// nav-rail highlight from <c>MainViewModel.CurrentSection</c>. <see cref="ConvertBack"/> returns the
+/// parameter when a rail item becomes checked (and <see cref="Binding.DoNothing"/> otherwise) so the
+/// two-way binding never clears the source when siblings uncheck.</summary>
+public sealed class SectionToBoolConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        string.Equals(value as string, parameter as string, StringComparison.Ordinal);
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is true ? parameter ?? Binding.DoNothing : Binding.DoNothing;
+}
+
 /// <summary>Formats a duration in milliseconds as <c>hh:mm:ss</c>.</summary>
 public sealed class MsToDurationConverter : IValueConverter
 {

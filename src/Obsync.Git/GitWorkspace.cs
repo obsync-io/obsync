@@ -32,8 +32,17 @@ public sealed record GitCommitResult(bool HadChanges, string? CommitSha, bool Su
 public interface IGitWorkspace
 {
     Task<Result> PrepareAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default);
-    Task<GitCommitResult> CommitAllAsync(GitWorkspaceContext context, string subject, string body, CancellationToken cancellationToken = default);
+
+    Task<GitCommitResult> CommitAllAsync(
+        GitWorkspaceContext context, string subject, string body, bool allowEmpty = false, CancellationToken cancellationToken = default);
+
     Task<Result> PushAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// True when the local branch has commits that are not yet on the remote — e.g. a previous run
+    /// committed but its push failed. Lets the engine re-push instead of losing the work.
+    /// </summary>
+    Task<bool> HasUnpushedCommitsAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IGitWorkspace" />
@@ -79,6 +88,23 @@ public sealed class GitWorkspace : IGitWorkspace
             context.LocalPath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{context.Branch}"], cancellationToken)
             .ConfigureAwait(false)).Success;
 
+        var localBranchExists = (await _git.RunAsync(
+            context.LocalPath, ["rev-parse", "--verify", "--quiet", $"refs/heads/{context.Branch}"], cancellationToken)
+            .ConfigureAwait(false)).Success;
+
+        // If the local branch already carries commits that never reached the remote (a prior push
+        // failed), DO NOT hard-reset to origin — that would silently discard the committed changes.
+        // Just make sure we're on the branch; the engine will re-push the pending commit(s).
+        if (localBranchExists
+            && await AheadCountAsync(context.LocalPath, context.Branch, remoteBranchExists, cancellationToken).ConfigureAwait(false) > 0)
+        {
+            var stay = await _git.RunAsync(context.LocalPath, ["checkout", context.Branch], cancellationToken).ConfigureAwait(false);
+            return stay.Success
+                ? Result.Success()
+                : Result.Failure($"git checkout failed: {Summarize(stay.StandardError)}");
+        }
+
+        // Otherwise sync the local branch to origin (picking up any remote changes and healing drift).
         var checkoutArgs = remoteBranchExists
             ? new[] { "checkout", "-B", context.Branch, $"origin/{context.Branch}" }
             : ["checkout", "-B", context.Branch];
@@ -89,8 +115,25 @@ public sealed class GitWorkspace : IGitWorkspace
             : Result.Failure($"git checkout failed: {Summarize(checkout.StandardError)}");
     }
 
+    public async Task<bool> HasUnpushedCommitsAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default)
+    {
+        var remoteBranchExists = (await _git.RunAsync(
+            context.LocalPath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{context.Branch}"], cancellationToken)
+            .ConfigureAwait(false)).Success;
+        return await AheadCountAsync(context.LocalPath, context.Branch, remoteBranchExists, cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>Number of local commits on the branch that are not yet on origin.</summary>
+    private async Task<int> AheadCountAsync(string localPath, string branch, bool remoteBranchExists, CancellationToken cancellationToken)
+    {
+        // With no remote branch every local commit is un-pushed; otherwise count origin/branch..branch.
+        var range = remoteBranchExists ? $"origin/{branch}..{branch}" : branch;
+        var result = await _git.RunAsync(localPath, ["rev-list", "--count", range], cancellationToken).ConfigureAwait(false);
+        return result.Success && int.TryParse(result.StandardOutput.Trim(), out var count) ? count : 0;
+    }
+
     public async Task<GitCommitResult> CommitAllAsync(
-        GitWorkspaceContext context, string subject, string body, CancellationToken cancellationToken = default)
+        GitWorkspaceContext context, string subject, string body, bool allowEmpty = false, CancellationToken cancellationToken = default)
     {
         var add = await _git.RunAsync(context.LocalPath, ["add", "-A"], cancellationToken).ConfigureAwait(false);
         if (!add.Success)
@@ -99,19 +142,24 @@ public sealed class GitWorkspace : IGitWorkspace
         }
 
         var status = await _git.RunAsync(context.LocalPath, ["status", "--porcelain"], cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(status.StandardOutput))
+        var hasWorkingChanges = !string.IsNullOrWhiteSpace(status.StandardOutput);
+        if (!hasWorkingChanges && !allowEmpty)
         {
             return GitCommitResult.NoChanges();
         }
 
-        var commit = await _git.RunAsync(
-            context.LocalPath,
-            [
-                "-c", $"user.name={context.CommitterName}",
-                "-c", $"user.email={context.CommitterEmail}",
-                "commit", "-m", subject, "-m", body,
-            ],
-            cancellationToken).ConfigureAwait(false);
+        var commitArgs = new List<string>
+        {
+            "-c", $"user.name={context.CommitterName}",
+            "-c", $"user.email={context.CommitterEmail}",
+            "commit", "-m", subject, "-m", body,
+        };
+        if (!hasWorkingChanges)
+        {
+            commitArgs.Add("--allow-empty");
+        }
+
+        var commit = await _git.RunAsync(context.LocalPath, commitArgs, cancellationToken).ConfigureAwait(false);
         if (!commit.Success)
         {
             return GitCommitResult.Failed($"git commit failed: {Summarize(commit.StandardError)}");
@@ -142,6 +190,13 @@ public sealed class GitWorkspace : IGitWorkspace
         {
             full.Add("-c");
             full.Add($"http.extraheader={context.AuthorizationHeader}");
+
+            // Authenticate with ONLY the injected header. Disable any configured credential helper
+            // (e.g. Git Credential Manager, which is on by default on Windows): otherwise git can
+            // override or race our header, or block trying to prompt — the usual reason a push that
+            // should succeed fails with "could not read Username" / "Authentication failed".
+            full.Add("-c");
+            full.Add("credential.helper=");
         }
 
         full.AddRange(args);

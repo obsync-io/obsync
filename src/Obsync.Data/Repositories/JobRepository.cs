@@ -11,6 +11,10 @@ public interface IJobRepository
     Task<SyncJob?> GetAsync(Guid id, CancellationToken cancellationToken = default);
     Task UpsertAsync(SyncJob job, CancellationToken cancellationToken = default);
     Task UpdateRunSummaryAsync(Guid jobId, JobRunSummary summary, CancellationToken cancellationToken = default);
+
+    /// <summary>Updates only the cached "next run" field of a job's run summary, without touching the rest.</summary>
+    Task UpdateNextRunAtAsync(Guid jobId, DateTimeOffset? nextRunAt, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }
 
@@ -89,7 +93,10 @@ public sealed class JobRepository : IJobRepository
                 branch = excluded.branch, destination_folder = excluded.destination_folder,
                 commit_mode = excluded.commit_mode, local_export_path = excluded.local_export_path,
                 selection_json = excluded.selection_json, schedule_json = excluded.schedule_json,
-                advanced_json = excluded.advanced_json, run_summary_json = excluded.run_summary_json,
+                advanced_json = excluded.advanced_json,
+                -- run_summary_json is intentionally NOT overwritten here: it is owned by the engine
+                -- (UpdateRunSummaryAsync / UpdateNextRunAtAsync). A config edit must not clobber the
+                -- latest run status/commit/next-run written by a concurrent run.
                 updated_at = excluded.updated_at;
             """,
             new
@@ -124,6 +131,17 @@ public sealed class JobRepository : IJobRepository
             cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
+    public async Task UpdateNextRunAtAsync(Guid jobId, DateTimeOffset? nextRunAt, CancellationToken cancellationToken = default)
+    {
+        // Patch only the NextRunAt field inside the JSON blob so we never clobber the last-run fields
+        // written by a concurrent run. ISO-8601 ("O") matches what System.Text.Json reads back.
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await connection.ExecuteAsync(new CommandDefinition(
+            "UPDATE jobs SET run_summary_json = json_set(json(run_summary_json), '$.NextRunAt', $next) WHERE id = $id;",
+            new { next = nextRunAt?.ToString("O"), id = jobId.ToString() },
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -132,24 +150,32 @@ public sealed class JobRepository : IJobRepository
             .ConfigureAwait(false);
     }
 
-    private static SyncJob Map(JobRow row) => new()
+    private static SyncJob Map(JobRow row)
     {
-        Id = Guid.Parse(row.Id),
-        Name = row.Name,
-        Description = row.Description,
-        Enabled = row.Enabled != 0,
-        ConnectionProfileId = Guid.Parse(row.ConnectionProfileId),
-        RepositoryProfileId = Guid.Parse(row.RepositoryProfileId),
-        Databases = ObsyncJson.Deserialize<List<string>>(row.DatabasesJson),
-        Branch = row.Branch,
-        DestinationFolder = row.DestinationFolder,
-        CommitMode = (CommitMode)row.CommitMode,
-        LocalExportPath = row.LocalExportPath,
-        Selection = ObsyncJson.Deserialize<ObjectSelectionProfile>(row.SelectionJson),
-        Schedule = ObsyncJson.Deserialize<ScheduleProfile>(row.ScheduleJson),
-        Advanced = ObsyncJson.Deserialize<JobAdvancedOptions>(row.AdvancedJson),
-        RunSummary = ObsyncJson.Deserialize<JobRunSummary>(row.RunSummaryJson),
-        CreatedAt = row.CreatedAt,
-        UpdatedAt = row.UpdatedAt,
-    };
+        var selection = ObsyncJson.Deserialize<ObjectSelectionProfile>(row.SelectionJson);
+        // System.Text.Json rebuilds the HashSet with the default (ordinal) comparer on read; restore
+        // case-insensitivity so schema filtering behaves the same before and after persistence.
+        selection.SchemaFilter = new HashSet<string>(selection.SchemaFilter, StringComparer.OrdinalIgnoreCase);
+
+        return new SyncJob
+        {
+            Id = Guid.Parse(row.Id),
+            Name = row.Name,
+            Description = row.Description,
+            Enabled = row.Enabled != 0,
+            ConnectionProfileId = Guid.Parse(row.ConnectionProfileId),
+            RepositoryProfileId = Guid.Parse(row.RepositoryProfileId),
+            Databases = ObsyncJson.Deserialize<List<string>>(row.DatabasesJson),
+            Branch = row.Branch,
+            DestinationFolder = row.DestinationFolder,
+            CommitMode = (CommitMode)row.CommitMode,
+            LocalExportPath = row.LocalExportPath,
+            Selection = selection,
+            Schedule = ObsyncJson.Deserialize<ScheduleProfile>(row.ScheduleJson),
+            Advanced = ObsyncJson.Deserialize<JobAdvancedOptions>(row.AdvancedJson),
+            RunSummary = ObsyncJson.Deserialize<JobRunSummary>(row.RunSummaryJson),
+            CreatedAt = row.CreatedAt,
+            UpdatedAt = row.UpdatedAt,
+        };
+    }
 }

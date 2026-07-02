@@ -6,7 +6,13 @@ namespace Obsync.App.Views;
 
 public partial class JobDetailView : UserControl
 {
-    public JobDetailView() => InitializeComponent();
+    public JobDetailView()
+    {
+        InitializeComponent();
+        // The view model is transient; unhook it from the shared run state when navigating away so
+        // its subscription does not leak on the long-lived coordinator.
+        Unloaded += (_, _) => (DataContext as JobDetailViewModel)?.DetachRunState();
+    }
 
     private async void OnEdit(object sender, RoutedEventArgs e)
     {

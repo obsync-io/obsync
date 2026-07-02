@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Obsync.App.Services;
 using Obsync.Data.Repositories;
-using Obsync.Engine;
 using Obsync.Shared;
 using Obsync.Shared.Models;
 
@@ -16,15 +16,16 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
-    private readonly ISyncEngine _engine;
+    private readonly IJobRunCoordinator _coordinator;
     private readonly IShellNavigator _navigator;
+
+    private bool _reloading;
 
     [ObservableProperty] private int _totalJobs;
     [ObservableProperty] private int _successfulLastRuns;
     [ObservableProperty] private int _failedJobs;
     [ObservableProperty] private int _objectsTracked;
     [ObservableProperty] private string _latestCommit = "—";
-    [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
 
     public ObservableCollection<SyncJob> Jobs { get; } = [];
@@ -32,15 +33,39 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     public DashboardViewModel(
         IJobRepository jobs, IConnectionProfileRepository connections, IRepositoryProfileRepository repositories,
         IRunRepository runs, IObjectStateRepository objectStates,
-        ISyncEngine engine, IShellNavigator navigator)
+        IJobRunCoordinator coordinator, IShellNavigator navigator)
     {
         _jobs = jobs;
         _connections = connections;
         _repositories = repositories;
         _runs = runs;
         _objectStates = objectStates;
-        _engine = engine;
+        _coordinator = coordinator;
         _navigator = navigator;
+        _coordinator.RunStateChanged += OnRunStateChanged;
+    }
+
+    private async void OnRunStateChanged(object? sender, Guid jobId)
+    {
+        RunNowCommand.NotifyCanExecuteChanged();
+        if (_reloading)
+        {
+            return;
+        }
+
+        _reloading = true;
+        try
+        {
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not refresh — {ex.Message}";
+        }
+        finally
+        {
+            _reloading = false;
+        }
     }
 
     [RelayCommand]
@@ -48,45 +73,28 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     {
         if (job is not null)
         {
-            await _navigator.ShowJobDetailAsync(job.Id);
+            await _navigator.ShowJobDetailAsync(job.Id, "Dashboard");
         }
     }
 
-    [RelayCommand(CanExecute = nameof(CanRun))]
+    // AllowConcurrentExecutions so different jobs can run at once; CanRun blocks a second run of the
+    // SAME job, and the coordinator is the authoritative guard even if a click slips through.
+    [RelayCommand(CanExecute = nameof(CanRun), AllowConcurrentExecutions = true)]
     private async Task RunNowAsync(SyncJob? job)
     {
-        if (job is null || IsBusy)
+        if (job is null)
         {
             return;
         }
 
-        IsBusy = true;
-        RunNowCommand.NotifyCanExecuteChanged();
-        try
+        var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
+        if (run is null)
         {
-            var progress = new Progress<SyncProgress>(p => StatusMessage = $"{job.Name}: {p.Message}");
-            var run = await Task.Run(() => _engine.RunJobAsync(job.Id, RunTrigger.Manual, progress));
-            StatusMessage = run.Status switch
-            {
-                RunStatus.Succeeded => $"{job.Name}: completed — {run.ChangeCount} change(s) pushed.",
-                RunStatus.NoChanges => $"{job.Name}: completed — no changes.",
-                RunStatus.Warning => $"{job.Name}: completed with warnings.",
-                _ => $"{job.Name}: {run.Status}. {run.ErrorMessage}",
-            };
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"{job.Name}: run failed — {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-            RunNowCommand.NotifyCanExecuteChanged();
+            StatusMessage = $"{job.Name}: a run is already in progress.";
         }
     }
 
-    private bool CanRun() => !IsBusy;
+    private bool CanRun(SyncJob? job) => job is not null && !_coordinator.IsRunning(job.Id);
 
     public async Task LoadAsync()
     {
@@ -95,6 +103,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         Jobs.Clear();
         foreach (var job in jobs)
         {
+            job.IsRunning = _coordinator.IsRunning(job.Id);
             Jobs.Add(job);
         }
 

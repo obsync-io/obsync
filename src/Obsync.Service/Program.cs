@@ -33,6 +33,8 @@ try
     builder.Services.AddQuartz();
     builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
     builder.Services.AddHostedService<JobSchedulingBootstrapper>();
+    // Keeps the live schedule in sync with the database so app changes apply without a restart.
+    builder.Services.AddHostedService<JobReconciliationService>();
 
     await builder.Build().RunAsync();
 }

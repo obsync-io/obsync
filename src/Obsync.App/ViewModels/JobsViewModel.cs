@@ -1,9 +1,10 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Obsync.App.Services;
 using Obsync.Data.Repositories;
-using Obsync.Engine;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
@@ -14,10 +15,11 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     private readonly IJobRepository _jobs;
     private readonly IConnectionProfileRepository _connections;
     private readonly IRepositoryProfileRepository _repositories;
-    private readonly ISyncEngine _engine;
+    private readonly IJobRunCoordinator _coordinator;
+    private readonly IAuditWriter _audit;
 
-    [ObservableProperty] private SyncJob? _selectedJob;
-    [ObservableProperty] private bool _isBusy;
+    private bool _reloading;
+
     [ObservableProperty] private string? _statusMessage;
 
     public ObservableCollection<SyncJob> Jobs { get; } = [];
@@ -26,12 +28,38 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         IJobRepository jobs,
         IConnectionProfileRepository connections,
         IRepositoryProfileRepository repositories,
-        ISyncEngine engine)
+        IJobRunCoordinator coordinator,
+        IAuditWriter audit)
     {
         _jobs = jobs;
         _connections = connections;
         _repositories = repositories;
-        _engine = engine;
+        _coordinator = coordinator;
+        _audit = audit;
+        _coordinator.RunStateChanged += OnRunStateChanged;
+    }
+
+    private async void OnRunStateChanged(object? sender, Guid jobId)
+    {
+        RunNowCommand.NotifyCanExecuteChanged();
+        if (_reloading)
+        {
+            return;
+        }
+
+        _reloading = true;
+        try
+        {
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not refresh — {ex.Message}";
+        }
+        finally
+        {
+            _reloading = false;
+        }
     }
 
     public async Task LoadAsync()
@@ -41,45 +69,29 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         Jobs.Clear();
         foreach (var job in jobs)
         {
+            job.IsRunning = _coordinator.IsRunning(job.Id);
             Jobs.Add(job);
         }
     }
 
-    [RelayCommand(CanExecute = nameof(CanRun))]
+    // AllowConcurrentExecutions so different jobs can run at once; CanRun blocks a second run of the
+    // SAME job, and the coordinator is the authoritative guard.
+    [RelayCommand(CanExecute = nameof(CanRun), AllowConcurrentExecutions = true)]
     private async Task RunNowAsync(SyncJob? job)
     {
-        if (job is null || IsBusy)
+        if (job is null)
         {
             return;
         }
 
-        IsBusy = true;
-        RunNowCommand.NotifyCanExecuteChanged();
-        try
+        var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
+        if (run is null)
         {
-            var progress = new Progress<SyncProgress>(p => StatusMessage = $"{job.Name}: {p.Message}");
-            var run = await Task.Run(() => _engine.RunJobAsync(job.Id, RunTrigger.Manual, progress));
-            StatusMessage = run.Status switch
-            {
-                RunStatus.Succeeded => $"{job.Name}: completed — {run.ChangeCount} change(s) pushed.",
-                RunStatus.NoChanges => $"{job.Name}: completed — no changes.",
-                RunStatus.Warning => $"{job.Name}: completed with warnings.",
-                _ => $"{job.Name}: {run.Status}. {run.ErrorMessage}",
-            };
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"{job.Name}: run failed — {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-            RunNowCommand.NotifyCanExecuteChanged();
+            StatusMessage = $"{job.Name}: a run is already in progress.";
         }
     }
 
-    private bool CanRun() => !IsBusy;
+    private bool CanRun(SyncJob? job) => job is not null && !_coordinator.IsRunning(job.Id);
 
     [RelayCommand]
     private async Task DeleteAsync(SyncJob? job)
@@ -89,7 +101,14 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
             return;
         }
 
+        if (_coordinator.IsRunning(job.Id))
+        {
+            StatusMessage = $"{job.Name}: cannot delete while a run is in progress.";
+            return;
+        }
+
         await _jobs.DeleteAsync(job.Id);
+        await _audit.WriteAsync(AuditAction.JobDeleted, "Job", job.Id.ToString(), job.Name);
         await LoadAsync();
     }
 }

@@ -20,6 +20,9 @@
             <conv:ChangeTypeToBrushConverter x:Key="ChangeTypeToBrush" />
             <conv:ChangeTypeToBadgeBackgroundConverter x:Key="ChangeTypeToBadgeBackground" />
             <conv:MsToDurationConverter x:Key="MsToDuration" />
+            <conv:LocalDateTimeConverter x:Key="LocalDateTime" />
+            <conv:CountToVisibilityConverter x:Key="CountToVisibility" />
+            <conv:SectionToBoolConverter x:Key="SectionToBool" />
             <conv:EnumDisplayConverter x:Key="EnumDisplay" />
             <conv:ConnectionStatusToTextConverter x:Key="ConnectionStatusToText" />
             <conv:ConnectionStatusToBrushConverter x:Key="ConnectionStatusToBrush" />

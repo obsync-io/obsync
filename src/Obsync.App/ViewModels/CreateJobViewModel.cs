@@ -43,6 +43,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private readonly ISqlServerProbe _probe;
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
+    private readonly IAuditWriter _audit;
 
     private SyncJob? _editingJob;
 
@@ -86,7 +87,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         IJobRepository jobs,
         ISqlServerProbe probe,
         ICredentialStore credentialStore,
-        IClock clock)
+        IClock clock,
+        IAuditWriter audit)
     {
         _connections = connections;
         _repositories = repositories;
@@ -94,6 +96,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _probe = probe;
         _credentialStore = credentialStore;
         _clock = clock;
+        _audit = audit;
 
         foreach (var descriptor in SqlObjectTypeCatalog.All)
         {
@@ -405,6 +408,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
             // scheduler host and picks up jobs and their schedules when it loads them. The app runs
             // jobs on demand via Run Now.
             await _jobs.UpsertAsync(job);
+            await _audit.WriteAsync(
+                IsEditMode ? AuditAction.JobEdited : AuditAction.JobCreated, "Job", job.Id.ToString(), job.Name);
             Saved?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)

@@ -87,4 +87,16 @@ public sealed class SyncJob
 
     /// <summary>Human-readable destination (repository · branch) for list/table views. Not persisted.</summary>
     public string? DestinationDisplay { get; set; }
+
+    /// <summary>
+    /// True while a run for this job is in progress. Set by the app's run coordinator when list
+    /// view models refresh. Not persisted.
+    /// </summary>
+    public bool IsRunning { get; set; }
+
+    /// <summary>
+    /// The status to show in lists: "Running" while a run is in progress, otherwise the last run's
+    /// status. Keeps the running indicator visible everywhere and across navigation. Not persisted.
+    /// </summary>
+    public RunStatus? DisplayStatus => IsRunning ? RunStatus.Running : RunSummary.LastStatus;
 }

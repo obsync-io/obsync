@@ -4,6 +4,7 @@
     <Grid Margin="28,24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -12,11 +13,46 @@
             <TextBlock Text="Runs, commits, and changed objects" Style="{StaticResource Muted}" Margin="0,4,0,18" />
         </StackPanel>
 
-        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0">
-            <DataGrid ItemsSource="{Binding Runs}">
+        <!-- Filter bar (hidden until there is anything to filter) -->
+        <Grid Grid.Row="1" Margin="0,0,0,16"
+              Visibility="{Binding Runs.Count, Converter={StaticResource CountToVisibility}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ComboBox Grid.Column="0" ItemsSource="{Binding JobNames}" SelectedItem="{Binding SelectedJob}" Margin="0,0,10,0" />
+            <ComboBox Grid.Column="1" ItemsSource="{Binding StatusOptions}" SelectedItem="{Binding SelectedStatus}"
+                      DisplayMemberPath="Label" Margin="0,0,10,0" />
+            <TextBox Grid.Column="2" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Search by job name or commit SHA">
+                <TextBox.Style>
+                    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                        <Style.Resources>
+                            <VisualBrush x:Key="SearchHint" AlignmentX="Left" AlignmentY="Center" Stretch="None">
+                                <VisualBrush.Visual>
+                                    <TextBlock Text="Search job or commit…" Foreground="{StaticResource TextMutedBrush}"
+                                               FontFamily="{StaticResource AppFontFamily}" FontSize="13" Margin="10,0,0,0" />
+                                </VisualBrush.Visual>
+                            </VisualBrush>
+                        </Style.Resources>
+                        <Style.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter Property="Background" Value="{StaticResource SearchHint}" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBox.Style>
+            </TextBox>
+        </Grid>
+
+        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
+            <DataGrid ItemsSource="{Binding RunsView}"
+                      Visibility="{Binding Runs.Count, Converter={StaticResource CountToVisibility}}">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Job" Binding="{Binding JobName}" Width="2*" />
-                    <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, StringFormat=g}" Width="1.6*" />
+                    <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" />
                     <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" />
                     <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" />
                     <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" />
@@ -41,7 +77,7 @@
         </Border>
 
         <!-- Empty state (shown only when there are no runs) -->
-        <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360">
+        <StackPanel Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360">
             <StackPanel.Style>
                 <Style TargetType="StackPanel">
                     <Setter Property="Visibility" Value="Collapsed" />

@@ -1,5 +1,7 @@
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using Microsoft.Extensions.DependencyInjection;
 using Obsync.App.Services;
 using Obsync.App.ViewModels;
@@ -9,7 +11,20 @@ namespace Obsync.App.Views;
 
 public partial class AddServerWindow : Window
 {
+    private static readonly Regex NonDigit = new(@"[^0-9]", RegexOptions.Compiled);
+
     public AddServerWindow() => InitializeComponent();
+
+    // Reject non-numeric typing/paste for the timeout field so invalid text is never silently dropped.
+    private void OnDigitsOnly(object sender, TextCompositionEventArgs e) => e.Handled = NonDigit.IsMatch(e.Text);
+
+    private void OnPasteDigitsOnly(object sender, DataObjectPastingEventArgs e)
+    {
+        if (e.DataObject.GetData(typeof(string)) is string text && NonDigit.IsMatch(text))
+        {
+            e.CancelCommand();
+        }
+    }
 
     /// <summary>Opens the Add/Edit Server dialog. Pass an existing server to edit it. Returns true when saved.</summary>
     public static Task<bool> ShowDialogAsync(Window? owner, SqlConnectionProfile? serverToEdit = null)

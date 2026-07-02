@@ -32,6 +32,22 @@ public sealed class RawScriptedObject
 
     /// <summary>The CREATE script for the object, before normalization and hashing.</summary>
     public required string Script { get; init; }
+
+    /// <summary>
+    /// When set, this object could NOT be scripted (e.g. an encrypted or CLR module whose
+    /// definition is unavailable, or an object SMO failed to script). The engine records it as a
+    /// skipped/failed object and surfaces a warning instead of silently dropping it. <see cref="Script"/>
+    /// is ignored when this is non-null.
+    /// </summary>
+    public string? SkipReason { get; init; }
+
+    /// <summary>Creates a normal, successfully-scripted object.</summary>
+    public static RawScriptedObject Scripted(ScriptedObjectIdentity identity, string script) =>
+        new() { Identity = identity, Script = script };
+
+    /// <summary>Creates a marker for an object that could not be scripted, so it is reported, not dropped.</summary>
+    public static RawScriptedObject Skipped(ScriptedObjectIdentity identity, string reason) =>
+        new() { Identity = identity, Script = string.Empty, SkipReason = reason };
 }
 
 /// <summary>

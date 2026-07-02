@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Obsync.Data.Repositories;
@@ -98,6 +99,7 @@ public sealed class SyncEngine : ISyncEngine
             JobId = job.Id,
             JobName = job.Name,
             Trigger = trigger,
+            TriggeredBy = CurrentActor.Name,
             Status = RunStatus.Running,
             ServerName = connection.ServerName,
             Databases = string.Join(", ", job.Databases),
@@ -124,6 +126,11 @@ public sealed class SyncEngine : ISyncEngine
         }
         finally
         {
+            // Persist the final state with a NON-cancelled token: when a run is cancelled the run
+            // token is already tripped, and reusing it here would throw and leave the run stuck on
+            // "Running" with no logs. These writes are quick and must always complete.
+            var persistToken = CancellationToken.None;
+
             var completed = _clock.UtcNow;
             run.CompletedAt = completed;
             run.DurationMs = (long)(completed - started).TotalMilliseconds;
@@ -131,15 +138,16 @@ public sealed class SyncEngine : ISyncEngine
             run.ObjectsModified = context.Modified;
             run.ObjectsDeleted = context.Deleted;
             run.ObjectsScanned = context.Scanned;
+            run.ObjectsFailed = context.Failed;
 
             foreach (var log in context.Logs)
             {
                 log.RunId = run.Id;
             }
 
-            await _runs.UpdateAsync(run, cancellationToken).ConfigureAwait(false);
-            await _runs.AddLogsAsync(context.Logs, cancellationToken).ConfigureAwait(false);
-            await _runs.AddChangesAsync(run.Id, context.Changes, cancellationToken).ConfigureAwait(false);
+            await _runs.UpdateAsync(run, persistToken).ConfigureAwait(false);
+            await _runs.AddLogsAsync(context.Logs, persistToken).ConfigureAwait(false);
+            await _runs.AddChangesAsync(run.Id, context.Changes, persistToken).ConfigureAwait(false);
             await _jobs.UpdateRunSummaryAsync(job.Id, new JobRunSummary
             {
                 LastRunId = run.Id,
@@ -147,8 +155,9 @@ public sealed class SyncEngine : ISyncEngine
                 LastRunAt = run.StartedAt,
                 LastChangeCount = run.ChangeCount,
                 LastCommitSha = run.CommitSha,
-                NextRunAt = job.RunSummary.NextRunAt,
-            }, cancellationToken).ConfigureAwait(false);
+                // Standard cadences compute a preview here; the scheduler refines cron next-runs.
+                NextRunAt = job.Schedule.GetNextRun(completed) ?? job.RunSummary.NextRunAt,
+            }, persistToken).ConfigureAwait(false);
         }
 
         return run;
@@ -162,6 +171,32 @@ public sealed class SyncEngine : ISyncEngine
         {
             run.Status = RunStatus.Failed;
             run.ErrorMessage = "Pull request commit mode is not yet supported. Use direct commit.";
+            context.Log(SyncLogLevel.Error, run.ErrorMessage);
+            return;
+        }
+
+        // Fail fast with an actionable message when a required secret is missing. The usual cause is
+        // that the Windows service runs under a different account than the app that saved the
+        // credentials (Windows Credential Manager vaults are per-user), so scheduled runs can't read
+        // them even though "Run Now" from the app works.
+        if (context.Connection.RequiresPassword && string.IsNullOrEmpty(context.SqlPassword))
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage =
+                "The SQL password for this server was not found in the credential store. If the Obsync " +
+                "service runs under a different Windows account than the app used to save it, configure " +
+                "the service to run under that same account, or re-save the server credentials.";
+            context.Log(SyncLogLevel.Error, run.ErrorMessage);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(context.GitToken))
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage =
+                "The GitHub access token for this repository was not found in the credential store. If the " +
+                "Obsync service runs under a different Windows account than the app used to save it, configure " +
+                "the service to run under that same account, or re-save the repository token.";
             context.Log(SyncLogLevel.Error, run.ErrorMessage);
             return;
         }
@@ -217,6 +252,8 @@ public sealed class SyncEngine : ISyncEngine
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var changedStates = new ConcurrentBag<TrackedObjectState>();
         var inventory = new ConcurrentBag<ObjectInventoryEntry>();
+        var skipped = new ConcurrentBag<string>();
+        var ignorePatterns = context.Job.Selection.IgnorePatterns;
 
         // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
         // database artifact). Artifacts ride the same change-detection path so an options- or
@@ -225,11 +262,20 @@ public sealed class SyncEngine : ISyncEngine
         async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath, CancellationToken ct)
         {
             var isArtifact = identity.Type == SqlObjectType.DatabaseArtifact;
+            var key = StateKey(identity);
+            seen.TryAdd(key, 0);
+
+            // Honor ignore patterns: don't script or inventory an ignored object. It is marked "seen"
+            // above, so the deletion pass leaves whatever is already in the repo untouched.
+            if (!isArtifact && ignorePatterns.Count > 0 && MatchesAnyPattern(identity, ignorePatterns))
+            {
+                return;
+            }
+
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
             var hash = _hasher.ComputeHash(script);
             var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
-            var key = StateKey(identity);
-            seen.TryAdd(key, 0);
+            var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
 
             if (!isArtifact)
             {
@@ -242,7 +288,15 @@ public sealed class SyncEngine : ISyncEngine
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
             if (changeType == ChangeType.Unchanged)
             {
-                return;
+                // Self-heal drift: our recorded hash matches, but if the file is missing from the
+                // working tree (manual delete, fresh clone with stale state, a prior reset) rewrite it
+                // so the repository reflects the true source. If it is present, there is nothing to do.
+                if (File.Exists(absolutePath))
+                {
+                    return;
+                }
+
+                changeType = ChangeType.Modified;
             }
 
             await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, ct)
@@ -284,6 +338,18 @@ public sealed class SyncEngine : ISyncEngine
             });
         }
 
+        // An object a provider could not script (encrypted/CLR module, SMO failure) is recorded as a
+        // skip rather than silently dropped: it is counted, marked "seen" (so it is not deleted), and
+        // surfaced as a warning. Runs concurrently, so it only touches thread-safe accumulators.
+        Task RecordSkipAsync(RawScriptedObject raw)
+        {
+            seen.TryAdd(StateKey(raw.Identity), 0);
+            context.IncrementScanned();
+            context.IncrementFailed();
+            skipped.Add($"{raw.Identity.Type} {DescribeIdentity(raw.Identity)} — {raw.SkipReason}");
+            return Task.CompletedTask;
+        }
+
         context.Report(SyncPhase.Scripting, $"Scripting objects in {database}…");
 
         var workers = context.Job.Advanced.MaxParallelWorkers > 0
@@ -294,9 +360,19 @@ public sealed class SyncEngine : ISyncEngine
         // channel; the worker pool normalizes, hashes, diffs, and writes objects in parallel.
         await ChannelPipeline.RunAsync(
             StreamProvidersAsync(context, database, types, cancellationToken),
-            (raw, ct) => ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
+            (raw, ct) => raw.SkipReason is not null
+                ? RecordSkipAsync(raw)
+                : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
             workers,
             cancellationToken).ConfigureAwait(false);
+
+        if (!skipped.IsEmpty)
+        {
+            var details = skipped.ToList();
+            context.Log(SyncLogLevel.Warning,
+                $"{details.Count:N0} object(s) in {database} could not be scripted and were skipped.",
+                string.Join("\n", details.Take(100)));
+        }
 
         // Artifacts and deletions run after the parallel phase, so they touch the accumulators alone.
         await GenerateDatabaseArtifactsAsync(context, database, [.. inventory], ApplyItemAsync, cancellationToken).ConfigureAwait(false);
@@ -418,62 +494,169 @@ public sealed class SyncEngine : ISyncEngine
         context.Report(SyncPhase.DetectingChanges,
             $"Detected {context.Added} added, {context.Modified} modified, {context.Deleted} deleted.");
         context.Log(SyncLogLevel.Info, $"Scanned {context.Scanned:N0} objects. " +
-            $"{context.Added} added, {context.Modified} modified, {context.Deleted} deleted.");
-
-        if (context.Changes.Count == 0)
-        {
-            run.Status = RunStatus.NoChanges;
-            context.Log(SyncLogLevel.Info, "No changes detected — nothing to commit.");
-            await PersistStatesAsync(context, RunStatus.NoChanges, null, cancellationToken).ConfigureAwait(false);
-            return;
-        }
+            $"{context.Added} added, {context.Modified} modified, {context.Deleted} deleted" +
+            (context.Failed > 0 ? $", {context.Failed} skipped." : "."));
 
         run.ObjectsAdded = context.Added;
         run.ObjectsModified = context.Modified;
         run.ObjectsDeleted = context.Deleted;
         run.ObjectsScanned = context.Scanned;
+        run.ObjectsFailed = context.Failed;
 
+        var hasChanges = context.Changes.Count > 0;
+
+        if (!hasChanges)
+        {
+            // No object changes this run. Two things can still need doing:
+            //  1) A prior run may have committed but failed to push — re-push it now (never lose work).
+            //  2) If RunOnlyIfChanges is off, record a "heartbeat" empty commit that a sync ran.
+            if (!context.Job.Schedule.RunOnlyIfChanges)
+            {
+                await CommitAndPushAsync(run, context, gitContext, allowEmpty: true, cancellationToken).ConfigureAwait(false);
+            }
+            else if (await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
+            {
+                context.Log(SyncLogLevel.Info, "No new changes, but a previous commit was never pushed — pushing it now.");
+                await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                run.Status = RunStatus.NoChanges;
+                context.Log(SyncLogLevel.Info, "No changes detected — nothing to commit.");
+            }
+
+            await PersistStatesAsync(context, run.Status, run.CommitSha, cancellationToken).ConfigureAwait(false);
+            EscalateForSkips(run, context);
+            context.Report(SyncPhase.Completed, "Run completed.");
+            return;
+        }
+
+        await CommitAndPushAsync(run, context, gitContext, allowEmpty: false, cancellationToken).ConfigureAwait(false);
+        await PersistStatesAsync(context, run.Status, run.CommitSha, cancellationToken).ConfigureAwait(false);
+        EscalateForSkips(run, context);
+        context.Report(SyncPhase.Completed, "Run completed.");
+    }
+
+    private async Task CommitAndPushAsync(
+        SyncRun run, RunContext context, GitWorkspaceContext gitContext, bool allowEmpty, CancellationToken cancellationToken)
+    {
         context.Report(SyncPhase.Committing, "Creating commit…");
         var (subject, body) = CommitMessageBuilder.Build(run, context.Job, [.. context.Changes]);
-        var commit = await _gitWorkspace.CommitAllAsync(gitContext, subject, body, cancellationToken).ConfigureAwait(false);
+        var commit = await _gitWorkspace.CommitAllAsync(gitContext, subject, body, allowEmpty, cancellationToken).ConfigureAwait(false);
 
         if (!commit.Success)
         {
             run.Status = RunStatus.Failed;
             run.ErrorMessage = commit.Error;
             context.Log(SyncLogLevel.Error, "Commit failed.", commit.Error);
-            await PersistStatesAsync(context, RunStatus.Failed, null, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        if (!commit.HadChanges)
+        if (commit.CommitSha is not null)
+        {
+            run.CommitSha = commit.CommitSha;
+            run.CommitUrl = GitHubService.BuildCommitUrl(context.Repository.Owner, context.Repository.RepositoryName, commit.CommitSha);
+            context.Log(SyncLogLevel.Info, $"Created commit {commit.CommitSha[..Math.Min(7, commit.CommitSha.Length)]}.");
+        }
+
+        // Nothing to push (no new commit and no stranded commit) → a genuine no-op.
+        if (!commit.HadChanges
+            && !await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
         {
             run.Status = RunStatus.NoChanges;
-            await PersistStatesAsync(context, RunStatus.NoChanges, null, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        var sha = commit.CommitSha!;
-        run.CommitSha = sha;
-        run.CommitUrl = GitHubService.BuildCommitUrl(context.Repository.Owner, context.Repository.RepositoryName, sha);
-        context.Log(SyncLogLevel.Info, $"Created commit {sha[..Math.Min(7, sha.Length)]}.");
+        await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
+    }
 
+    private async Task PushAsync(SyncRun run, RunContext context, GitWorkspaceContext gitContext, CancellationToken cancellationToken)
+    {
         // Only direct-commit jobs reach here; pull request mode is rejected up front in ExecuteAsync.
         context.Report(SyncPhase.Pushing, "Pushing to GitHub…");
         var push = await _gitWorkspace.PushAsync(gitContext, cancellationToken).ConfigureAwait(false);
         if (push.IsFailure)
         {
             run.Status = RunStatus.Warning;
-            context.Log(SyncLogLevel.Warning, "Commit created locally but the push to GitHub failed.", push.Error);
+            run.ErrorMessage = push.Error;
+            // Put the real reason in the visible (non-technical) message — a hidden push failure is
+            // exactly what stops objects from reaching GitHub. Add a hint for the most common cause.
+            var reason = ExplainPushFailure(push.Error);
+            context.Log(SyncLogLevel.Warning, $"The commit was created locally but the push to GitHub failed. {reason}", push.Error);
         }
         else
         {
             run.Status = RunStatus.Succeeded;
             context.Log(SyncLogLevel.Info, "Pushed to GitHub.");
         }
+    }
 
-        await PersistStatesAsync(context, run.Status, commit.CommitSha, cancellationToken).ConfigureAwait(false);
-        context.Report(SyncPhase.Completed, "Run completed.");
+    // Turns raw git push stderr into a short, actionable reason for the user-facing log line.
+    private static string ExplainPushFailure(string? error)
+    {
+        var text = (error ?? string.Empty).ToLowerInvariant();
+        if (text.Contains("permission") || text.Contains("403") || text.Contains("forbidden"))
+        {
+            return "GitHub denied the push — the access token needs write (Contents) permission on this repository.";
+        }
+
+        if (text.Contains("authentication failed") || text.Contains("could not read username")
+            || text.Contains("401") || text.Contains("invalid username or password"))
+        {
+            return "GitHub rejected the credentials — check the repository's access token is valid and not expired.";
+        }
+
+        if (text.Contains("non-fast-forward") || text.Contains("fetch first") || text.Contains("rejected"))
+        {
+            return "The remote branch has commits Obsync does not have — pull/merge the branch, then re-run.";
+        }
+
+        if (text.Contains("could not resolve host") || text.Contains("unable to access") || text.Contains("timed out"))
+        {
+            return "Could not reach GitHub — check network connectivity and the repository URL.";
+        }
+
+        var firstLine = (error ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return string.IsNullOrWhiteSpace(firstLine) ? "See technical details for the git error." : firstLine.Trim();
+    }
+
+    // A successful run that skipped one or more objects is a partial success — surface it as a warning.
+    private static void EscalateForSkips(SyncRun run, RunContext context)
+    {
+        if (context.Failed > 0 && run.Status is RunStatus.Succeeded or RunStatus.NoChanges)
+        {
+            run.Status = RunStatus.Warning;
+        }
+    }
+
+    private static string DescribeIdentity(ScriptedObjectIdentity identity) =>
+        string.IsNullOrEmpty(identity.Schema) ? identity.Name : $"{identity.Schema}.{identity.Name}";
+
+    private static bool MatchesAnyPattern(ScriptedObjectIdentity identity, IReadOnlyList<string> patterns)
+    {
+        var qualified = DescribeIdentity(identity);
+        foreach (var pattern in patterns)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            if (WildcardMatch(qualified, pattern) || WildcardMatch(identity.Name, pattern))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Case-insensitive glob match supporting * (any run) and ? (single char).
+    private static bool WildcardMatch(string text, string pattern)
+    {
+        var regex = "^" + Regex.Escape(pattern).Replace("\\*", ".*", StringComparison.Ordinal)
+            .Replace("\\?", ".", StringComparison.Ordinal) + "$";
+        return Regex.IsMatch(text, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     private async Task PersistStatesAsync(RunContext context, RunStatus status, string? commitSha, CancellationToken cancellationToken)
@@ -535,17 +718,20 @@ public sealed class SyncEngine : ISyncEngine
         private int _added;
         private int _modified;
         private int _deleted;
+        private int _failed;
 
         // Counters are bumped from many worker threads, so reads/writes go through Interlocked.
         public int Scanned => Volatile.Read(ref _scanned);
         public int Added => Volatile.Read(ref _added);
         public int Modified => Volatile.Read(ref _modified);
         public int Deleted => Volatile.Read(ref _deleted);
+        public int Failed => Volatile.Read(ref _failed);
 
         public void IncrementScanned() => Interlocked.Increment(ref _scanned);
         public void IncrementAdded() => Interlocked.Increment(ref _added);
         public void IncrementModified() => Interlocked.Increment(ref _modified);
         public void IncrementDeleted() => Interlocked.Increment(ref _deleted);
+        public void IncrementFailed() => Interlocked.Increment(ref _failed);
 
         // Changes are added concurrently by workers; Logs and PendingStates only from single-threaded stages.
         public ConcurrentBag<ObjectChange> Changes { get; } = new();

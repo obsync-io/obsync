@@ -41,7 +41,8 @@ public sealed class FrontendWiringTests
         clock.UtcNow.Returns(DateTimeOffset.UnixEpoch);
 
         var vm = new CreateJobViewModel(
-            connections, repositories, jobs, Substitute.For<ISqlServerProbe>(), Substitute.For<ICredentialStore>(), clock);
+            connections, repositories, jobs, Substitute.For<ISqlServerProbe>(), Substitute.For<ICredentialStore>(), clock,
+            Substitute.For<IAuditWriter>());
         await vm.LoadAsync();
 
         var existing = new SyncJob
@@ -97,7 +98,7 @@ public sealed class FrontendWiringTests
         probe.TestConnectionAsync(Arg.Any<SqlConnectionProfile>(), Arg.Do<string?>(p => passwordSentToProbe = p), Arg.Any<CancellationToken>())
             .Returns(Result.Failure<SqlServerInfo>("ignored — we only assert the password"));
 
-        var vm = new ServerDialogViewModel(repository, probe, credentials, Substitute.For<IClock>());
+        var vm = new ServerDialogViewModel(repository, probe, credentials, Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
         vm.LoadForEdit(profile);   // blanks the password (keep-existing-secret semantics), enters edit mode
         await vm.TestCommand.ExecuteAsync(null);
 

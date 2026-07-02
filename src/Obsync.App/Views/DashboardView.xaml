@@ -182,69 +182,71 @@
                 </Border.Style>
                 <StackPanel>
                     <TextBlock Text="Sync Jobs" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,0,0,8"
-                               Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
-                    <DataGrid ItemsSource="{Binding Jobs}" Margin="0,8,0,0">
+                    <!-- Run progress/status is shown in the job's Overview tab, not as a floating line here. -->
+                    <!-- Bounded height so DataGrid row virtualization works (the grid scrolls
+                         internally rather than realizing every row inside the page ScrollViewer). -->
+                    <DataGrid ItemsSource="{Binding Jobs}" Margin="0,8,0,0" MaxHeight="520"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Job Name" Width="2*">
+                            <DataGridTemplateColumn Header="Job Name" Width="1.8*" MinWidth="110">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Source" Width="2*">
+                            <DataGridTemplateColumn Header="Source" Width="1.8*" MinWidth="100">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding SourceDisplay}" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Destination" Width="2*">
+                            <DataGridTemplateColumn Header="Destination" Width="1.8*" MinWidth="110">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding DestinationDisplay}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Status" Width="*">
+                            <DataGridTemplateColumn Header="Status" Width="Auto" MinWidth="90">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ContentControl Content="{Binding RunSummary.LastStatus}" ContentTemplate="{StaticResource StatusBadgeTemplate}" VerticalAlignment="Center" />
+                                        <ContentControl Content="{Binding DisplayStatus}" ContentTemplate="{StaticResource StatusBadgeTemplate}" VerticalAlignment="Center" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Last Run" Width="1.5*">
+                            <DataGridTemplateColumn Header="Last Run" Width="1.3*" MinWidth="90">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding RunSummary.LastRunAt, StringFormat=g}" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding RunSummary.LastRunAt, Converter={StaticResource LocalDateTime}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Changes" Width="*">
+                            <DataGridTemplateColumn Header="Changes" Width="0.8*" MinWidth="64">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding RunSummary.LastChangeCount}" Style="{StaticResource Body}" VerticalAlignment="Center" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Next Run" Width="1.5*">
+                            <DataGridTemplateColumn Header="Next Run" Width="1.3*" MinWidth="90">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding RunSummary.NextRunAt, StringFormat=g}" Style="{StaticResource Muted}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding RunSummary.NextRunAt, Converter={StaticResource LocalDateTime}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Actions" Width="Auto">
+                            <DataGridTemplateColumn Header="Actions" Width="84">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <Button Style="{StaticResource IconButton}" ToolTip="Open"
+                                            <Button Style="{StaticResource IconButton}" ToolTip="Open" AutomationProperties.Name="Open"
                                                     Command="{Binding DataContext.OpenCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                     CommandParameter="{Binding}">
                                                 <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconOpen}" />
                                             </Button>
-                                            <Button Style="{StaticResource IconButton}" ToolTip="Run Now" Margin="2,0,0,0"
+                                            <Button Style="{StaticResource IconButton}" ToolTip="Run Now" AutomationProperties.Name="Run Now" Margin="2,0,0,0"
                                                     Command="{Binding DataContext.RunNowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                     CommandParameter="{Binding}">
                                                 <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRun}" />

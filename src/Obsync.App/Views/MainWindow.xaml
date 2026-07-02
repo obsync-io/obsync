@@ -31,7 +31,8 @@
 
                 <!-- Navigation items -->
                 <StackPanel DockPanel.Dock="Top" Margin="0,4,0,0">
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" IsChecked="True"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Dashboard, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Dashboard">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDashboard}" Width="20" HorizontalAlignment="Left" />
@@ -39,13 +40,7 @@
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
-                                 Command="{Binding NavigateCommand}" CommandParameter="Jobs">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Jobs" Margin="12,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </RadioButton>
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Servers, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Servers">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconConnections}" Width="20" HorizontalAlignment="Left" />
@@ -53,6 +48,7 @@
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Repositories, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Repositories">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" Width="20" HorizontalAlignment="Left" />
@@ -60,6 +56,15 @@
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Jobs, Mode=TwoWay}"
+                                 Command="{Binding NavigateCommand}" CommandParameter="Jobs">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}" Width="20" HorizontalAlignment="Left" />
+                            <TextBlock Text="Jobs" Margin="12,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=History, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="History">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconHistory}" Width="20" HorizontalAlignment="Left" />
@@ -67,6 +72,7 @@
                         </StackPanel>
                     </RadioButton>
                     <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                                 IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Settings, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Settings">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconSettings}" Width="20" HorizontalAlignment="Left" />

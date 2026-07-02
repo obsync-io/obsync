@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Obsync.App.ViewModels;
 using Obsync.App.Views;
 using Obsync.Data;
+using Obsync.Data.Repositories;
 using Obsync.Shared;
 using Serilog;
 
@@ -41,6 +42,12 @@ public partial class App : Application
 
             await _host.StartAsync();
             await _host.Services.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
+
+            // Reconcile orphaned runs: any run still "Running" after a restart never completed
+            // (runs execute in-process), so clear the zombie rows the History would otherwise show.
+            var now = DateTimeOffset.UtcNow;
+            await _host.Services.GetRequiredService<IRunRepository>()
+                .FailStaleRunningAsync(now.AddMinutes(-5), now, "Run interrupted — the app closed before it finished.");
 
             var window = _host.Services.GetRequiredService<MainWindow>();
             mainViewModel = _host.Services.GetRequiredService<MainViewModel>();

@@ -1,9 +1,10 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Obsync.App.Services;
 using Obsync.Data.Repositories;
-using Obsync.Engine;
 using Obsync.GitHub;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -20,11 +21,13 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IRunRepository _runs;
     private readonly IConnectionProfileRepository _connections;
     private readonly IRepositoryProfileRepository _repositories;
-    private readonly ISyncEngine _engine;
+    private readonly IJobRunCoordinator _coordinator;
     private readonly IShellNavigator _navigator;
 
     private readonly List<SyncRunLog> _allLogs = [];
     private GitRepositoryProfile? _repository;
+    private JobRunState? _runState;
+    private bool _reloading;
 
     [ObservableProperty] private SyncJob? _job;
     [ObservableProperty] private string _connectionName = "—";
@@ -43,6 +46,22 @@ public sealed partial class JobDetailViewModel : ObservableObject
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
 
+    /// <summary>The most recent run, used for the Overview status panel (counts, error, timing).</summary>
+    [ObservableProperty] private SyncRun? _latestRun;
+
+    /// <summary>The last run's error/warning detail, shown as a banner when the run did not fully succeed.</summary>
+    [ObservableProperty] private string? _lastError;
+
+    /// <summary>True when the last run reported an error or warning worth surfacing.</summary>
+    public bool HasError => !string.IsNullOrEmpty(LastError);
+
+    /// <summary>True once at least one run exists, so the Overview can show its result counts.</summary>
+    public bool HasLatestRun => LatestRun is not null;
+
+    partial void OnLastErrorChanged(string? value) => OnPropertyChanged(nameof(HasError));
+
+    partial void OnLatestRunChanged(SyncRun? value) => OnPropertyChanged(nameof(HasLatestRun));
+
     public ObservableCollection<SyncRun> Runs { get; } = [];
     public ObservableCollection<ObjectChange> Changes { get; } = [];
     public ObservableCollection<SyncRunLog> Logs { get; } = [];
@@ -52,20 +71,40 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IRunRepository runs,
         IConnectionProfileRepository connections,
         IRepositoryProfileRepository repositories,
-        ISyncEngine engine,
+        IJobRunCoordinator coordinator,
         IShellNavigator navigator)
     {
         _jobs = jobs;
         _runs = runs;
         _connections = connections;
         _repositories = repositories;
-        _engine = engine;
+        _coordinator = coordinator;
         _navigator = navigator;
     }
 
-    public bool HasCommit => !string.IsNullOrEmpty(LastCommitUrl);
+    /// <summary>The section the user drilled in from (Dashboard vs Jobs); "Back" returns here.</summary>
+    public string OriginSection { get; set; } = "Jobs";
 
-    partial void OnLastCommitUrlChanged(string? value) => OnPropertyChanged(nameof(HasCommit));
+    /// <summary>True when there is any commit to show (a short SHA), whether or not a URL exists.</summary>
+    public bool HasCommit => !string.IsNullOrEmpty(LastCommitSha);
+
+    /// <summary>True when the commit has a browsable URL and should render as a link.</summary>
+    public bool HasCommitLink => !string.IsNullOrEmpty(LastCommitUrl);
+
+    /// <summary>True when a SHA exists but no URL, so it is shown as plain (non-link) text.</summary>
+    public bool ShowCommitShaOnly => HasCommit && !HasCommitLink;
+
+    partial void OnLastCommitShaChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasCommit));
+        OnPropertyChanged(nameof(ShowCommitShaOnly));
+    }
+
+    partial void OnLastCommitUrlChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasCommitLink));
+        OnPropertyChanged(nameof(ShowCommitShaOnly));
+    }
 
     partial void OnShowTechnicalLogsChanged(bool value) => RefreshLogs();
 
@@ -100,6 +139,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         }
 
         var latest = runs.FirstOrDefault();
+        LatestRun = latest;
+        LastError = latest?.Status is RunStatus.Warning or RunStatus.Failed ? latest.ErrorMessage : null;
         LastCommitSha = latest?.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : null;
         LastCommitUrl = latest?.CommitUrl;
 
@@ -116,6 +157,62 @@ public sealed partial class JobDetailViewModel : ObservableObject
         }
 
         RefreshLogs();
+        AttachRunState();
+    }
+
+    // Bind this view to the job's shared run state so a run in progress (started here or from any
+    // other screen) shows live and survives navigation away and back.
+    private void AttachRunState()
+    {
+        DetachRunState();
+        if (Job is null)
+        {
+            return;
+        }
+
+        _runState = _coordinator.GetState(Job.Id);
+        _runState.PropertyChanged += OnRunStateChanged;
+        ApplyRunState();
+    }
+
+    /// <summary>Detaches from the shared run state. Called from the view's Unloaded to avoid leaks.</summary>
+    public void DetachRunState()
+    {
+        if (_runState is not null)
+        {
+            _runState.PropertyChanged -= OnRunStateChanged;
+            _runState = null;
+        }
+    }
+
+    private async void OnRunStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        ApplyRunState();
+
+        // When the run finishes, reload so the Overview/History/Changes/Logs reflect the final result.
+        if (e.PropertyName == nameof(JobRunState.IsRunning) && _runState is { IsRunning: false }
+            && Job is not null && !_reloading)
+        {
+            _reloading = true;
+            try
+            {
+                await LoadAsync(Job.Id);
+            }
+            catch
+            {
+                // A refresh failure is non-fatal; the run itself already recorded its result.
+            }
+            finally
+            {
+                _reloading = false;
+            }
+        }
+    }
+
+    private void ApplyRunState()
+    {
+        IsBusy = _runState?.IsRunning ?? false;
+        StatusMessage = _runState?.IsRunning == true ? _runState.Message : null;
     }
 
     private void RefreshLogs()
@@ -130,37 +227,22 @@ public sealed partial class JobDetailViewModel : ObservableObject
     [RelayCommand]
     private async Task RunNowAsync()
     {
-        if (Job is null || IsBusy)
+        if (Job is null)
         {
             return;
         }
 
-        IsBusy = true;
-        try
+        // The coordinator guards against a second concurrent run and owns the shared live state; the
+        // run-state subscription drives the live progress and the post-run refresh.
+        var run = await _coordinator.RunAsync(Job.Id, RunTrigger.Manual);
+        if (run is null)
         {
-            var progress = new Progress<SyncProgress>(p => StatusMessage = p.Message);
-            var run = await Task.Run(() => _engine.RunJobAsync(Job.Id, RunTrigger.Manual, progress));
-            StatusMessage = run.Status switch
-            {
-                RunStatus.Succeeded => $"Completed — {run.ChangeCount} change(s) pushed.",
-                RunStatus.NoChanges => "Completed — no changes.",
-                RunStatus.Warning => "Completed with warnings.",
-                _ => $"{run.Status}. {run.ErrorMessage}",
-            };
-            await LoadAsync(Job.Id);
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Run failed — {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
+            StatusMessage = "A run is already in progress for this job.";
         }
     }
 
     [RelayCommand]
-    private async Task BackAsync() => await _navigator.ShowSectionAsync("Jobs");
+    private async Task BackAsync() => await _navigator.ShowSectionAsync(OriginSection);
 
     [RelayCommand]
     private void OpenCommit()

@@ -19,6 +19,7 @@ public sealed partial class ServersViewModel : ObservableObject, IAsyncViewModel
     private readonly ISqlServerProbe _probe;
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
+    private readonly IAuditWriter _audit;
 
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
@@ -26,12 +27,14 @@ public sealed partial class ServersViewModel : ObservableObject, IAsyncViewModel
     public ObservableCollection<SqlConnectionProfile> Servers { get; } = [];
 
     public ServersViewModel(
-        IConnectionProfileRepository repository, ISqlServerProbe probe, ICredentialStore credentialStore, IClock clock)
+        IConnectionProfileRepository repository, ISqlServerProbe probe, ICredentialStore credentialStore, IClock clock,
+        IAuditWriter audit)
     {
         _repository = repository;
         _probe = probe;
         _credentialStore = credentialStore;
         _clock = clock;
+        _audit = audit;
     }
 
     public async Task LoadAsync()
@@ -89,8 +92,11 @@ public sealed partial class ServersViewModel : ObservableObject, IAsyncViewModel
 
         try
         {
-            _credentialStore.Delete(CredentialKeys.SqlPassword(server.Id));
+            // Delete the row FIRST: if a sync job still references this server the FK restriction
+            // throws here, before we touch the credential — so the saved password is never orphaned.
             await _repository.DeleteAsync(server.Id);
+            _credentialStore.Delete(CredentialKeys.SqlPassword(server.Id));
+            await _audit.WriteAsync(AuditAction.ServerDeleted, "Server", server.Id.ToString(), server.Name);
             await LoadAsync();
         }
         catch (Exception ex)

@@ -78,6 +78,84 @@ public sealed class GitWorkspaceTests : IDisposable
         Assert.Null(commit.CommitSha);
     }
 
+    [Fact]
+    public async Task Prepare_PreservesUnpushedCommit_AfterAFailedPush()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+
+        // First run: publish a file successfully.
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "first.sql"), "CREATE SCHEMA [a];");
+        Assert.True((await _workspace.CommitAllAsync(context, "first", "body")).Success);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        // Second run: commit locally but DO NOT push (simulates a push that failed, e.g. bad token).
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "second.sql"), "CREATE SCHEMA [b];");
+        Assert.True((await _workspace.CommitAllAsync(context, "second", "body")).Success);
+        Assert.True(await _workspace.HasUnpushedCommitsAsync(context));
+
+        // Third run: PrepareAsync must NOT discard the un-pushed commit (the old bug hard-reset to origin).
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        Assert.True(File.Exists(Path.Combine(workPath, "schemas", "second.sql")));
+        Assert.True(await _workspace.HasUnpushedCommitsAsync(context));
+
+        // And it can still be pushed, so no work is lost.
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+        Assert.False(await _workspace.HasUnpushedCommitsAsync(context));
+
+        var verifyPath = Path.Combine(_root, "verify");
+        Assert.True((await _runner.RunAsync(_root, ["clone", remote, verifyPath])).Success);
+        Assert.True(File.Exists(Path.Combine(verifyPath, "schemas", "second.sql")));
+    }
+
+    [Fact]
+    public async Task CommitAll_AllowEmpty_CreatesHeartbeatCommit()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var context = NewContext(remote, Path.Combine(_root, "work"));
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+
+        // No working-tree changes, but allowEmpty requests a commit anyway (audit heartbeat).
+        var commit = await _workspace.CommitAllAsync(context, "heartbeat", "no changes", allowEmpty: true);
+
+        Assert.True(commit.Success, commit.Error);
+        Assert.NotNull(commit.CommitSha);
+        Assert.True(await _workspace.HasUnpushedCommitsAsync(context));
+    }
+
+    [Fact]
+    public async Task HasUnpushedCommits_ReflectsPushState()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "x.sql"), "CREATE SCHEMA [x];");
+        Assert.True((await _workspace.CommitAllAsync(context, "x", "body")).Success);
+        Assert.True(await _workspace.HasUnpushedCommitsAsync(context));
+
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+        Assert.False(await _workspace.HasUnpushedCommitsAsync(context));
+    }
+
     private static GitWorkspaceContext NewContext(string remote, string localPath) => new()
     {
         RemoteUrl = remote,

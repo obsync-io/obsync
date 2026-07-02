@@ -34,7 +34,8 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding RunNowCommand}" Margin="0,0,10,0">
+                    <Button Style="{StaticResource PrimaryButton}" Command="{Binding RunNowCommand}" Margin="0,0,10,0"
+                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconRun}"
                                        FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
@@ -59,9 +60,13 @@
                 <TextBlock Style="{StaticResource Body}" Text="{Binding NextRunText}" VerticalAlignment="Center" />
                 <TextBlock Style="{StaticResource Muted}" Text="  ·  Last commit " VerticalAlignment="Center"
                            Visibility="{Binding HasCommit, Converter={StaticResource BoolToVisibility}}" />
+                <!-- Link when a commit URL exists; otherwise the SHA as plain text so a run with a
+                     CommitSha but no URL still surfaces the commit. -->
                 <Button Style="{StaticResource LinkButton}" Content="{Binding LastCommitSha}"
                         Command="{Binding OpenCommitCommand}" VerticalAlignment="Center"
-                        Visibility="{Binding HasCommit, Converter={StaticResource BoolToVisibility}}" />
+                        Visibility="{Binding HasCommitLink, Converter={StaticResource BoolToVisibility}}" />
+                <TextBlock Style="{StaticResource Body}" Text="{Binding LastCommitSha}" VerticalAlignment="Center"
+                           Visibility="{Binding ShowCommitShaOnly, Converter={StaticResource BoolToVisibility}}" />
             </StackPanel>
 
             <!-- Live status message from the most recent action -->
@@ -74,49 +79,125 @@
 
             <!-- Overview -->
             <TabItem Header="Overview">
-                <Border Style="{StaticResource Card}" Margin="0,12,0,0" VerticalAlignment="Top">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+                <ScrollViewer Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Connection" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ConnectionName}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+                        <!-- Run status: badge, live progress, error banner, and the latest run's counts.
+                             This is the one place to watch a job as it scripts, commits, and pushes. -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Run status" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                                    <ContentControl Content="{Binding Status}" ContentTemplate="{StaticResource StatusBadgeTemplate}"
+                                                    Margin="12,2,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Source SQL Server" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ServerName}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+                                <!-- Live progress (only while a run is in flight) -->
+                                <StackPanel Margin="0,16,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Body}" TextWrapping="Wrap" />
+                                    <ProgressBar IsIndeterminate="True" Height="4" Margin="0,10,0,0"
+                                                 Foreground="{StaticResource AccentBrush}" Background="{StaticResource PanelBrush}" BorderThickness="0" />
+                                </StackPanel>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Database" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DatabasesText}" Style="{StaticResource BodyStrong}" Margin="0,8" TextWrapping="Wrap" />
+                                <!-- Error / warning banner: shows exactly why a run did not fully succeed -->
+                                <Border Margin="0,16,0,0" CornerRadius="{StaticResource RadiusControl}" Padding="14,12"
+                                        Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Status}" Value="Failed">
+                                                    <Setter Property="Background" Value="{StaticResource ErrorSoftBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
+                                                   FontSize="16" VerticalAlignment="Top" Margin="0,1,10,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Failed">
+                                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding LastError}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="760" />
+                                    </StackPanel>
+                                </Border>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="GitHub repository" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding RepositoryFullName}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+                                <!-- Latest run counts -->
+                                <UniformGrid Rows="1" Columns="5" Margin="0,18,0,0"
+                                             Visibility="{Binding HasLatestRun, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding LatestRun.ObjectsScanned}" Style="{StaticResource MetricValue}" FontSize="24" />
+                                        <TextBlock Text="Scanned" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding LatestRun.ObjectsAdded}" Style="{StaticResource MetricValue}" FontSize="24" />
+                                        <TextBlock Text="Added" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding LatestRun.ObjectsModified}" Style="{StaticResource MetricValue}" FontSize="24" />
+                                        <TextBlock Text="Modified" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding LatestRun.ObjectsDeleted}" Style="{StaticResource MetricValue}" FontSize="24" />
+                                        <TextBlock Text="Deleted" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding LatestRun.ObjectsFailed}" Style="{StaticResource MetricValue}" FontSize="24" />
+                                        <TextBlock Text="Skipped" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                </UniformGrid>
+                            </StackPanel>
+                        </Border>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Branch" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Branch}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+                        <!-- Configuration summary -->
+                        <Border Style="{StaticResource Card}" Margin="0,16,0,0" VerticalAlignment="Top">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="190" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Folder path" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Folder}" Style="{StaticResource BodyStrong}" Margin="0,8" TextWrapping="Wrap" />
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Connection" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ConnectionName}" Style="{StaticResource BodyStrong}" Margin="0,8" />
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Schedule" Style="{StaticResource Caption}" Margin="0,8" />
-                        <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding ScheduleText}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Source SQL Server" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ServerName}" Style="{StaticResource BodyStrong}" Margin="0,8" />
 
-                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Last result" Style="{StaticResource Caption}" Margin="0,8" />
-                        <ContentControl Grid.Row="7" Grid.Column="1" Content="{Binding Status}"
-                                        ContentTemplate="{StaticResource StatusBadgeTemplate}" Margin="0,8" HorizontalAlignment="Left" />
-                    </Grid>
-                </Border>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Database" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DatabasesText}" Style="{StaticResource BodyStrong}" Margin="0,8" TextWrapping="Wrap" />
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="GitHub repository" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding RepositoryFullName}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="Branch" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Branch}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+
+                                <TextBlock Grid.Row="5" Grid.Column="0" Text="Folder path" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Folder}" Style="{StaticResource BodyStrong}" Margin="0,8" TextWrapping="Wrap" />
+
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="Schedule" Style="{StaticResource Caption}" Margin="0,8" />
+                                <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding ScheduleText}" Style="{StaticResource BodyStrong}" Margin="0,8" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <!-- Changes (latest run) -->
@@ -137,7 +218,7 @@
                             <DataGridTemplateColumn Header="Actions" Width="Auto">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub"
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub" AutomationProperties.Name="Open in GitHub"
                                                 Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}">
                                             <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconOpenExternal}"
@@ -156,7 +237,7 @@
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <DataGrid ItemsSource="{Binding Runs}" AutoGenerateColumns="False" IsReadOnly="True">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, StringFormat=g}" Width="1.6*" />
+                            <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" />
                             <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" />
                             <DataGridTextColumn Header="Objects scanned" Binding="{Binding ObjectsScanned}" Width="*" />
                             <DataGridTextColumn Header="Objects changed" Binding="{Binding ChangeCount}" Width="*" />

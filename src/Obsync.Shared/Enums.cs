@@ -65,6 +65,21 @@ public enum RunTrigger
     Startup = 2,
 }
 
+/// <summary>A user-attributable action recorded in the enterprise audit trail.</summary>
+public enum AuditAction
+{
+    JobCreated,
+    JobEdited,
+    JobDeleted,
+    RunStarted,
+    ServerAdded,
+    ServerEdited,
+    ServerDeleted,
+    RepositoryAdded,
+    RepositoryEdited,
+    RepositoryDeleted,
+}
+
 /// <summary>The outcome of a sync run.</summary>
 public enum RunStatus
 {

@@ -29,7 +29,7 @@ public partial class JobsView : UserControl
     {
         if (((FrameworkElement)sender).DataContext is SyncJob job)
         {
-            await App.Services.GetRequiredService<IShellNavigator>().ShowJobDetailAsync(job.Id);
+            await App.Services.GetRequiredService<IShellNavigator>().ShowJobDetailAsync(job.Id, "Jobs");
         }
     }
 

@@ -48,7 +48,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             {
                 SqlObjectType.View => ReadModulesAsync(connection, type, ["V"], request, cancellationToken),
                 SqlObjectType.StoredProcedure => ReadModulesAsync(connection, type, ["P", "PC"], request, cancellationToken),
-                SqlObjectType.Function => ReadModulesAsync(connection, type, ["FN", "IF", "TF"], request, cancellationToken),
+                SqlObjectType.Function => ReadModulesAsync(connection, type, ["FN", "IF", "TF", "FS", "FT"], request, cancellationToken),
                 SqlObjectType.Trigger => ReadDmlTriggersAsync(connection, request, cancellationToken),
                 SqlObjectType.DatabaseDdlTrigger => ReadDatabaseDdlTriggersAsync(connection, request, cancellationToken),
                 SqlObjectType.Schema => ReadSchemasAsync(connection, request, cancellationToken),
@@ -102,7 +102,13 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         {
             if (await reader.IsDBNullAsync(3, cancellationToken).ConfigureAwait(false))
             {
-                _logger.LogDebug("Skipping encrypted or CLR object {Schema}.{Name}.", reader.GetString(0), reader.GetString(1));
+                // Encrypted (WITH ENCRYPTION) or CLR modules have no retrievable T-SQL definition.
+                // Report them as skipped so the run warns instead of silently dropping objects.
+                _logger.LogDebug("Definition unavailable for {Schema}.{Name}; reporting as skipped.",
+                    reader.GetString(0), reader.GetString(1));
+                yield return RawScriptedObject.Skipped(
+                    new ScriptedObjectIdentity(type, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)),
+                    "The module definition is unavailable (encrypted with WITH ENCRYPTION, or a CLR object).");
                 continue;
             }
 
@@ -137,6 +143,9 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         {
             if (await reader.IsDBNullAsync(3, cancellationToken).ConfigureAwait(false))
             {
+                yield return RawScriptedObject.Skipped(
+                    new ScriptedObjectIdentity(SqlObjectType.Trigger, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)),
+                    "The trigger definition is unavailable (encrypted or CLR).");
                 continue;
             }
 
@@ -166,6 +175,9 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         {
             if (await reader.IsDBNullAsync(2, cancellationToken).ConfigureAwait(false))
             {
+                yield return RawScriptedObject.Skipped(
+                    new ScriptedObjectIdentity(SqlObjectType.DatabaseDdlTrigger, string.Empty, reader.GetString(0), reader.GetInt32(1)),
+                    "The DDL trigger definition is unavailable (encrypted or CLR).");
                 continue;
             }
 

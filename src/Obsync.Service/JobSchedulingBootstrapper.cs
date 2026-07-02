@@ -24,7 +24,13 @@ public sealed class JobSchedulingBootstrapper : IHostedService
     {
         await _databaseInitializer.InitializeAsync(cancellationToken).ConfigureAwait(false);
         await _scheduler.ScheduleAllAsync(cancellationToken).ConfigureAwait(false);
-        _logger.LogInformation("Obsync service started and jobs scheduled.");
+
+        // Log the identity so credential-isolation problems are diagnosable: secrets in Windows
+        // Credential Manager are per-user, so scheduled runs only work if the app saved them under
+        // this same account (see the SQL/GitHub credential checks in SyncEngine).
+        _logger.LogInformation(
+            "Obsync service started and jobs scheduled. Running as {Domain}\\{User}.",
+            Environment.UserDomainName, Environment.UserName);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

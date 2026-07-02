@@ -13,6 +13,13 @@ public sealed class SyncRun
     public Guid JobId { get; set; }
     public string JobName { get; set; } = string.Empty;
     public RunTrigger Trigger { get; set; }
+
+    /// <summary>
+    /// The identity that started the run (as <c>DOMAIN\user</c>): the interactive user for an
+    /// app run, or the service account for a scheduled run. Set once at insert; never updated.
+    /// </summary>
+    public string? TriggeredBy { get; set; }
+
     public RunStatus Status { get; set; } = RunStatus.Pending;
 
     public string ServerName { get; set; } = string.Empty;
