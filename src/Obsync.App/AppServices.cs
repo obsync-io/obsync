@@ -27,6 +27,10 @@ public static class AppServices
         // action originates in the app; the writer stamps the actor and timestamp itself.
         services.AddSingleton<IAuditWriter, AuditWriter>();
 
+        // Supportability: environment health checks and the secret-masked support bundle.
+        services.AddSingleton<IDiagnosticsService, DiagnosticsService>();
+        services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();
+
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());
         services.AddSingleton<DashboardViewModel>();
