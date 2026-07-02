@@ -21,7 +21,8 @@
             <!-- Existing repositories -->
             <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,18,0" Padding="0">
                 <Grid>
-                <DataGrid ItemsSource="{Binding Repositories}">
+                <DataGrid ItemsSource="{Binding Repositories}"
+                          Visibility="{Binding Repositories.Count, Converter={StaticResource CountToVisibility}}">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
                         <DataGridTextColumn Header="Repository" Binding="{Binding FullName}" Width="*" />
@@ -30,12 +31,12 @@
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit"
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit" AutomationProperties.Name="Edit"
                                                 Command="{Binding DataContext.EditCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
                                         </Button>
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" Click="OnDeleteRepo">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" AutomationProperties.Name="Delete" Click="OnDeleteRepo">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
                                         </Button>
                                     </StackPanel>
@@ -87,11 +88,38 @@
                     <PasswordBox x:Name="TokenBox" PasswordChanged="OnTokenChanged" Margin="0,4,0,18" />
 
                     <StackPanel Orientation="Horizontal">
-                        <Button Content="Validate" Style="{StaticResource SecondaryButton}" Command="{Binding ValidateCommand}" Margin="0,0,8,0" />
-                        <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" />
+                        <Button Content="Validate" Style="{StaticResource SecondaryButton}" Command="{Binding ValidateCommand}" Margin="0,0,8,0"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                        <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
                         <Button Content="Cancel" Style="{StaticResource SubtleButton}" Command="{Binding CancelEditCommand}"
                                 Margin="8,0,0,0" Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
+
+                    <ItemsControl ItemsSource="{Binding PermissionChecks}" Margin="0,16,0,0"
+                                  Visibility="{Binding PermissionChecks.Count, Converter={StaticResource CountToVisibility}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <TextBlock Width="20" FontWeight="Bold" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Text" Value="&#x2715;" />
+                                                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Ok}" Value="True">
+                                                        <Setter Property="Text" Value="&#x2713;" />
+                                                        <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
 
                     <TextBlock Text="{Binding ValidationResult}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,16,0,0" />
                 </StackPanel>

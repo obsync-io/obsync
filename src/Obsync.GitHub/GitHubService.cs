@@ -12,10 +12,25 @@ public sealed record GitHubRepository(string Owner, string Name, string DefaultB
     public string FullName => $"{Owner}/{Name}";
 }
 
-/// <summary>Validates GitHub tokens and reads repository/branch metadata via Octokit.</summary>
+/// <summary>
+/// The outcome of checking a token's effective access to a specific repository. Works for both
+/// classic and fine-grained PATs (the repository payload carries the token's <c>pull</c>/<c>push</c>
+/// permissions), so it verifies the WRITE access whose absence silently breaks pushes.
+/// </summary>
+public sealed record TokenPermissionReport(
+    bool TokenValid, string? Login, bool RepositoryFound, bool CanRead, bool CanWrite, string? Detail);
+
+/// <summary>Checks GitHub tokens and reads repository/branch metadata via Octokit.</summary>
 public interface IGitHubService
 {
-    Task<Result<string>> ValidateTokenAsync(string token, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Verifies the token and its effective access to <paramref name="owner"/>/<paramref name="name"/>:
+    /// valid, repository reachable, read, and write. A failed <see cref="Result"/> means the check
+    /// itself could not run (e.g. GitHub was unreachable); a successful result carries the checklist.
+    /// </summary>
+    Task<Result<TokenPermissionReport>> CheckRepositoryAccessAsync(
+        string token, string owner, string name, CancellationToken cancellationToken = default);
+
     Task<Result<IReadOnlyList<GitHubRepository>>> GetRepositoriesAsync(string token, CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<string>>> GetBranchesAsync(string token, string owner, string name, CancellationToken cancellationToken = default);
 }
@@ -28,22 +43,46 @@ public sealed class GitHubService : IGitHubService
 
     public GitHubService(ILogger<GitHubService> logger) => _logger = logger;
 
-    public async Task<Result<string>> ValidateTokenAsync(string token, CancellationToken cancellationToken = default)
+    public async Task<Result<TokenPermissionReport>> CheckRepositoryAccessAsync(
+        string token, string owner, string name, CancellationToken cancellationToken = default)
     {
         try
         {
             var client = CreateClient(token);
+
+            // Identity first: confirms the token is valid at all before probing repository access.
             var user = await WithRetryAsync(() => client.User.Current(), cancellationToken).ConfigureAwait(false);
-            return Result.Success(user.Login);
+
+            // The repository payload carries this token's effective permissions (pull/push/admin),
+            // which is the reliable way to verify write access for a fine-grained PAT.
+            var repo = await WithRetryAsync(() => client.Repository.Get(owner, name), cancellationToken).ConfigureAwait(false);
+            var permissions = repo.Permissions;
+
+            return Result.Success(new TokenPermissionReport(
+                TokenValid: true,
+                Login: user.Login,
+                RepositoryFound: true,
+                CanRead: permissions?.Pull ?? false,
+                CanWrite: permissions?.Push ?? false,
+                Detail: null));
+        }
+        catch (NotFoundException)
+        {
+            // The token is valid but cannot see owner/name (no grant to this repository, or a typo).
+            return Result.Success(new TokenPermissionReport(
+                TokenValid: true, Login: null, RepositoryFound: false, CanRead: false, CanWrite: false,
+                Detail: $"The token cannot access {owner}/{name}. Check the name, and that the token grants this repository."));
         }
         catch (AuthorizationException)
         {
-            return Result.Failure<string>("The token was rejected by GitHub. Check that it is valid and not expired.");
+            return Result.Success(new TokenPermissionReport(
+                TokenValid: false, Login: null, RepositoryFound: false, CanRead: false, CanWrite: false,
+                Detail: "The token was rejected by GitHub. Check that it is valid and not expired."));
         }
         catch (ApiException ex)
         {
-            _logger.LogWarning("GitHub token validation failed: {Message}", ex.Message);
-            return Result.Failure<string>($"GitHub error: {ex.Message}");
+            _logger.LogWarning("GitHub permission check failed: {Message}", ex.Message);
+            return Result.Failure<TokenPermissionReport>($"GitHub error: {ex.Message}");
         }
     }
 
@@ -134,7 +173,9 @@ public sealed class GitHubService : IGitHubService
     /// </summary>
     public static string BuildAuthorizationHeader(string token)
     {
-        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"x-access-token:{token}"));
+        // Trim: tokens are often pasted with a trailing newline/space, which would corrupt the
+        // base64 and cause GitHub to reject every push with an authentication error.
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"x-access-token:{token.Trim()}"));
         return $"AUTHORIZATION: basic {basic}";
     }
 }
