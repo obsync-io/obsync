@@ -19,13 +19,58 @@
                         <TextBlock Grid.Column="1" Text="{Binding Version}" Style="{StaticResource BodyStrong}" />
                     </Grid>
 
-                    <Border Style="{StaticResource Panel}" Background="{StaticResource AccentSoftBrush}">
+                    <Border Style="{StaticResource Panel}" Background="{StaticResource AccentSoftBrush}" Margin="0,0,0,10">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
                                        Foreground="{StaticResource AccentBrush}" VerticalAlignment="Top" Margin="0,1,10,0" />
                             <TextBlock Text="Secrets are stored in Windows Credential Manager; the local state database never holds passwords or tokens."
                                        Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" />
                         </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Panel}" Background="{StaticResource SuccessSoftBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
+                                       Foreground="{StaticResource SuccessBrush}" VerticalAlignment="Top" Margin="0,1,10,0" />
+                            <TextBlock Text="Read-only by design — Obsync only reads metadata and object definitions. It never modifies SQL Server, never runs deployment scripts, and never requires sysadmin."
+                                       Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- Required SQL permissions -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="Required SQL permissions" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="Obsync reads metadata and object definitions only — it never modifies the database and never needs sysadmin. Generate a least-privilege script your DBA can review and run to grant a dedicated account exactly what Obsync needs." />
+
+                    <TextBlock Text="ACCOUNT (SQL login or DOMAIN\user)" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding PermissionAccount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <TextBlock Text="DATABASES (one per line)" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding PermissionDatabases, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
+                             VerticalScrollBarVisibility="Auto" Margin="0,4,0,16" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                        <Button Content="Generate permission script" Style="{StaticResource PrimaryButton}"
+                                Command="{Binding GeneratePermissionScriptCommand}" Margin="0,0,8,0" />
+                        <Button Content="Copy" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding CopyPermissionScriptCommand}" Margin="0,0,8,0" />
+                        <Button Content="Save as .sql" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding SavePermissionScriptCommand}" />
+                    </StackPanel>
+
+                    <Border Style="{StaticResource Panel}"
+                            Visibility="{Binding PermissionScript, Converter={StaticResource NullToVisibility}}">
+                        <TextBox Text="{Binding PermissionScript, Mode=OneWay}" IsReadOnly="True"
+                                 FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                                 AcceptsReturn="True" TextWrapping="NoWrap"
+                                 MinHeight="140" MaxHeight="320"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 BorderThickness="0" Background="Transparent" />
                     </Border>
                 </StackPanel>
             </Border>
@@ -70,6 +115,52 @@
                         <TextBlock Grid.Column="0" Text="Logs" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
                         <TextBlock Grid.Column="1" Text="{Binding LogsRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
                     </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Recent activity (audit trail) -->
+            <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+                <StackPanel>
+                    <TextBlock Text="Recent activity" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="Who did what, attributed to the Windows identity that performed the action." />
+
+                    <ItemsControl ItemsSource="{Binding RecentActivity}"
+                                  Visibility="{Binding RecentActivity.Count, Converter={StaticResource CountToVisibility}}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Style="{StaticResource BodyStrong}" TextWrapping="Wrap">
+                                            <Run Text="{Binding Action, Converter={StaticResource EnumDisplay}, Mode=OneWay}" />
+                                            <Run Text="{Binding EntityName, Mode=OneWay}" />
+                                        </TextBlock>
+                                        <TextBlock Text="{Binding Actor}" Style="{StaticResource Muted}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
+                                               Text="{Binding OccurredAt, Converter={StaticResource LocalDateTime}}"
+                                               Style="{StaticResource Muted}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="No activity recorded yet.">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding RecentActivity.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </StackPanel>
             </Border>
         </StackPanel>
