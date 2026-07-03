@@ -80,7 +80,8 @@ public sealed class GitCommandRunner : IGitCommandRunner
     }
 
     private static IEnumerable<string> RedactArguments(IReadOnlyList<string> arguments) =>
-        arguments.Select(a => a.StartsWith("http.extraheader=", StringComparison.OrdinalIgnoreCase)
-            ? "http.extraheader=***"
-            : a);
+        arguments.Select(a =>
+            a.StartsWith("http.extraheader=", StringComparison.OrdinalIgnoreCase) ? "http.extraheader=***" :
+            a.StartsWith("http.proxy=", StringComparison.OrdinalIgnoreCase) ? "http.proxy=***" :
+            a);
 }

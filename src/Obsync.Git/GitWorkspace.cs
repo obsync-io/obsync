@@ -28,6 +28,12 @@ public sealed class GitWorkspaceContext
 
     /// <summary>Number of attempts (1 = no retry) for transient network operations (clone/fetch/push).</summary>
     public int NetworkRetryCount { get; init; } = 3;
+
+    /// <summary>
+    /// HTTP/HTTPS proxy URL for network operations (may embed credentials); null for a direct
+    /// connection. Injected per-command via <c>-c http.proxy=…</c>, never written to <c>.git/config</c>.
+    /// </summary>
+    public string? ProxyUrl { get; init; }
 }
 
 /// <summary>The outcome of a commit attempt.</summary>
@@ -227,6 +233,14 @@ public sealed class GitWorkspace : IGitWorkspace
             // should succeed fails with "could not read Username" / "Authentication failed".
             full.Add("-c");
             full.Add("credential.helper=");
+        }
+
+        // Route network operations through the configured proxy (may carry credentials); injected
+        // per-command, never written to .git/config.
+        if (!string.IsNullOrEmpty(context.ProxyUrl))
+        {
+            full.Add("-c");
+            full.Add($"http.proxy={context.ProxyUrl}");
         }
 
         full.AddRange(args);

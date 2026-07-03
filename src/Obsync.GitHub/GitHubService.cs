@@ -1,8 +1,10 @@
 using System.Net.Http;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Results;
 using Octokit;
+using Octokit.Internal;
 
 namespace Obsync.GitHub;
 
@@ -53,15 +55,20 @@ public sealed class GitHubService : IGitHubService
 {
     private static readonly ProductHeaderValue Product = new("Obsync");
     private readonly ILogger<GitHubService> _logger;
+    private readonly IProxyProvider _proxy;
 
-    public GitHubService(ILogger<GitHubService> logger) => _logger = logger;
+    public GitHubService(ILogger<GitHubService> logger, IProxyProvider proxy)
+    {
+        _logger = logger;
+        _proxy = proxy;
+    }
 
     public async Task<Result<TokenPermissionReport>> CheckRepositoryAccessAsync(
         string token, string owner, string name, CancellationToken cancellationToken = default)
     {
         try
         {
-            var client = CreateClient(token);
+            var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
 
             // Identity first: confirms the token is valid at all before probing repository access.
             var user = await WithRetryAsync(() => client.User.Current(), cancellationToken).ConfigureAwait(false);
@@ -104,7 +111,7 @@ public sealed class GitHubService : IGitHubService
     {
         try
         {
-            var client = CreateClient(token);
+            var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
             var repositories = await WithRetryAsync(
                 () => client.Repository.GetAllForCurrent(new RepositoryRequest { Sort = RepositorySort.FullName }),
                 cancellationToken).ConfigureAwait(false);
@@ -125,7 +132,7 @@ public sealed class GitHubService : IGitHubService
     {
         try
         {
-            var client = CreateClient(token);
+            var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
             var branches = await WithRetryAsync(() => client.Repository.Branch.GetAll(owner, name), cancellationToken).ConfigureAwait(false);
             return Result.Success<IReadOnlyList<string>>([.. branches.Select(b => b.Name)]);
         }
@@ -141,7 +148,7 @@ public sealed class GitHubService : IGitHubService
     {
         try
         {
-            var client = CreateClient(token);
+            var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
             var pr = await WithRetryAsync(
                 () => client.PullRequest.Create(owner, name, new NewPullRequest(title, headBranch, baseBranch) { Body = body }),
                 cancellationToken).ConfigureAwait(false);
@@ -184,8 +191,18 @@ public sealed class GitHubService : IGitHubService
         _ => $"GitHub error opening the pull request: {ex.Message}",
     };
 
-    private static GitHubClient CreateClient(string token) =>
-        new(Product) { Credentials = new Credentials(token) };
+    // Builds a client whose HTTP handler routes through the configured proxy (if any). Resolved per
+    // call because the proxy config lives in the DB/Credential Manager and can change at runtime.
+    private async Task<GitHubClient> CreateClientAsync(string token, CancellationToken cancellationToken)
+    {
+        var resolution = await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        var adapter = new HttpClientAdapter(() => new HttpClientHandler
+        {
+            Proxy = resolution?.WebProxy,
+            UseProxy = resolution is not null,
+        });
+        return new GitHubClient(new Connection(Product, adapter)) { Credentials = new Credentials(token) };
+    }
 
     /// <summary>
     /// Runs an Octokit call with a short, growing backoff on transient failures (server 5xx,

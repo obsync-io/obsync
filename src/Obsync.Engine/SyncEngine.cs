@@ -37,6 +37,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IGitWorkspace _gitWorkspace;
     private readonly IGitHubService _gitHub;
+    private readonly IProxyProvider _proxy;
     private readonly ICredentialStore _credentialStore;
     private readonly IScriptNormalizer _normalizer;
     private readonly IObjectHasher _hasher;
@@ -55,6 +56,7 @@ public sealed class SyncEngine : ISyncEngine
         IDatabaseArtifactReader artifactReader,
         IGitWorkspace gitWorkspace,
         IGitHubService gitHub,
+        IProxyProvider proxy,
         ICredentialStore credentialStore,
         IScriptNormalizer normalizer,
         IObjectHasher hasher,
@@ -72,6 +74,7 @@ public sealed class SyncEngine : ISyncEngine
         _artifactReader = artifactReader;
         _gitWorkspace = gitWorkspace;
         _gitHub = gitHub;
+        _proxy = proxy;
         _credentialStore = credentialStore;
         _normalizer = normalizer;
         _hasher = hasher;
@@ -223,6 +226,7 @@ public sealed class SyncEngine : ISyncEngine
         // commits straight to the base branch.
         var headBranch = isPullRequest ? HeadBranchName(context.Job.Name, run.RunKey) : baseBranch;
         var localPath = Path.Combine(_options.WorkspacesRoot, context.Repository!.Id.ToString("N"));
+        var proxyUrl = (await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false))?.GitProxyUrl;
         var gitContext = new GitWorkspaceContext
         {
             RemoteUrl = context.Repository.EffectiveRemoteUrl,
@@ -233,6 +237,7 @@ public sealed class SyncEngine : ISyncEngine
             CommitterName = "Obsync",
             CommitterEmail = _options.CommitterEmail,
             NetworkRetryCount = context.Job.Advanced.GitRetryCount,
+            ProxyUrl = proxyUrl,
         };
 
         context.Report(SyncPhase.PreparingRepository, "Preparing the GitHub workspace…");
