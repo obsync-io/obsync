@@ -151,6 +151,38 @@ Ignored objects are simply not scripted; anything already committed for them is 
 Rules from `.obsyncignore` merge with a job's configured ignore patterns. (Zip exports have no
 persisted folder, so they honor only the job's configured patterns.)
 
+## Installing
+
+Obsync ships as a per-machine **MSI** that installs the desktop app, the `obsync` CLI (added to
+`PATH`), and the background **Obsync** Windows Service. It is **self-contained** — the target machine
+needs **no .NET runtime**. Build it with:
+
+```powershell
+pwsh packaging\build-installer.ps1
+# → artifacts\Obsync-0.1.0-win-x64.msi
+```
+
+Install interactively by double-clicking the MSI, or silently:
+
+```powershell
+msiexec /i Obsync-0.1.0-win-x64.msi /qn
+```
+
+### Service account (required for scheduled runs)
+
+The Windows Service is installed **manual-start under `LocalSystem`** by default. Because Obsync keeps
+secrets in the per-user Windows Credential Manager and its data under `%LOCALAPPDATA%`, the service
+**must run under the same Windows account that runs the desktop app** (see the Credential Manager note
+above). Supply that account at install time:
+
+```powershell
+msiexec /i Obsync-0.1.0-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
+```
+
+The account needs the "Log on as a service" right (the Service Control Manager grants it when the
+account is assigned). The MSI is authored to be code-signed later (`signtool`) once a certificate is
+available.
+
 ## Building
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download) and Git on `PATH`.

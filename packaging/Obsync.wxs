@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Obsync MSI installer (per-machine, x64, self-contained — no .NET runtime prerequisite).
+
+  Installs the desktop app, the CLI (obsync.exe, added to PATH), and the background Windows service
+  ("Obsync"). The service is registered manual-start; its logon account is set from the
+  SERVICE_ACCOUNT / SERVICE_PASSWORD properties. Because Obsync stores secrets in the per-user Windows
+  Credential Manager and data under %LOCALAPPDATA%, the service must run under the SAME account that
+  runs the desktop app — pass that account for scheduled runs to work:
+
+    msiexec /i Obsync-0.1.0-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
+
+  Built by packaging/build-installer.ps1, which supplies the Version/PublishDir/PackagingDir/RepoRoot
+  preprocessor variables.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Obsync"
+           Manufacturer="Obsync"
+           Version="$(Version)"
+           UpgradeCode="7B2E9E9C-3C1E-4C7A-9E2B-0A1F6D5C4B30"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Obsync is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Product icon shown in Add/Remove Programs and on the Start Menu shortcut. -->
+    <Icon Id="ObsyncIcon" SourceFile="$(RepoRoot)\src\Obsync.App\Assets\Obsync.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ObsyncIcon" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/obsync/obsync" />
+
+    <!-- Windows Service logon account. Default LocalSystem installs a functional service host but it
+         cannot reach the interactive user's Credential Manager / data root, so scheduled runs need a
+         real account passed here (Secure so it can be set during a silent, elevated install). -->
+    <Property Id="SERVICE_ACCOUNT" Value="LocalSystem" Secure="yes" />
+    <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Obsync" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="Obsync" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="ServiceHost" />
+      <ComponentRef Id="AppShortcut" />
+      <ComponentRef Id="PathEntry" />
+    </Feature>
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(PackagingDir)\License.rtf" />
+  </Package>
+
+  <Fragment>
+    <!-- Harvest the entire self-contained publish folder EXCEPT the service exe, which needs its own
+         component below so the ServiceInstall can attach to it. -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(PublishDir)\**">
+        <Exclude Files="$(PublishDir)\Obsync.Service.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <!-- The Windows service host. Registered as "Obsync" (matches AddWindowsService and the app's
+         DiagnosticsService check). Manual start so it never auto-runs under the wrong account. -->
+    <Component Id="ServiceHost" Directory="INSTALLFOLDER" Bitness="always64">
+      <File Id="ObsyncServiceExe" Source="$(PublishDir)\Obsync.Service.exe" KeyPath="yes" />
+      <ServiceInstall Id="ObsyncServiceInstall"
+                      Name="Obsync"
+                      DisplayName="Obsync Sync Service"
+                      Description="Runs Obsync scheduled sync jobs in the background."
+                      Type="ownProcess"
+                      Start="demand"
+                      ErrorControl="normal"
+                      Account="[SERVICE_ACCOUNT]"
+                      Password="[SERVICE_PASSWORD]" />
+      <ServiceControl Id="ObsyncServiceControl" Name="Obsync" Stop="both" Remove="uninstall" Wait="yes" />
+    </Component>
+
+    <!-- Start Menu shortcut to the desktop app (non-advertised; targets the installed exe). -->
+    <Component Id="AppShortcut" Directory="ProgramMenuFolder" Bitness="always64">
+      <Shortcut Id="ObsyncStartMenu"
+                Name="Obsync"
+                Description="Script and sync SQL Server objects to GitHub"
+                Target="[INSTALLFOLDER]Obsync.App.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="ObsyncIcon" />
+      <RegistryValue Root="HKLM" Key="Software\Obsync" Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- Add the install directory to the machine PATH so `obsync` (the CLI) is callable anywhere. -->
+    <Component Id="PathEntry" Directory="INSTALLFOLDER" Bitness="always64">
+      <Environment Id="ObsyncPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+      <RegistryValue Root="HKLM" Key="Software\Obsync" Name="pathAdded" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>
