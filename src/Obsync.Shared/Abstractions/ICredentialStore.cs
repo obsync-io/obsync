@@ -32,4 +32,7 @@ public static class CredentialKeys
     /// <summary>Key for the GitHub personal access token of a repository profile.</summary>
     public static string GitHubToken(Guid repositoryProfileId) =>
         $"{Prefix}:GitHub:{repositoryProfileId:N}";
+
+    /// <summary>Key for the single global authenticated-proxy password.</summary>
+    public static string Proxy() => $"{Prefix}:Proxy";
 }

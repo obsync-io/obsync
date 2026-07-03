@@ -71,6 +71,19 @@ public enum RunTrigger
     Startup = 2,
 }
 
+/// <summary>How Obsync reaches the internet for GitHub API + git operations.</summary>
+public enum ProxyMode
+{
+    /// <summary>Connect directly — no proxy.</summary>
+    None = 0,
+
+    /// <summary>Use the operating system's default proxy.</summary>
+    System = 1,
+
+    /// <summary>Use an explicitly configured proxy (URL + optional credentials + bypass list).</summary>
+    Manual = 2,
+}
+
 /// <summary>A user-attributable action recorded in the enterprise audit trail.</summary>
 public enum AuditAction
 {

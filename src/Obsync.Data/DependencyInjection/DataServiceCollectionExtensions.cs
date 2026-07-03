@@ -24,6 +24,11 @@ public static class DataServiceCollectionExtensions
         services.TryAddSingleton<IJobRepository, JobRepository>();
         services.TryAddSingleton<IRunRepository, RunRepository>();
         services.TryAddSingleton<IObjectStateRepository, ObjectStateRepository>();
+        services.TryAddSingleton<IAppSettingsRepository, AppSettingsRepository>();
+
+        // Resolves the configured proxy for outbound GitHub calls; used by GitHubService + the engine.
+        // (Depends on ICredentialStore from AddObsyncSecurity, which both composition roots register.)
+        services.TryAddSingleton<Obsync.Shared.Abstractions.IProxyProvider, ProxyProvider>();
 
         return services;
     }
