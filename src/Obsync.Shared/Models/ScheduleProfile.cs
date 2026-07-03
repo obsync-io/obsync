@@ -26,6 +26,56 @@ public sealed class ScheduleProfile
     /// <summary>Skip committing when no object changes are detected (a run still records history).</summary>
     public bool RunOnlyIfChanges { get; set; } = true;
 
+    // --- Maintenance window ---
+    // Restricts SCHEDULED runs to an allowed time-of-day (and day) range so Obsync stays off the
+    // server during business hours. Manual "Run Now" always bypasses the window.
+
+    /// <summary>When true, scheduled runs only start inside the window below.</summary>
+    public bool MaintenanceWindowEnabled { get; set; }
+
+    /// <summary>Local time the window opens (e.g. 22:00). May be later than <see cref="WindowEnd"/> to wrap midnight.</summary>
+    public TimeOnly WindowStart { get; set; } = new(22, 0);
+
+    /// <summary>Local time the window closes (e.g. 05:00).</summary>
+    public TimeOnly WindowEnd { get; set; } = new(5, 0);
+
+    /// <summary>Which days the window applies to.</summary>
+    public MaintenanceDayScope DayScope { get; set; } = MaintenanceDayScope.AnyDay;
+
+    /// <summary>
+    /// Whether <paramref name="localNow"/> is inside the maintenance window (always true when the window
+    /// is disabled). The time range wraps midnight when <see cref="WindowStart"/> &gt; <see cref="WindowEnd"/>;
+    /// the day check uses the day the window opened, so an overnight "weeknights" window treats
+    /// Friday 22:00–Saturday 05:00 as a Friday window.
+    /// </summary>
+    public bool IsWithinMaintenanceWindow(DateTimeOffset localNow)
+    {
+        if (!MaintenanceWindowEnabled)
+        {
+            return true;
+        }
+
+        var time = TimeOnly.FromDateTime(localNow.DateTime);
+        var inTimeRange = WindowStart <= WindowEnd
+            ? time >= WindowStart && time < WindowEnd
+            : time >= WindowStart || time < WindowEnd; // wraps midnight
+        if (!inTimeRange)
+        {
+            return false;
+        }
+
+        var windowDay = WindowStart > WindowEnd && time < WindowEnd
+            ? localNow.AddDays(-1).DayOfWeek
+            : localNow.DayOfWeek;
+
+        return DayScope switch
+        {
+            MaintenanceDayScope.WeekdaysOnly => windowDay is >= DayOfWeek.Monday and <= DayOfWeek.Friday,
+            MaintenanceDayScope.WeekendsOnly => windowDay is DayOfWeek.Saturday or DayOfWeek.Sunday,
+            _ => true,
+        };
+    }
+
     /// <summary>
     /// Computes the next run time after <paramref name="fromUtc"/> for the standard cadences
     /// (hourly/daily/weekly), in local time. Returns null for manual schedules and for
@@ -45,6 +95,13 @@ public sealed class ScheduleProfile
                 while (candidate.Hour % step != 0)
                 {
                     candidate = candidate.AddHours(1);
+                }
+
+                // A maintenance window can skip most hourly fires — advance to the next in-window hour so
+                // the displayed "next run" is the time the job will actually run. Bounded to ~8 days.
+                for (var i = 0; MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(candidate) && i < 200; i++)
+                {
+                    candidate = candidate.AddHours(step);
                 }
 
                 return candidate;
@@ -70,13 +127,29 @@ public sealed class ScheduleProfile
     }
 
     /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
-    public string Describe() => Kind switch
+    public string Describe()
     {
-        ScheduleKind.Manual => "Manual only",
-        ScheduleKind.Hourly => IntervalHours <= 1 ? "Every hour" : $"Every {IntervalHours} hours",
-        ScheduleKind.Daily => $"Daily at {TimeOfDay:HH:mm}",
-        ScheduleKind.Weekly => $"Weekly on {DayOfWeek} at {TimeOfDay:HH:mm}",
-        ScheduleKind.Cron => $"Cron: {CronExpression}",
-        _ => "Unknown",
-    };
+        var cadence = Kind switch
+        {
+            ScheduleKind.Manual => "Manual only",
+            ScheduleKind.Hourly => IntervalHours <= 1 ? "Every hour" : $"Every {IntervalHours} hours",
+            ScheduleKind.Daily => $"Daily at {TimeOfDay:HH:mm}",
+            ScheduleKind.Weekly => $"Weekly on {DayOfWeek} at {TimeOfDay:HH:mm}",
+            ScheduleKind.Cron => $"Cron: {CronExpression}",
+            _ => "Unknown",
+        };
+
+        if (!MaintenanceWindowEnabled)
+        {
+            return cadence;
+        }
+
+        var days = DayScope switch
+        {
+            MaintenanceDayScope.WeekdaysOnly => ", weekdays",
+            MaintenanceDayScope.WeekendsOnly => ", weekends",
+            _ => string.Empty,
+        };
+        return $"{cadence} · within {WindowStart:HH:mm}–{WindowEnd:HH:mm}{days}";
+    }
 }

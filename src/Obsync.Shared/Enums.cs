@@ -50,6 +50,14 @@ public enum CommitMode
     ExportOnly = 3,
 }
 
+/// <summary>Which days a maintenance window applies to.</summary>
+public enum MaintenanceDayScope
+{
+    AnyDay = 0,
+    WeekdaysOnly = 1,
+    WeekendsOnly = 2,
+}
+
 /// <summary>The cadence on which a sync job runs.</summary>
 public enum ScheduleKind
 {

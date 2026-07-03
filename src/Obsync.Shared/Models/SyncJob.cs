@@ -9,6 +9,12 @@ public sealed class JobAdvancedOptions
     /// <summary>SQL command timeout per query, in seconds.</summary>
     public int SqlCommandTimeoutSeconds { get; set; } = 120;
 
+    /// <summary>
+    /// SQL lock timeout in seconds — how long a metadata read waits on a blocked resource before
+    /// failing instead of hanging. 0 = don't set (use the server default / wait indefinitely).
+    /// </summary>
+    public int SqlLockTimeoutSeconds { get; set; }
+
     /// <summary>Number of attempts for transient SQL failures (deadlocks, timeouts, connection blips).</summary>
     public int SqlRetryCount { get; set; } = 3;
 
