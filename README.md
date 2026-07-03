@@ -108,6 +108,25 @@ for an app run, or the service account for a scheduled run). View the recent tra
 **Settings → Recent activity**. The trail lives in the local SQLite database and never contains
 secrets.
 
+## Ignoring objects (`.obsyncignore`)
+
+To keep noisy objects out of version control, commit a `.obsyncignore` file in a job's destination
+folder (the folder its scripts are written to). It is read on every run and never modified or deleted
+by Obsync. Sections are comma-separated; `#` starts a comment; a bare line is an object name glob
+(`*` = any run, `?` = one character), matched against `schema.name` and the bare name.
+
+```
+# .obsyncignore — exclude noisy objects from scripting
+schemas: staging, temp          # ignore whole schemas
+objects: dbo.tmp_*, *_bak       # ignore by name pattern
+types:   view, synonym          # ignore whole object types (table, "stored procedure"/proc, ...)
+dbo.zz_*                        # a bare line is an object glob
+```
+
+Ignored objects are simply not scripted; anything already committed for them is left untouched.
+Rules from `.obsyncignore` merge with a job's configured ignore patterns. (Zip exports have no
+persisted folder, so they honor only the job's configured patterns.)
+
 ## Building
 
 Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download) and Git on `PATH`.

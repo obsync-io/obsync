@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Obsync.Data.Repositories;
@@ -359,7 +358,7 @@ public sealed class SyncEngine : ISyncEngine
         var changedStates = new ConcurrentBag<TrackedObjectState>();
         var inventory = new ConcurrentBag<ObjectInventoryEntry>();
         var skipped = new ConcurrentBag<string>();
-        var ignorePatterns = context.Job.Selection.IgnorePatterns;
+        var ignoreRules = await LoadIgnoreRulesAsync(context, localPath, dbFolder, cancellationToken).ConfigureAwait(false);
 
         // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
         // database artifact). Artifacts ride the same change-detection path so an options- or
@@ -371,9 +370,10 @@ public sealed class SyncEngine : ISyncEngine
             var key = StateKey(identity);
             seen.TryAdd(key, 0);
 
-            // Honor ignore patterns: don't script or inventory an ignored object. It is marked "seen"
-            // above, so the deletion pass leaves whatever is already in the repo untouched.
-            if (!isArtifact && ignorePatterns.Count > 0 && MatchesAnyPattern(identity, ignorePatterns))
+            // Honor the ignore rules (.obsyncignore + the job's patterns): don't script or inventory an
+            // ignored object. It is marked "seen" above, so the deletion pass leaves whatever is already
+            // in the repo untouched.
+            if (!isArtifact && ignoreRules.Matches(identity.Type, identity.Schema, identity.Name))
             {
                 return;
             }
@@ -820,31 +820,38 @@ public sealed class SyncEngine : ISyncEngine
     private static string DescribeIdentity(ScriptedObjectIdentity identity) =>
         string.IsNullOrEmpty(identity.Schema) ? identity.Name : $"{identity.Schema}.{identity.Name}";
 
-    private static bool MatchesAnyPattern(ScriptedObjectIdentity identity, IReadOnlyList<string> patterns)
+    // Reads .obsyncignore from the destination folder(s) in the workspace and merges the job's own
+    // ignore patterns. For a multi-database job both the per-database folder and the shared
+    // destination root apply. A missing file is fine (no rules).
+    private static async Task<IgnoreRules> LoadIgnoreRulesAsync(
+        RunContext context, string localPath, string dbFolder, CancellationToken cancellationToken)
     {
-        var qualified = DescribeIdentity(identity);
-        foreach (var pattern in patterns)
+        var rules = new IgnoreRules();
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            if (string.IsNullOrWhiteSpace(pattern))
+            RepositoryLayout.Combine(dbFolder, RepositoryLayout.IgnoreFile),
+            RepositoryLayout.Combine(context.Job.DestinationFolder, RepositoryLayout.IgnoreFile),
+        };
+
+        foreach (var relative in candidates)
+        {
+            var path = Path.Combine(localPath, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
             {
                 continue;
             }
 
-            if (WildcardMatch(qualified, pattern) || WildcardMatch(identity.Name, pattern))
+            var parsed = IgnoreRules.Parse(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false));
+            rules.Schemas.AddRange(parsed.Schemas);
+            rules.ObjectPatterns.AddRange(parsed.ObjectPatterns);
+            foreach (var type in parsed.Types)
             {
-                return true;
+                rules.Types.Add(type);
             }
         }
 
-        return false;
-    }
-
-    // Case-insensitive glob match supporting * (any run) and ? (single char).
-    private static bool WildcardMatch(string text, string pattern)
-    {
-        var regex = "^" + Regex.Escape(pattern).Replace("\\*", ".*", StringComparison.Ordinal)
-            .Replace("\\?", ".", StringComparison.Ordinal) + "$";
-        return Regex.IsMatch(text, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        rules.AddObjectPatterns(context.Job.Selection.IgnorePatterns);
+        return rules;
     }
 
     private async Task PersistStatesAsync(RunContext context, RunStatus status, string? commitSha, CancellationToken cancellationToken)

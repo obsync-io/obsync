@@ -9,6 +9,9 @@ public static class RepositoryLayout
     /// <summary>Folder holding run metadata (object inventory, database options).</summary>
     public const string MetadataFolder = "metadata";
 
+    /// <summary>Optional user-authored ignore file, relative to the database root (like .gitignore).</summary>
+    public const string IgnoreFile = ".obsyncignore";
+
     /// <summary>JSON inventory of every tracked object, relative to the database root.</summary>
     public const string ObjectInventoryFile = "metadata/object-inventory.json";
 
