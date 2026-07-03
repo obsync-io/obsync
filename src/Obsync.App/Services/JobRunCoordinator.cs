@@ -51,14 +51,16 @@ public sealed class JobRunCoordinator : IJobRunCoordinator
 {
     private readonly ISyncEngine _engine;
     private readonly IAuditWriter _audit;
+    private readonly IProductionRunGuard _guard;
     private readonly ConcurrentDictionary<Guid, JobRunState> _states = new();
     private readonly HashSet<Guid> _running = [];
     private readonly object _gate = new();
 
-    public JobRunCoordinator(ISyncEngine engine, IAuditWriter audit)
+    public JobRunCoordinator(ISyncEngine engine, IAuditWriter audit, IProductionRunGuard guard)
     {
         _engine = engine;
         _audit = audit;
+        _guard = guard;
     }
 
     public event EventHandler<Guid>? RunStateChanged;
@@ -75,6 +77,15 @@ public sealed class JobRunCoordinator : IJobRunCoordinator
 
     public async Task<SyncRun?> RunAsync(Guid jobId, RunTrigger trigger, CancellationToken cancellationToken = default)
     {
+        // Manual runs against a production-tagged job need explicit confirmation. Done before the
+        // concurrency slot is taken so declining leaves no state behind. Scheduled/startup runs and
+        // the service host never flow through here, so they are never prompted.
+        if (trigger == RunTrigger.Manual
+            && !await _guard.ConfirmManualRunAsync(jobId, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
         lock (_gate)
         {
             // The concurrency guard: refuse to start a second run of the same job. This is the single

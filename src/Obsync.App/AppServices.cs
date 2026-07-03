@@ -23,6 +23,9 @@ public static class AppServices
         // Single owner of run execution: per-job concurrency guard + shared live state across screens.
         services.AddSingleton<IJobRunCoordinator, JobRunCoordinator>();
 
+        // Confirms a manual run against a production-tagged job (keyed off the configurable markers).
+        services.AddSingleton<IProductionRunGuard, ProductionRunGuard>();
+
         // Enterprise audit trail. Registered here (app composition root) because every audited
         // action originates in the app; the writer stamps the actor and timestamp itself.
         services.AddSingleton<IAuditWriter, AuditWriter>();

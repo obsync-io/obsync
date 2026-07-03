@@ -154,6 +154,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
 
     public async Task LoadAsync()
     {
+        ProductionTagsText = string.Join(", ", await _settings.GetProductionTagsAsync());
+
         var proxy = await _settings.GetProxyAsync();
         SelectedProxyMode = proxy.Mode;
         ProxyUrl = proxy.Url ?? string.Empty;
@@ -167,6 +169,42 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         foreach (var entry in events)
         {
             RecentActivity.Add(entry);
+        }
+    }
+
+    // --- Production tags ------------------------------------------------------------------------
+
+    /// <summary>Comma-separated tag words that mark a job as production (arms the Run-Now guard).</summary>
+    [ObservableProperty] private string _productionTagsText = string.Empty;
+
+    [ObservableProperty] private string? _productionTagsStatus;
+
+    [RelayCommand]
+    private async Task SaveProductionTagsAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        ProductionTagsStatus = "Saving…";
+        try
+        {
+            var markers = JobTags.Parse(ProductionTagsText);
+            await _settings.SetProductionTagsAsync(markers);
+            ProductionTagsText = string.Join(", ", markers);
+            ProductionTagsStatus = markers.Count == 0
+                ? "Saved — no tags mark production, so the run guard is off."
+                : $"Saved — jobs tagged {string.Join(", ", markers)} are treated as production.";
+        }
+        catch (Exception ex)
+        {
+            ProductionTagsStatus = $"Could not save — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 
