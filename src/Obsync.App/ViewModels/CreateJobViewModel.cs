@@ -69,6 +69,16 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private bool _runOnStartup;
     [ObservableProperty] private bool _runOnlyIfChanges = true;
 
+    [ObservableProperty] private bool _maintenanceWindowEnabled;
+    [ObservableProperty] private string _windowStart = "22:00";
+    [ObservableProperty] private string _windowEnd = "05:00";
+    [ObservableProperty] private MaintenanceDayScope _selectedDayScope = MaintenanceDayScope.AnyDay;
+
+    [ObservableProperty] private bool _showAdvanced;
+    [ObservableProperty] private int _maxParallelWorkers;
+    [ObservableProperty] private int _queryTimeoutSeconds = 120;
+    [ObservableProperty] private int _lockTimeoutSeconds;
+
     [ObservableProperty] private string? _statusMessage;
     [ObservableProperty] private bool _isBusy;
 
@@ -82,6 +92,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public IReadOnlyList<ScheduleKind> ScheduleKinds { get; } = Enum.GetValues<ScheduleKind>();
     public IReadOnlyList<DayOfWeek> DaysOfWeek { get; } = Enum.GetValues<DayOfWeek>();
     public IReadOnlyList<CommitMode> CommitModes { get; } = Enum.GetValues<CommitMode>();
+    public IReadOnlyList<MaintenanceDayScope> DayScopes { get; } = Enum.GetValues<MaintenanceDayScope>();
 
     /// <summary>True when the pull-request commit mode is selected (shows the reviewers field).</summary>
     public bool IsPullRequest => SelectedCommitMode == CommitMode.PullRequest;
@@ -238,6 +249,16 @@ public sealed partial class CreateJobViewModel : ObservableObject
         CronExpression = job.Schedule.CronExpression ?? "0 0 23 * * ?";
         RunOnStartup = job.Schedule.RunOnStartup;
         RunOnlyIfChanges = job.Schedule.RunOnlyIfChanges;
+
+        MaintenanceWindowEnabled = job.Schedule.MaintenanceWindowEnabled;
+        WindowStart = job.Schedule.WindowStart.ToString("HH:mm");
+        WindowEnd = job.Schedule.WindowEnd.ToString("HH:mm");
+        SelectedDayScope = job.Schedule.DayScope;
+
+        MaxParallelWorkers = job.Advanced.MaxParallelWorkers;
+        QueryTimeoutSeconds = job.Advanced.SqlCommandTimeoutSeconds;
+        LockTimeoutSeconds = job.Advanced.SqlLockTimeoutSeconds;
+        ShowAdvanced = job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0;
     }
 
     [RelayCommand]
@@ -331,6 +352,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
         3 when IsGitMode && string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
         4 when SelectedScheduleKind == ScheduleKind.Cron && string.IsNullOrWhiteSpace(CronExpression) => "Enter a cron expression.",
+        4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowStart, "HH:mm", out _) => "Enter a valid window start time (HH:mm).",
+        4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowEnd, "HH:mm", out _) => "Enter a valid window end time (HH:mm).",
         _ => null,
     };
 
@@ -360,6 +383,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
         ReviewItems.Add(new ReviewItem("Folder", EffectiveDestinationFolder(databases)));
         ReviewItems.Add(new ReviewItem("Schedule", BuildSchedule().Describe()));
+        if (MaxParallelWorkers != 0 || LockTimeoutSeconds != 0 || QueryTimeoutSeconds != 120)
+        {
+            var workers = MaxParallelWorkers == 0 ? "auto" : MaxParallelWorkers.ToString();
+            var lockText = LockTimeoutSeconds == 0 ? "server default" : $"{LockTimeoutSeconds}s";
+            ReviewItems.Add(new ReviewItem("Advanced", $"{workers} workers · query {QueryTimeoutSeconds}s · lock {lockText}"));
+        }
         ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges ? "Commit only when changes are detected" : "Always create a run"));
         ReviewItems.Add(new ReviewItem("Commit mode", SelectedCommitMode switch
         {
@@ -392,6 +421,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private ScheduleProfile BuildSchedule()
     {
         var time = TimeOnly.TryParseExact(TimeOfDay, "HH:mm", out var parsed) ? parsed : new TimeOnly(23, 0);
+        var start = TimeOnly.TryParseExact(WindowStart, "HH:mm", out var s) ? s : new TimeOnly(22, 0);
+        var end = TimeOnly.TryParseExact(WindowEnd, "HH:mm", out var e) ? e : new TimeOnly(5, 0);
         return new ScheduleProfile
         {
             Kind = SelectedScheduleKind,
@@ -401,6 +432,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
             CronExpression = CronExpression,
             RunOnStartup = RunOnStartup,
             RunOnlyIfChanges = RunOnlyIfChanges,
+            MaintenanceWindowEnabled = MaintenanceWindowEnabled,
+            WindowStart = start,
+            WindowEnd = end,
+            DayScope = SelectedDayScope,
         };
     }
 
@@ -428,7 +463,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         var selectedDatabases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
 
         // When editing, mutate the existing job so fields the wizard does not surface
-        // (Description, Enabled, Advanced options, RunSummary, and the non-preset Selection settings)
+        // (Description, Enabled, RunSummary, the retry counts, and the non-preset Selection settings)
         // are preserved instead of being reset to defaults by the upsert.
         var job = IsEditMode && _editingJob is not null ? _editingJob : new SyncJob();
         job.Name = Name.Trim();
@@ -449,6 +484,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
         }
 
         job.Schedule = BuildSchedule();
+        // Mutate the existing Advanced object so the unsurfaced retry counts are preserved.
+        job.Advanced.MaxParallelWorkers = Math.Max(0, MaxParallelWorkers);
+        job.Advanced.SqlCommandTimeoutSeconds = Math.Max(1, QueryTimeoutSeconds);
+        job.Advanced.SqlLockTimeoutSeconds = Math.Max(0, LockTimeoutSeconds);
         job.UpdatedAt = _clock.UtcNow;
         if (!IsEditMode)
         {
