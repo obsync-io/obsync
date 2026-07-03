@@ -34,14 +34,20 @@ public enum GitHubAuthMode
     // GitHub App and SSH/Git CLI modes are planned for later releases.
 }
 
-/// <summary>How a job's commits land in the destination repository.</summary>
+/// <summary>How a job's scripted output is delivered.</summary>
 public enum CommitMode
 {
     /// <summary>Commit directly to the configured branch and push.</summary>
     DirectCommit = 0,
 
-    /// <summary>Open a pull request instead of committing to the branch (planned).</summary>
+    /// <summary>Open a pull request instead of committing to the branch.</summary>
     PullRequest = 1,
+
+    /// <summary>Commit to the local clone but do not push (push later from an approved machine).</summary>
+    LocalCommitOnly = 2,
+
+    /// <summary>Write the scripts to a folder or .zip — no git and no GitHub repository required.</summary>
+    ExportOnly = 3,
 }
 
 /// <summary>The cadence on which a sync job runs.</summary>

@@ -1,4 +1,5 @@
 using Obsync.Data.Repositories;
+using Obsync.Shared;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
@@ -29,9 +30,17 @@ internal static class JobDisplay
                 ? connection.ServerName
                 : job.DatabasesDisplay;
 
-            job.DestinationDisplay = repositoriesById.TryGetValue(job.RepositoryProfileId, out var repository)
-                ? $"{repository.FullName} · {(string.IsNullOrWhiteSpace(job.Branch) ? repository.DefaultBranch : job.Branch)}"
-                : "—";
+            // Export Only jobs have no repository — show the export destination instead.
+            if (job.CommitMode == CommitMode.ExportOnly)
+            {
+                job.DestinationDisplay = string.IsNullOrWhiteSpace(job.ExportPath) ? "Export" : $"Export → {job.ExportPath}";
+            }
+            else
+            {
+                job.DestinationDisplay = job.RepositoryProfileId is { } repoId && repositoriesById.TryGetValue(repoId, out var repository)
+                    ? $"{repository.FullName} · {(string.IsNullOrWhiteSpace(job.Branch) ? repository.DefaultBranch : job.Branch)}"
+                    : "—";
+            }
         }
     }
 }

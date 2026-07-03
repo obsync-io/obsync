@@ -32,12 +32,13 @@ public sealed class JobRepository : IJobRepository
         public string? Description { get; set; }
         public long Enabled { get; set; }
         public string ConnectionProfileId { get; set; } = string.Empty;
-        public string RepositoryProfileId { get; set; } = string.Empty;
+        public string? RepositoryProfileId { get; set; }
         public string DatabasesJson { get; set; } = "[]";
         public string? Branch { get; set; }
         public string DestinationFolder { get; set; } = string.Empty;
         public long CommitMode { get; set; }
         public string? LocalExportPath { get; set; }
+        public string? ExportPath { get; set; }
         public string? ReviewersJson { get; set; }
         public string SelectionJson { get; set; } = "{}";
         public string ScheduleJson { get; set; } = "{}";
@@ -51,7 +52,8 @@ public sealed class JobRepository : IJobRepository
         SELECT id AS Id, name AS Name, description AS Description, enabled AS Enabled,
                connection_profile_id AS ConnectionProfileId, repository_profile_id AS RepositoryProfileId,
                databases_json AS DatabasesJson, branch AS Branch, destination_folder AS DestinationFolder,
-               commit_mode AS CommitMode, local_export_path AS LocalExportPath, reviewers_json AS ReviewersJson,
+               commit_mode AS CommitMode, local_export_path AS LocalExportPath, export_path AS ExportPath,
+               reviewers_json AS ReviewersJson,
                selection_json AS SelectionJson,
                schedule_json AS ScheduleJson, advanced_json AS AdvancedJson, run_summary_json AS RunSummaryJson,
                created_at AS CreatedAt, updated_at AS UpdatedAt
@@ -83,10 +85,10 @@ public sealed class JobRepository : IJobRepository
             """
             INSERT INTO jobs
                 (id, name, description, enabled, connection_profile_id, repository_profile_id, databases_json,
-                 branch, destination_folder, commit_mode, local_export_path, reviewers_json, selection_json, schedule_json,
+                 branch, destination_folder, commit_mode, local_export_path, export_path, reviewers_json, selection_json, schedule_json,
                  advanced_json, run_summary_json, created_at, updated_at)
             VALUES
-                ($id, $name, $desc, $enabled, $conn, $repo, $dbs, $branch, $folder, $commit, $local, $reviewers,
+                ($id, $name, $desc, $enabled, $conn, $repo, $dbs, $branch, $folder, $commit, $local, $export, $reviewers,
                  $selection, $schedule, $advanced, $summary, $created, $updated)
             ON CONFLICT (id) DO UPDATE SET
                 name = excluded.name, description = excluded.description, enabled = excluded.enabled,
@@ -94,7 +96,7 @@ public sealed class JobRepository : IJobRepository
                 repository_profile_id = excluded.repository_profile_id, databases_json = excluded.databases_json,
                 branch = excluded.branch, destination_folder = excluded.destination_folder,
                 commit_mode = excluded.commit_mode, local_export_path = excluded.local_export_path,
-                reviewers_json = excluded.reviewers_json,
+                export_path = excluded.export_path, reviewers_json = excluded.reviewers_json,
                 selection_json = excluded.selection_json, schedule_json = excluded.schedule_json,
                 advanced_json = excluded.advanced_json,
                 -- run_summary_json is intentionally NOT overwritten here: it is owned by the engine
@@ -109,12 +111,13 @@ public sealed class JobRepository : IJobRepository
                 desc = job.Description,
                 enabled = job.Enabled ? 1 : 0,
                 conn = job.ConnectionProfileId.ToString(),
-                repo = job.RepositoryProfileId.ToString(),
+                repo = job.RepositoryProfileId?.ToString(),
                 dbs = ObsyncJson.Serialize(job.Databases),
                 branch = job.Branch,
                 folder = job.DestinationFolder,
                 commit = (int)job.CommitMode,
                 local = job.LocalExportPath,
+                export = job.ExportPath,
                 reviewers = ObsyncJson.Serialize(job.Reviewers),
                 selection = ObsyncJson.Serialize(job.Selection),
                 schedule = ObsyncJson.Serialize(job.Schedule),
@@ -168,12 +171,13 @@ public sealed class JobRepository : IJobRepository
             Description = row.Description,
             Enabled = row.Enabled != 0,
             ConnectionProfileId = Guid.Parse(row.ConnectionProfileId),
-            RepositoryProfileId = Guid.Parse(row.RepositoryProfileId),
+            RepositoryProfileId = string.IsNullOrEmpty(row.RepositoryProfileId) ? null : Guid.Parse(row.RepositoryProfileId),
             Databases = ObsyncJson.Deserialize<List<string>>(row.DatabasesJson),
             Branch = row.Branch,
             DestinationFolder = row.DestinationFolder,
             CommitMode = (CommitMode)row.CommitMode,
             LocalExportPath = row.LocalExportPath,
+            ExportPath = row.ExportPath,
             Reviewers = string.IsNullOrEmpty(row.ReviewersJson) ? [] : ObsyncJson.Deserialize<List<string>>(row.ReviewersJson),
             Selection = selection,
             Schedule = ObsyncJson.Deserialize<ScheduleProfile>(row.ScheduleJson),

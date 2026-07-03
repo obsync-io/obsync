@@ -28,6 +28,13 @@ public sealed class DatabaseInitializer : IDatabaseInitializer
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
 
+        // Run migrations with foreign keys disabled so a table-rebuild migration (create-new, copy,
+        // DROP the old referenced table, rename) succeeds. The pragma is connection-scoped and a no-op
+        // inside a transaction, so it is set here, before the per-migration transactions; this
+        // init-only connection is disposed at the end. Runtime connections still enable foreign keys
+        // (SqliteConnectionFactory sets them ON per connection), so enforcement is unchanged.
+        await ExecuteAsync(connection, "PRAGMA foreign_keys = OFF;", cancellationToken).ConfigureAwait(false);
+
         await ExecuteAsync(
             connection,
             "CREATE TABLE IF NOT EXISTS __migrations (version TEXT NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);",

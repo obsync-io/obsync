@@ -130,7 +130,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
         }
 
         var connection = await _connections.GetAsync(job.ConnectionProfileId);
-        _repository = await _repositories.GetAsync(job.RepositoryProfileId);
+        _repository = job.RepositoryProfileId is { } repoId ? await _repositories.GetAsync(repoId) : null;
 
         ConnectionName = connection?.Name ?? "—";
         ServerName = connection?.ServerName ?? "—";

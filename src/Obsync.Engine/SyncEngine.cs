@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -87,13 +88,25 @@ public sealed class SyncEngine : ISyncEngine
             ?? throw new InvalidOperationException($"Job {jobId} was not found.");
         var connection = await _connections.GetAsync(job.ConnectionProfileId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The job's SQL connection profile was not found.");
-        var repository = await _repositories.GetAsync(job.RepositoryProfileId, cancellationToken).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("The job's GitHub repository profile was not found.");
+
+        // Export Only has no GitHub repository or token; the git modes load both.
+        GitRepositoryProfile? repository = null;
+        string? gitToken = null;
+        if (job.CommitMode != CommitMode.ExportOnly)
+        {
+            if (job.RepositoryProfileId is not { } repositoryId)
+            {
+                throw new InvalidOperationException("The job has no destination repository.");
+            }
+
+            repository = await _repositories.GetAsync(repositoryId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The job's GitHub repository profile was not found.");
+            gitToken = _credentialStore.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+        }
 
         var sqlPassword = connection.RequiresPassword
             ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(connection.Id))
             : null;
-        var gitToken = _credentialStore.Retrieve(CredentialKeys.GitHubToken(repository.Id));
 
         var started = _clock.UtcNow;
         var run = new SyncRun
@@ -184,6 +197,13 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
+        // Export Only scripts straight to a folder/zip — no git clone, commit, push, or token.
+        if (context.Job.CommitMode == CommitMode.ExportOnly)
+        {
+            await ExecuteExportAsync(run, context, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (string.IsNullOrEmpty(context.GitToken))
         {
             run.Status = RunStatus.Failed;
@@ -197,12 +217,12 @@ public sealed class SyncEngine : ISyncEngine
 
         context.Report(SyncPhase.Connecting, $"Connecting to {context.Connection.ServerName}…");
 
-        var baseBranch = string.IsNullOrWhiteSpace(context.Job.Branch) ? context.Repository.DefaultBranch : context.Job.Branch!;
+        var baseBranch = string.IsNullOrWhiteSpace(context.Job.Branch) ? context.Repository!.DefaultBranch : context.Job.Branch!;
         var isPullRequest = context.Job.CommitMode == CommitMode.PullRequest;
         // Pull request mode commits to a fresh per-run head branch cut from the base; direct mode
         // commits straight to the base branch.
         var headBranch = isPullRequest ? HeadBranchName(context.Job.Name, run.RunKey) : baseBranch;
-        var localPath = Path.Combine(_options.WorkspacesRoot, context.Repository.Id.ToString("N"));
+        var localPath = Path.Combine(_options.WorkspacesRoot, context.Repository!.Id.ToString("N"));
         var gitContext = new GitWorkspaceContext
         {
             RemoteUrl = context.Repository.EffectiveRemoteUrl,
@@ -235,16 +255,79 @@ public sealed class SyncEngine : ISyncEngine
         await FinalizeAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
     }
 
+    // Export Only: script a full snapshot straight to a folder or .zip — no git, no GitHub, no state.
+    private async Task ExecuteExportAsync(SyncRun run, RunContext context, CancellationToken cancellationToken)
+    {
+        var destination = context.Job.ExportPath;
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage = "Export Only requires an export destination (a folder or a .zip path).";
+            context.Log(SyncLogLevel.Error, run.ErrorMessage);
+            return;
+        }
+
+        var isZip = destination.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+        var outputRoot = isZip
+            ? Path.Combine(Path.GetTempPath(), $"obsync-export-{run.Id:N}")
+            : destination;
+
+        context.Report(SyncPhase.Connecting, $"Connecting to {context.Connection.ServerName}…");
+        Directory.CreateDirectory(outputRoot);
+
+        var types = context.Job.Selection.ResolveTypes();
+        foreach (var database in context.Job.Databases)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ScriptDatabaseAsync(run, context, database, types, outputRoot, cancellationToken, fullSnapshot: true)
+                .ConfigureAwait(false);
+        }
+
+        if (isZip)
+        {
+            context.Report(SyncPhase.Committing, "Packaging the export…");
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+
+            ZipFile.CreateFromDirectory(outputRoot, destination, CompressionLevel.Optimal, includeBaseDirectory: false);
+            try
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup of the temp staging directory.
+            }
+        }
+
+        run.ObjectsScanned = context.Scanned;
+        run.ObjectsAdded = context.Added;
+        run.ObjectsFailed = context.Failed;
+        run.Status = context.Scanned == 0 ? RunStatus.NoChanges : RunStatus.Succeeded;
+        EscalateForSkips(run, context);
+        context.Log(SyncLogLevel.Info,
+            run.Status == RunStatus.NoChanges
+                ? "No objects to export."
+                : $"Exported {context.Added:N0} object(s) to {destination}.");
+        context.Report(SyncPhase.Completed, "Run completed.");
+    }
+
     private async Task ScriptDatabaseAsync(
         SyncRun run, RunContext context, string database, IReadOnlyList<SqlObjectType> types,
-        string localPath, CancellationToken cancellationToken)
+        string localPath, CancellationToken cancellationToken, bool fullSnapshot = false)
     {
         var dbFolder = context.Job.Databases.Count > 1
             ? RepositoryLayout.Combine(context.Job.DestinationFolder, database)
             : context.Job.DestinationFolder;
 
-        var prior = (await _objectStates.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false))
-            .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
+        // Export Only writes a full snapshot: an empty prior map makes every object "Added" (so all
+        // are written), the deletion pass a no-op, and no object_states are consulted.
+        var prior = fullSnapshot
+            ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
+            : (await _objectStates.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false))
+                .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
 
         // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
         // `prior` is only read during processing, so a plain dictionary is safe to share.
@@ -507,6 +590,7 @@ public sealed class SyncEngine : ISyncEngine
         if (!hasChanges)
         {
             var isPullRequest = gitContext.BaseBranch is not null;
+            var isLocalOnly = context.Job.CommitMode == CommitMode.LocalCommitOnly;
 
             // No object changes this run. In DIRECT mode two things can still need doing:
             //  1) A prior run may have committed but failed to push — re-push it now (never lose work).
@@ -516,7 +600,7 @@ public sealed class SyncEngine : ISyncEngine
             {
                 await CommitAndPushAsync(run, context, gitContext, allowEmpty: true, cancellationToken).ConfigureAwait(false);
             }
-            else if (!isPullRequest && await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
+            else if (!isPullRequest && !isLocalOnly && await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
             {
                 context.Log(SyncLogLevel.Info, "No new changes, but a previous commit was never pushed — pushing it now.");
                 await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
@@ -554,18 +638,33 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
+        var isLocalOnly = context.Job.CommitMode == CommitMode.LocalCommitOnly;
+
         if (commit.CommitSha is not null)
         {
             run.CommitSha = commit.CommitSha;
-            run.CommitUrl = GitHubService.BuildCommitUrl(context.Repository.Owner, context.Repository.RepositoryName, commit.CommitSha);
+            // Local Commit Only never pushes, so a github.com commit URL would 404 — omit it.
+            if (!isLocalOnly)
+            {
+                run.CommitUrl = GitHubService.BuildCommitUrl(context.Repository!.Owner, context.Repository.RepositoryName, commit.CommitSha);
+            }
+
             context.Log(SyncLogLevel.Info, $"Created commit {commit.CommitSha[..Math.Min(7, commit.CommitSha.Length)]}.");
         }
 
-        // Nothing to push (no new commit and no stranded commit) → a genuine no-op.
+        // Nothing new to do (no new commit, and — for the push modes — no stranded commit either).
         if (!commit.HadChanges
-            && !await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false))
+            && (isLocalOnly || !await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false)))
         {
             run.Status = RunStatus.NoChanges;
+            return;
+        }
+
+        // Local Commit Only stops here: the commit lives in the local clone, to be pushed later.
+        if (isLocalOnly)
+        {
+            run.Status = RunStatus.Succeeded;
+            context.Log(SyncLogLevel.Info, "Committed locally (not pushed).");
             return;
         }
 
@@ -583,7 +682,7 @@ public sealed class SyncEngine : ISyncEngine
     {
         context.Report(SyncPhase.Pushing, "Opening the pull request…");
         var result = await _gitHub.CreatePullRequestAsync(
-            context.GitToken!, context.Repository.Owner, context.Repository.RepositoryName,
+            context.GitToken!, context.Repository!.Owner, context.Repository.RepositoryName,
             title, gitContext.Branch, gitContext.BaseBranch!, body, context.Job.Reviewers, cancellationToken).ConfigureAwait(false);
 
         if (result.IsFailure)
@@ -760,7 +859,7 @@ public sealed class SyncEngine : ISyncEngine
     {
         private readonly IProgress<SyncProgress>? _progress;
 
-        public RunContext(SyncJob job, SqlConnectionProfile connection, GitRepositoryProfile repository,
+        public RunContext(SyncJob job, SqlConnectionProfile connection, GitRepositoryProfile? repository,
             string? sqlPassword, string? gitToken, IProgress<SyncProgress>? progress)
         {
             Job = job;
@@ -773,7 +872,7 @@ public sealed class SyncEngine : ISyncEngine
 
         public SyncJob Job { get; }
         public SqlConnectionProfile Connection { get; }
-        public GitRepositoryProfile Repository { get; }
+        public GitRepositoryProfile? Repository { get; }
         public string? SqlPassword { get; }
         public string? GitToken { get; }
 

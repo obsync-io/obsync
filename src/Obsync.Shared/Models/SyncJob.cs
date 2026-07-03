@@ -48,7 +48,9 @@ public sealed class SyncJob
     public List<string> Databases { get; set; } = [];
 
     // --- Destination ---
-    public Guid RepositoryProfileId { get; set; }
+
+    /// <summary>The GitHub repository for the git modes; null for <see cref="CommitMode.ExportOnly"/>.</summary>
+    public Guid? RepositoryProfileId { get; set; }
 
     /// <summary>Branch to commit to. Falls back to the repository's default branch when empty.</summary>
     public string? Branch { get; set; }
@@ -63,6 +65,12 @@ public sealed class SyncJob
 
     /// <summary>Optional local path to also save the scripted output to.</summary>
     public string? LocalExportPath { get; set; }
+
+    /// <summary>
+    /// The destination for <see cref="CommitMode.ExportOnly"/> — a folder or a <c>.zip</c> path (a UNC
+    /// path is allowed, for a network share). Null for the git modes.
+    /// </summary>
+    public string? ExportPath { get; set; }
 
     /// <summary>
     /// GitHub usernames to request as reviewers on the pull request (<see cref="CommitMode.PullRequest"/>
