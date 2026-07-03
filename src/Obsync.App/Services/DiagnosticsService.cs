@@ -38,6 +38,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
     private readonly ICredentialStore _credentials;
     private readonly IConnectionProfileRepository _servers;
     private readonly IRepositoryProfileRepository _repositories;
+    private readonly IProxyProvider _proxy;
 
     public DiagnosticsService(
         ISqlServerProbe probe,
@@ -45,7 +46,8 @@ public sealed class DiagnosticsService : IDiagnosticsService
         IGitCommandRunner git,
         ICredentialStore credentials,
         IConnectionProfileRepository servers,
-        IRepositoryProfileRepository repositories)
+        IRepositoryProfileRepository repositories,
+        IProxyProvider proxy)
     {
         _probe = probe;
         _gitHub = gitHub;
@@ -53,6 +55,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         _credentials = credentials;
         _servers = servers;
         _repositories = repositories;
+        _proxy = proxy;
     }
 
     public async Task<IReadOnlyList<DiagnosticResult>> RunAsync(CancellationToken cancellationToken = default)
@@ -62,6 +65,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
             await CheckGitAsync(cancellationToken).ConfigureAwait(false),
             CheckDiskSpace(),
             CheckService(),
+            await CheckProxyAsync(cancellationToken).ConfigureAwait(false),
         };
 
         foreach (var server in await _servers.GetAllAsync(cancellationToken).ConfigureAwait(false))
@@ -131,6 +135,20 @@ public sealed class DiagnosticsService : IDiagnosticsService
             return new DiagnosticResult("Obsync service", DiagnosticStatus.Warning,
                 "Not installed. Scheduled runs need the Obsync Windows Service; install it to enable them.");
         }
+    }
+
+    private async Task<DiagnosticResult> CheckProxyAsync(CancellationToken cancellationToken)
+    {
+        var resolution = await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        if (resolution is null)
+        {
+            return new DiagnosticResult("Proxy", DiagnosticStatus.Pass, "Direct connection (no proxy).");
+        }
+
+        var result = await _proxy.TestAsync(cancellationToken).ConfigureAwait(false);
+        return result.IsSuccess
+            ? new DiagnosticResult("Proxy", DiagnosticStatus.Pass, "GitHub is reachable through the proxy.")
+            : new DiagnosticResult("Proxy", DiagnosticStatus.Fail, result.Error ?? "The proxy test failed.");
     }
 
     private async Task<DiagnosticResult> CheckServerAsync(SqlConnectionProfile server, CancellationToken cancellationToken)

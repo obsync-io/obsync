@@ -121,6 +121,50 @@
                 </StackPanel>
             </Border>
 
+            <!-- Proxy -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="Proxy" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="How Obsync reaches GitHub (API and git). SQL Server connects directly. Shared by the app and the Windows Service." />
+
+                    <TextBlock Text="MODE" Style="{StaticResource Caption}" />
+                    <ComboBox ItemsSource="{Binding ProxyModes}" SelectedItem="{Binding SelectedProxyMode}" Margin="0,4,0,16">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
+                    <StackPanel Visibility="{Binding IsManualProxy, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="PROXY URL (e.g. http://proxy.corp:8080)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding ProxyUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                        <TextBlock Text="USERNAME (OPTIONAL)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding ProxyUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                        <TextBlock Text="PASSWORD (LEAVE BLANK TO KEEP THE SAVED ONE)" Style="{StaticResource Caption}" />
+                        <PasswordBox x:Name="ProxyPasswordBox" PasswordChanged="OnProxyPasswordChanged" Margin="0,4,0,16" />
+
+                        <TextBlock Text="BYPASS (COMMA-SEPARATED HOSTS THAT CONNECT DIRECTLY)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding ProxyBypass, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="For scheduled runs the Windows Service account often has no OS proxy — use Manual for reliable service operation." />
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Save proxy" Style="{StaticResource PrimaryButton}" Command="{Binding SaveProxyCommand}" Margin="0,0,8,0"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                        <Button Content="Test proxy" Style="{StaticResource SecondaryButton}" Command="{Binding TestProxyCommand}"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding ProxyStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding ProxyStatus, Converter={StaticResource NullToVisibility}}" />
+                </StackPanel>
+            </Border>
+
             <!-- Diagnostics + support bundle -->
             <Border Style="{StaticResource Card}" Margin="0,0,0,18">
                 <StackPanel>

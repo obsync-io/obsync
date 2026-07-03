@@ -3,6 +3,7 @@ using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.App.Services;
+using Obsync.Data.Repositories;
 using Obsync.Metadata;
 using Obsync.Shared;
 using Obsync.Shared.Abstractions;
@@ -12,19 +13,31 @@ namespace Obsync.App.ViewModels;
 
 /// <summary>
 /// Application settings, local data locations, the least-privilege SQL permission tool, diagnostics +
-/// the support bundle, and the audit trail.
+/// the support bundle, the proxy configuration, and the audit trail.
 /// </summary>
 public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewModel
 {
     private readonly IAuditWriter _audit;
     private readonly IDiagnosticsService _diagnostics;
     private readonly ISupportBundleWriter _bundle;
+    private readonly IAppSettingsRepository _settings;
+    private readonly ICredentialStore _credentials;
+    private readonly IProxyProvider _proxy;
 
-    public SettingsViewModel(IAuditWriter audit, IDiagnosticsService diagnostics, ISupportBundleWriter bundle)
+    public SettingsViewModel(
+        IAuditWriter audit,
+        IDiagnosticsService diagnostics,
+        ISupportBundleWriter bundle,
+        IAppSettingsRepository settings,
+        ICredentialStore credentials,
+        IProxyProvider proxy)
     {
         _audit = audit;
         _diagnostics = diagnostics;
         _bundle = bundle;
+        _settings = settings;
+        _credentials = credentials;
+        _proxy = proxy;
     }
 
     public string DataRoot => ObsyncPaths.Root;
@@ -141,11 +154,118 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
 
     public async Task LoadAsync()
     {
+        var proxy = await _settings.GetProxyAsync();
+        SelectedProxyMode = proxy.Mode;
+        ProxyUrl = proxy.Url ?? string.Empty;
+        ProxyUsername = proxy.Username ?? string.Empty;
+        ProxyBypass = string.Join(", ", proxy.BypassHosts);
+        ProxyPassword = string.Empty;
+        ProxyPasswordShouldClear?.Invoke(this, EventArgs.Empty);
+
         var events = await _audit.GetRecentAsync(50);
         RecentActivity.Clear();
         foreach (var entry in events)
         {
             RecentActivity.Add(entry);
+        }
+    }
+
+    // --- Proxy ----------------------------------------------------------------------------------
+
+    [ObservableProperty] private ProxyMode _selectedProxyMode = ProxyMode.None;
+    [ObservableProperty] private string _proxyUrl = string.Empty;
+    [ObservableProperty] private string _proxyUsername = string.Empty;
+    [ObservableProperty] private string _proxyBypass = string.Empty;
+    [ObservableProperty] private string? _proxyStatus;
+
+    /// <summary>Set from the view's PasswordBox; never bound directly.</summary>
+    public string ProxyPassword { get; set; } = string.Empty;
+
+    public IReadOnlyList<ProxyMode> ProxyModes { get; } = Enum.GetValues<ProxyMode>();
+
+    /// <summary>True for Manual mode — reveals the URL / credentials / bypass inputs.</summary>
+    public bool IsManualProxy => SelectedProxyMode == ProxyMode.Manual;
+
+    /// <summary>Raised so the view clears its proxy-password PasswordBox (after save / reload).</summary>
+    public event EventHandler? ProxyPasswordShouldClear;
+
+    partial void OnSelectedProxyModeChanged(ProxyMode value) => OnPropertyChanged(nameof(IsManualProxy));
+
+    [RelayCommand]
+    private async Task SaveProxyAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        ProxyStatus = "Saving proxy settings…";
+        try
+        {
+            var settings = new ProxySettings
+            {
+                Mode = SelectedProxyMode,
+                Url = string.IsNullOrWhiteSpace(ProxyUrl) ? null : ProxyUrl.Trim(),
+                Username = string.IsNullOrWhiteSpace(ProxyUsername) ? null : ProxyUsername.Trim(),
+                BypassHosts = [.. ProxyBypass
+                    .Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
+            };
+            await _settings.UpsertProxyAsync(settings);
+
+            // Store the password when provided; keep the saved one when blank on an authenticated
+            // manual proxy (mirrors the server/repo edit pattern); otherwise remove it.
+            if (settings.RequiresPassword)
+            {
+                if (!string.IsNullOrEmpty(ProxyPassword))
+                {
+                    _credentials.Store(CredentialKeys.Proxy(), ProxyPassword);
+                }
+            }
+            else
+            {
+                _credentials.Delete(CredentialKeys.Proxy());
+            }
+
+            ProxyPassword = string.Empty;
+            ProxyPasswordShouldClear?.Invoke(this, EventArgs.Empty);
+            ProxyStatus = "Proxy settings saved.";
+        }
+        catch (Exception ex)
+        {
+            ProxyStatus = $"Could not save the proxy settings — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task TestProxyAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        ProxyStatus = "Testing the connection to GitHub…";
+        try
+        {
+            // Tests the SAVED settings — save first if you have just edited them.
+            var result = await _proxy.TestAsync();
+            ProxyStatus = result.IsSuccess
+                ? "Reachable — GitHub responded through the current proxy setting."
+                : result.Error;
+        }
+        catch (Exception ex)
+        {
+            ProxyStatus = $"Test failed — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 
