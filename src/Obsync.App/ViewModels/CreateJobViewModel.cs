@@ -59,6 +59,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private string? _localExportPath;
     [ObservableProperty] private CommitMode _selectedCommitMode = CommitMode.DirectCommit;
     [ObservableProperty] private string _reviewers = string.Empty;
+    [ObservableProperty] private string _exportPath = string.Empty;
 
     [ObservableProperty] private ScheduleKind _selectedScheduleKind = ScheduleKind.Manual;
     [ObservableProperty] private int _intervalHours = 1;
@@ -85,7 +86,18 @@ public sealed partial class CreateJobViewModel : ObservableObject
     /// <summary>True when the pull-request commit mode is selected (shows the reviewers field).</summary>
     public bool IsPullRequest => SelectedCommitMode == CommitMode.PullRequest;
 
-    partial void OnSelectedCommitModeChanged(CommitMode value) => OnPropertyChanged(nameof(IsPullRequest));
+    /// <summary>True for Export Only — shows the export-destination field and hides repository/branch.</summary>
+    public bool IsExportOnly => SelectedCommitMode == CommitMode.ExportOnly;
+
+    /// <summary>True for the git modes (Direct / PR / Local commit) — shows repository + branch.</summary>
+    public bool IsGitMode => !IsExportOnly;
+
+    partial void OnSelectedCommitModeChanged(CommitMode value)
+    {
+        OnPropertyChanged(nameof(IsPullRequest));
+        OnPropertyChanged(nameof(IsExportOnly));
+        OnPropertyChanged(nameof(IsGitMode));
+    }
 
     public event EventHandler? Saved;
 
@@ -205,6 +217,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         LocalExportPath = job.LocalExportPath;
         SelectedCommitMode = job.CommitMode;
         Reviewers = string.Join(", ", job.Reviewers);
+        ExportPath = job.ExportPath ?? string.Empty;
         SelectedPreset = job.Selection.Preset;
 
         Databases.Clear();
@@ -314,8 +327,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
         1 when SelectedConnection is null => "Select a server.",
         1 when !Databases.Any(d => d.IsSelected) => "Select at least one database.",
         2 when IsCustomPreset && !ObjectTypes.Any(t => t.IsSelected) => "Select at least one object type for the Custom preset.",
-        3 when SelectedRepository is null => "Select a destination repository.",
-        3 when string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
+        3 when IsExportOnly && string.IsNullOrWhiteSpace(ExportPath) => "Enter an export destination (a folder or .zip path).",
+        3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
+        3 when IsGitMode && string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
         4 when SelectedScheduleKind == ScheduleKind.Cron && string.IsNullOrWhiteSpace(CronExpression) => "Enter a cron expression.",
         _ => null,
     };
@@ -334,13 +348,26 @@ public sealed partial class CreateJobViewModel : ObservableObject
             : $"{SelectedConnection.Name} ({SelectedConnection.ServerName}) · {SelectedConnection.AuthenticationMode}"));
         ReviewItems.Add(new ReviewItem("Databases", databases.Count == 0 ? "—" : string.Join(", ", databases)));
         ReviewItems.Add(new ReviewItem("Objects", objects));
-        ReviewItems.Add(new ReviewItem("Repository", SelectedRepository?.FullName ?? "—"));
-        ReviewItems.Add(new ReviewItem("Branch", Branch));
+        if (IsExportOnly)
+        {
+            ReviewItems.Add(new ReviewItem("Export to", string.IsNullOrWhiteSpace(ExportPath) ? "—" : ExportPath.Trim()));
+        }
+        else
+        {
+            ReviewItems.Add(new ReviewItem("Repository", SelectedRepository?.FullName ?? "—"));
+            ReviewItems.Add(new ReviewItem("Branch", Branch));
+        }
+
         ReviewItems.Add(new ReviewItem("Folder", EffectiveDestinationFolder(databases)));
         ReviewItems.Add(new ReviewItem("Schedule", BuildSchedule().Describe()));
         ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges ? "Commit only when changes are detected" : "Always create a run"));
-        ReviewItems.Add(new ReviewItem("Commit mode",
-            SelectedCommitMode == CommitMode.PullRequest ? $"Pull request → {Branch}" : "Direct commit & push"));
+        ReviewItems.Add(new ReviewItem("Commit mode", SelectedCommitMode switch
+        {
+            CommitMode.PullRequest => $"Pull request → {Branch}",
+            CommitMode.LocalCommitOnly => "Local commit (not pushed)",
+            CommitMode.ExportOnly => "Export only (no GitHub)",
+            _ => "Direct commit & push",
+        }));
         if (SelectedCommitMode == CommitMode.PullRequest && ParseReviewers(Reviewers) is { Count: > 0 } reviewers)
         {
             ReviewItems.Add(new ReviewItem("Reviewers", string.Join(", ", reviewers)));
@@ -406,9 +433,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         var job = IsEditMode && _editingJob is not null ? _editingJob : new SyncJob();
         job.Name = Name.Trim();
         job.ConnectionProfileId = SelectedConnection!.Id;
-        job.RepositoryProfileId = SelectedRepository!.Id;
+        // Export Only has no GitHub repository/branch; the git modes require one (validated above).
+        job.RepositoryProfileId = IsExportOnly ? null : SelectedRepository!.Id;
+        job.Branch = IsExportOnly ? null : (string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim());
+        job.ExportPath = IsExportOnly ? ExportPath.Trim() : null;
         job.Databases = selectedDatabases;
-        job.Branch = string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim();
         job.DestinationFolder = EffectiveDestinationFolder(selectedDatabases);
         job.LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim();
         job.CommitMode = SelectedCommitMode;

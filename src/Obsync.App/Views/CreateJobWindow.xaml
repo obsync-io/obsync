@@ -411,30 +411,40 @@
                 <Border Style="{StaticResource Card}" Visibility="{Binding IsStep3, Converter={StaticResource BoolToVisibility}}">
                     <StackPanel>
                         <TextBlock Text="Destination" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                        <TextBlock Text="Where committed scripts are written." Style="{StaticResource Caption}" Margin="0,0,0,18" />
-
-                        <TextBlock Text="GITHUB REPOSITORY" Style="{StaticResource Caption}" />
-                        <ComboBox ItemsSource="{Binding Repositories}" SelectedItem="{Binding SelectedRepository}"
-                                  DisplayMemberPath="FullName" Margin="0,4,0,16" />
-
-                        <TextBlock Text="BRANCH" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding Branch, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                        <TextBlock Text="How and where the scripted objects are delivered." Style="{StaticResource Caption}" Margin="0,0,0,18" />
 
                         <TextBlock Text="COMMIT MODE" Style="{StaticResource Caption}" />
-                        <ComboBox ItemsSource="{Binding CommitModes}" SelectedItem="{Binding SelectedCommitMode}" Margin="0,4,0,4">
+                        <ComboBox ItemsSource="{Binding CommitModes}" SelectedItem="{Binding SelectedCommitMode}" Margin="0,4,0,16">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
-                        <TextBlock Text="Pull request: each run with changes commits to a new branch and opens a PR into the branch above."
-                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16"
-                                   Visibility="{Binding IsPullRequest, Converter={StaticResource BoolToVisibility}}" />
+
+                        <!-- Git modes (Direct / Pull request / Local commit): repository + branch -->
+                        <StackPanel Visibility="{Binding IsGitMode, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="GITHUB REPOSITORY" Style="{StaticResource Caption}" />
+                            <ComboBox ItemsSource="{Binding Repositories}" SelectedItem="{Binding SelectedRepository}"
+                                      DisplayMemberPath="FullName" Margin="0,4,0,16" />
+
+                            <TextBlock Text="BRANCH" Style="{StaticResource Caption}" />
+                            <TextBox Text="{Binding Branch, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                        </StackPanel>
 
                         <StackPanel Visibility="{Binding IsPullRequest, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Pull request: each run with changes commits to a new branch and opens a PR into the branch above."
+                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,8" />
                             <TextBlock Text="REVIEWERS (OPTIONAL, COMMA-SEPARATED GITHUB USERNAMES)" Style="{StaticResource Caption}" />
                             <TextBox Text="{Binding Reviewers, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                        </StackPanel>
+
+                        <!-- Export Only: a folder or .zip destination, no GitHub -->
+                        <StackPanel Visibility="{Binding IsExportOnly, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="EXPORT DESTINATION (FOLDER OR .ZIP; A UNC PATH IS A NETWORK SHARE)" Style="{StaticResource Caption}" />
+                            <TextBox Text="{Binding ExportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4" />
+                            <TextBlock Text="No GitHub is contacted. A path ending in .zip is written as a zip archive."
+                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16" />
                         </StackPanel>
 
                         <TextBlock Text="DESTINATION FOLDER" Style="{StaticResource Caption}" />
