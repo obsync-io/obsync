@@ -3,6 +3,11 @@
 [Oo]bj/
 [Oo]ut/
 artifacts/
+publish/
+
+# Installer build outputs (WiX)
+*.msi
+*.wixpdb
 
 # Visual Studio / Rider / VS Code
 .vs/
