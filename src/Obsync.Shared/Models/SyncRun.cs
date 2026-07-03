@@ -48,8 +48,17 @@ public sealed class SyncRun
 
     public string? ErrorMessage { get; set; }
 
+    /// <summary>
+    /// The job's environment tags at run time (denormalized like <see cref="JobName"/>), so History
+    /// shows the environment a run executed under even if the job's tags later change.
+    /// </summary>
+    public List<string> Tags { get; set; } = [];
+
     /// <summary>Total changed objects (added + modified + deleted).</summary>
     public int ChangeCount => ObjectsAdded + ObjectsModified + ObjectsDeleted;
+
+    /// <summary>The run's tags classified against the current production markers, for chip rendering. Not persisted.</summary>
+    public IReadOnlyList<TagChip> TagChips { get; set; } = [];
 }
 
 /// <summary>A user-facing log entry for a run. Friendly by default; technical detail is opt-in.</summary>

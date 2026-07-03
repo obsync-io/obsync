@@ -43,7 +43,7 @@ public sealed class RunRepository : IRunRepository
                objects_added AS ObjectsAdded, objects_modified AS ObjectsModified, objects_deleted AS ObjectsDeleted,
                objects_failed AS ObjectsFailed, commit_sha AS CommitSha, commit_url AS CommitUrl,
                pr_url AS PullRequestUrl, pr_number AS PullRequestNumber,
-               error_message AS ErrorMessage
+               error_message AS ErrorMessage, tags_json AS TagsJson
         FROM runs
         """;
 
@@ -55,10 +55,10 @@ public sealed class RunRepository : IRunRepository
             INSERT INTO runs
                 (id, run_key, job_id, job_name, trigger, triggered_by, status, server_name, databases, started_at, completed_at,
                  duration_ms, objects_scanned, objects_added, objects_modified, objects_deleted, objects_failed,
-                 commit_sha, commit_url, pr_url, pr_number, error_message)
+                 commit_sha, commit_url, pr_url, pr_number, error_message, tags_json)
             VALUES
                 ($id, $key, $job, $jobName, $trigger, $triggeredBy, $status, $server, $dbs, $started, $completed, $duration,
-                 $scanned, $added, $modified, $deleted, $failed, $sha, $url, $prUrl, $prNumber, $error);
+                 $scanned, $added, $modified, $deleted, $failed, $sha, $url, $prUrl, $prNumber, $error, $tags);
             """,
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
@@ -102,27 +102,28 @@ public sealed class RunRepository : IRunRepository
     public async Task<SyncRun?> GetAsync(Guid runId, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return await connection.QuerySingleOrDefaultAsync<SyncRun>(
+        var row = await connection.QuerySingleOrDefaultAsync<RunRow>(
             new CommandDefinition($"{SelectRun} WHERE id = $id;", new { id = runId.ToString() }, cancellationToken: cancellationToken))
             .ConfigureAwait(false);
+        return row is null ? null : Map(row);
     }
 
     public async Task<IReadOnlyList<SyncRun>> GetForJobAsync(Guid jobId, int limit = 50, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryAsync<SyncRun>(
+        var rows = await connection.QueryAsync<RunRow>(
             new CommandDefinition($"{SelectRun} WHERE job_id = $job ORDER BY started_at DESC LIMIT $limit;",
                 new { job = jobId.ToString(), limit }, cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return [.. rows];
+        return [.. rows.Select(Map)];
     }
 
     public async Task<IReadOnlyList<SyncRun>> GetRecentAsync(int limit = 20, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryAsync<SyncRun>(
+        var rows = await connection.QueryAsync<RunRow>(
             new CommandDefinition($"{SelectRun} ORDER BY started_at DESC LIMIT $limit;",
                 new { limit }, cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return [.. rows];
+        return [.. rows.Select(Map)];
     }
 
     public async Task AddLogsAsync(IReadOnlyCollection<SyncRunLog> logs, CancellationToken cancellationToken = default)
@@ -235,7 +236,62 @@ public sealed class RunRepository : IRunRepository
         prUrl = run.PullRequestUrl,
         prNumber = run.PullRequestNumber,
         error = run.ErrorMessage,
+        tags = ObsyncJson.Serialize(run.Tags),
     };
+
+    private static SyncRun Map(RunRow row) => new()
+    {
+        Id = row.Id,
+        RunKey = row.RunKey,
+        JobId = row.JobId,
+        JobName = row.JobName,
+        Trigger = row.Trigger,
+        TriggeredBy = row.TriggeredBy,
+        Status = row.Status,
+        ServerName = row.ServerName,
+        Databases = row.Databases,
+        StartedAt = row.StartedAt,
+        CompletedAt = row.CompletedAt,
+        DurationMs = row.DurationMs,
+        ObjectsScanned = row.ObjectsScanned,
+        ObjectsAdded = row.ObjectsAdded,
+        ObjectsModified = row.ObjectsModified,
+        ObjectsDeleted = row.ObjectsDeleted,
+        ObjectsFailed = row.ObjectsFailed,
+        CommitSha = row.CommitSha,
+        CommitUrl = row.CommitUrl,
+        PullRequestUrl = row.PullRequestUrl,
+        PullRequestNumber = row.PullRequestNumber,
+        ErrorMessage = row.ErrorMessage,
+        Tags = string.IsNullOrEmpty(row.TagsJson) ? [] : ObsyncJson.Deserialize<List<string>>(row.TagsJson),
+    };
+
+    private sealed class RunRow
+    {
+        public Guid Id { get; set; }
+        public string RunKey { get; set; } = string.Empty;
+        public Guid JobId { get; set; }
+        public string JobName { get; set; } = string.Empty;
+        public RunTrigger Trigger { get; set; }
+        public string? TriggeredBy { get; set; }
+        public RunStatus Status { get; set; }
+        public string ServerName { get; set; } = string.Empty;
+        public string Databases { get; set; } = string.Empty;
+        public DateTimeOffset StartedAt { get; set; }
+        public DateTimeOffset? CompletedAt { get; set; }
+        public long DurationMs { get; set; }
+        public int ObjectsScanned { get; set; }
+        public int ObjectsAdded { get; set; }
+        public int ObjectsModified { get; set; }
+        public int ObjectsDeleted { get; set; }
+        public int ObjectsFailed { get; set; }
+        public string? CommitSha { get; set; }
+        public string? CommitUrl { get; set; }
+        public string? PullRequestUrl { get; set; }
+        public int? PullRequestNumber { get; set; }
+        public string? ErrorMessage { get; set; }
+        public string? TagsJson { get; set; }
+    }
 
     private sealed class ChangeRow
     {

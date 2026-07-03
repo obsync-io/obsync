@@ -85,6 +85,13 @@ public sealed class SyncJob
     /// </summary>
     public List<string> Reviewers { get; set; } = [];
 
+    /// <summary>
+    /// Free-form environment tags (e.g. <c>prod</c>, <c>finance</c>, <c>pci</c>), shown as chips
+    /// wherever the job appears. A tag matching the configured production markers arms the Run-Now
+    /// guard. Normalized (trimmed, de-duped) on save via <see cref="JobTags.Parse"/>.
+    /// </summary>
+    public List<string> Tags { get; set; } = [];
+
     // --- What &amp; when ---
     public ObjectSelectionProfile Selection { get; set; } = new();
     public ScheduleProfile Schedule { get; set; } = new();
@@ -108,6 +115,12 @@ public sealed class SyncJob
 
     /// <summary>Human-readable destination (repository · branch) for list/table views. Not persisted.</summary>
     public string? DestinationDisplay { get; set; }
+
+    /// <summary>
+    /// The job's tags classified against the current production markers, for chip rendering. Filled by
+    /// list view models via <see cref="JobTags.Classify"/>. Not persisted.
+    /// </summary>
+    public IReadOnlyList<TagChip> TagChips { get; set; } = [];
 
     /// <summary>
     /// True while a run for this job is in progress. Set by the app's run coordinator when list

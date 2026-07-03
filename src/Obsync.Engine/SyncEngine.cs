@@ -104,6 +104,7 @@ public sealed class SyncEngine : ISyncEngine
                 Status = RunStatus.NoChanges,
                 StartedAt = _clock.UtcNow,
                 CompletedAt = _clock.UtcNow,
+                Tags = [.. job.Tags],
             };
         }
 
@@ -141,6 +142,7 @@ public sealed class SyncEngine : ISyncEngine
             ServerName = connection.ServerName,
             Databases = string.Join(", ", job.Databases),
             StartedAt = started,
+            Tags = [.. job.Tags],
         };
         await _runs.InsertAsync(run, cancellationToken).ConfigureAwait(false);
 
