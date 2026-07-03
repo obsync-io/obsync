@@ -62,10 +62,11 @@ public sealed class DatabaseArtifactReader : IDatabaseArtifactReader
 
     public async Task<string> ReadDatabaseOptionsAsync(
         SqlConnectionProfile profile, string? password, string database, int commandTimeoutSeconds,
-        CancellationToken cancellationToken = default)
+        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(_connectionStrings.Create(profile, password, database));
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await SqlSession.ApplyLockTimeoutAsync(connection, lockTimeoutSeconds, cancellationToken).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();
         command.CommandText = OptionsQuery;
@@ -82,10 +83,11 @@ public sealed class DatabaseArtifactReader : IDatabaseArtifactReader
 
     public async Task<string> ReadPermissionsAsync(
         SqlConnectionProfile profile, string? password, string database, int commandTimeoutSeconds,
-        CancellationToken cancellationToken = default)
+        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(_connectionStrings.Create(profile, password, database));
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await SqlSession.ApplyLockTimeoutAsync(connection, lockTimeoutSeconds, cancellationToken).ConfigureAwait(false);
 
         await using var command = connection.CreateCommand();
         command.CommandText = PermissionsQuery;

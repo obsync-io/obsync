@@ -12,10 +12,10 @@ public interface IDatabaseArtifactReader
     /// <summary>Builds the <c>ALTER DATABASE … SET</c> settings script (no file paths or sizes).</summary>
     Task<string> ReadDatabaseOptionsAsync(
         SqlConnectionProfile profile, string? password, string database, int commandTimeoutSeconds,
-        CancellationToken cancellationToken = default);
+        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default);
 
     /// <summary>Builds the consolidated database-scoped GRANT/DENY script from <c>sys.database_permissions</c>.</summary>
     Task<string> ReadPermissionsAsync(
         SqlConnectionProfile profile, string? password, string database, int commandTimeoutSeconds,
-        CancellationToken cancellationToken = default);
+        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default);
 }

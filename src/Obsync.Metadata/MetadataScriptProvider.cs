@@ -42,6 +42,8 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             request.MaxRetries,
             cancellationToken).ConfigureAwait(false);
 
+        await SqlSession.ApplyLockTimeoutAsync(connection, request.SqlLockTimeoutSeconds, cancellationToken).ConfigureAwait(false);
+
         foreach (var type in request.Types)
         {
             var stream = type switch

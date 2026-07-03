@@ -21,6 +21,9 @@ public sealed class ScriptRequest
     /// <summary>Command timeout to apply to SQL operations, in seconds.</summary>
     public int CommandTimeoutSeconds { get; init; } = 120;
 
+    /// <summary>SQL lock timeout in seconds (0 = don't set). Applied via <c>SET LOCK_TIMEOUT</c> per session.</summary>
+    public int SqlLockTimeoutSeconds { get; init; }
+
     /// <summary>Number of attempts (1 = no retry) for transient SQL failures while reading metadata.</summary>
     public int MaxRetries { get; init; } = 3;
 }

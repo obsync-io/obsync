@@ -56,6 +56,13 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
     {
         var server = BuildServer(request);
         await ConnectWithRetryAsync(server, request.MaxRetries, cancellationToken).ConfigureAwait(false);
+
+        // Bound how long SMO's metadata reads wait on locks (fail fast on a busy server). 0 = unset.
+        if (request.SqlLockTimeoutSeconds > 0)
+        {
+            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {request.SqlLockTimeoutSeconds * 1000};");
+        }
+
         var database = server.Databases[request.Database]
             ?? throw new InvalidOperationException($"Database '{request.Database}' was not found on the server.");
         var options = SmoScriptingOptionsFactory.Create(request.Selection);

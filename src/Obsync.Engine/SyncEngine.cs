@@ -89,6 +89,25 @@ public sealed class SyncEngine : ISyncEngine
     {
         var job = await _jobs.GetAsync(jobId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Job {jobId} was not found.");
+
+        // Maintenance window: a SCHEDULED run outside the allowed window is skipped (manual "Run Now"
+        // and startup runs bypass). Skips are log-only — advance the cached next-run so the UI stays
+        // accurate, and return an un-persisted run (the scheduler ignores the result).
+        if (trigger == RunTrigger.Scheduled && !job.Schedule.IsWithinMaintenanceWindow(_clock.UtcNow.ToLocalTime()))
+        {
+            _logger.LogInformation("Job {JobId} ({JobName}) skipped — outside its maintenance window.", job.Id, job.Name);
+            await _jobs.UpdateNextRunAtAsync(job.Id, job.Schedule.GetNextRun(_clock.UtcNow), cancellationToken).ConfigureAwait(false);
+            return new SyncRun
+            {
+                JobId = job.Id,
+                JobName = job.Name,
+                Trigger = trigger,
+                Status = RunStatus.NoChanges,
+                StartedAt = _clock.UtcNow,
+                CompletedAt = _clock.UtcNow,
+            };
+        }
+
         var connection = await _connections.GetAsync(job.ConnectionProfileId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The job's SQL connection profile was not found.");
 
@@ -494,6 +513,7 @@ public sealed class SyncEngine : ISyncEngine
                 Types = providerTypes,
                 Selection = context.Job.Selection,
                 CommandTimeoutSeconds = context.Job.Advanced.SqlCommandTimeoutSeconds,
+                SqlLockTimeoutSeconds = context.Job.Advanced.SqlLockTimeoutSeconds,
                 MaxRetries = context.Job.Advanced.SqlRetryCount,
             };
 
@@ -514,6 +534,7 @@ public sealed class SyncEngine : ISyncEngine
     {
         var selection = context.Job.Selection;
         var timeout = context.Job.Advanced.SqlCommandTimeoutSeconds;
+        var lockTimeout = context.Job.Advanced.SqlLockTimeoutSeconds;
 
         if (selection.IncludeObjectInventory)
         {
@@ -524,14 +545,14 @@ public sealed class SyncEngine : ISyncEngine
         if (selection.IncludeDatabaseOptions)
         {
             var options = await _artifactReader.ReadDatabaseOptionsAsync(
-                context.Connection, context.SqlPassword, database, timeout, cancellationToken).ConfigureAwait(false);
+                context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
             await apply(ArtifactIdentity("database-options"), options, RepositoryLayout.DatabaseOptionsFile, cancellationToken).ConfigureAwait(false);
         }
 
         if (selection.IncludeDatabasePermissionsFile)
         {
             var permissions = await _artifactReader.ReadPermissionsAsync(
-                context.Connection, context.SqlPassword, database, timeout, cancellationToken).ConfigureAwait(false);
+                context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
             await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile, cancellationToken).ConfigureAwait(false);
         }
     }
