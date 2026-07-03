@@ -31,6 +31,8 @@
                     <TextBlock Text="{Binding Job.Name}" Style="{StaticResource PageTitle}" VerticalAlignment="Center" />
                     <ContentControl Content="{Binding Status}" ContentTemplate="{StaticResource StatusBadgeTemplate}"
                                     Margin="14,4,0,0" VerticalAlignment="Center" />
+                    <ItemsControl ItemsSource="{Binding Job.TagChips}" Style="{StaticResource TagChipsList}"
+                                  Margin="10,4,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">

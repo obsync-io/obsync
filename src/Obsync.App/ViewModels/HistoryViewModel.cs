@@ -21,6 +21,7 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     private readonly IRunRepository _runs;
     private readonly IRunReportWriter _reportWriter;
+    private readonly IAppSettingsRepository _settings;
 
     [ObservableProperty] private string _selectedJob = AllJobs;
     [ObservableProperty] private StatusFilterOption _selectedStatus;
@@ -53,10 +54,11 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     public ICollectionView RunsView { get; }
 
-    public HistoryViewModel(IRunRepository runs, IRunReportWriter reportWriter)
+    public HistoryViewModel(IRunRepository runs, IRunReportWriter reportWriter, IAppSettingsRepository settings)
     {
         _runs = runs;
         _reportWriter = reportWriter;
+        _settings = settings;
         _selectedStatus = StatusOptions[0];
         RunsView = CollectionViewSource.GetDefaultView(Runs);
         RunsView.Filter = FilterRun;
@@ -65,9 +67,11 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
     public async Task LoadAsync()
     {
         var runs = await _runs.GetRecentAsync(100);
+        var markers = await _settings.GetProductionTagsAsync();
         Runs.Clear();
         foreach (var run in runs)
         {
+            run.TagChips = JobTags.Classify(run.Tags, markers);
             Runs.Add(run);
         }
 

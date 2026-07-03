@@ -71,6 +71,13 @@
                       Visibility="{Binding Runs.Count, Converter={StaticResource CountToVisibility}}">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Job" Binding="{Binding JobName}" Width="2*" />
+                    <DataGridTemplateColumn Header="Tags" Width="1.3*">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ItemsControl ItemsSource="{Binding TagChips}" Style="{StaticResource TagChipsList}" VerticalAlignment="Center" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                     <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" />
                     <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" />
                     <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" />

@@ -13,7 +13,8 @@ public sealed class HistoryViewModelTests
     [Fact]
     public void ExportReport_IsDisabled_UntilARunIsSelected()
     {
-        var vm = new HistoryViewModel(Substitute.For<IRunRepository>(), Substitute.For<IRunReportWriter>());
+        var vm = new HistoryViewModel(
+            Substitute.For<IRunRepository>(), Substitute.For<IRunReportWriter>(), Substitute.For<IAppSettingsRepository>());
 
         Assert.False(vm.ExportReportCommand.CanExecute(null));
 

@@ -14,7 +14,8 @@ internal static class JobDisplay
     public static async Task PopulateAsync(
         IReadOnlyList<SyncJob> jobs,
         IConnectionProfileRepository connections,
-        IRepositoryProfileRepository repositories)
+        IRepositoryProfileRepository repositories,
+        IReadOnlyList<string> productionMarkers)
     {
         if (jobs.Count == 0)
         {
@@ -26,6 +27,8 @@ internal static class JobDisplay
 
         foreach (var job in jobs)
         {
+            job.TagChips = JobTags.Classify(job.Tags, productionMarkers);
+
             job.SourceDisplay = connectionsById.TryGetValue(job.ConnectionProfileId, out var connection)
                 ? connection.ServerName
                 : job.DatabasesDisplay;

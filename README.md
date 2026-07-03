@@ -108,6 +108,16 @@ for an app run, or the service account for a scheduled run). View the recent tra
 **Settings → Recent activity**. The trail lives in the local SQLite database and never contains
 secrets.
 
+## Environment tags
+
+Tag a job with free-form labels (e.g. `prod`, `finance`, `pci`) in the job wizard. Tags show as chips
+on the Dashboard, Jobs list, Job Workspace, and — recorded per run — in History, so you can see at a
+glance which jobs touch which environments.
+
+Any tag in the **production** list (configured in **Settings → Production tags**, default
+`prod, production`) renders red and arms a safeguard: a manual **Run Now** on a production-tagged job
+asks for confirmation first. Scheduled runs are never prompted.
+
 ## Run reports
 
 Any run can be exported as a shareable file for a reviewer, an auditor, or a ticket — on demand,

@@ -51,6 +51,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private bool _isEditMode;
 
     [ObservableProperty] private string _name = string.Empty;
+    [ObservableProperty] private string _tags = string.Empty;
     [ObservableProperty] private SqlConnectionProfile? _selectedConnection;
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
     [ObservableProperty] private GitRepositoryProfile? _selectedRepository;
@@ -221,6 +222,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _editingJob = job;
 
         Name = job.Name;
+        Tags = string.Join(", ", job.Tags);
         SelectedConnection = Connections.FirstOrDefault(c => c.Id == job.ConnectionProfileId);
         SelectedRepository = Repositories.FirstOrDefault(r => r.Id == job.RepositoryProfileId);
         Branch = job.Branch ?? SelectedRepository?.DefaultBranch ?? "main";
@@ -366,6 +368,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
         ReviewItems.Clear();
         ReviewItems.Add(new ReviewItem("Job name", Name.Trim()));
+        if (JobTags.Parse(Tags) is { Count: > 0 } tags)
+        {
+            ReviewItems.Add(new ReviewItem("Tags", string.Join(", ", tags)));
+        }
         ReviewItems.Add(new ReviewItem("Source", SelectedConnection is null
             ? "—"
             : $"{SelectedConnection.Name} ({SelectedConnection.ServerName}) · {SelectedConnection.AuthenticationMode}"));
@@ -477,6 +483,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         job.LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim();
         job.CommitMode = SelectedCommitMode;
         job.Reviewers = SelectedCommitMode == CommitMode.PullRequest ? ParseReviewers(Reviewers) : [];
+        job.Tags = JobTags.Parse(Tags);
         job.Selection.Preset = SelectedPreset;
         if (IsCustomPreset)
         {

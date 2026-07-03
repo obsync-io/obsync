@@ -24,6 +24,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IJobRunCoordinator _coordinator;
     private readonly IShellNavigator _navigator;
     private readonly IRunReportWriter _reportWriter;
+    private readonly IAppSettingsRepository _settings;
 
     private readonly List<SyncRunLog> _allLogs = [];
     private GitRepositoryProfile? _repository;
@@ -83,7 +84,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IRepositoryProfileRepository repositories,
         IJobRunCoordinator coordinator,
         IShellNavigator navigator,
-        IRunReportWriter reportWriter)
+        IRunReportWriter reportWriter,
+        IAppSettingsRepository settings)
     {
         _jobs = jobs;
         _runs = runs;
@@ -92,6 +94,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _coordinator = coordinator;
         _navigator = navigator;
         _reportWriter = reportWriter;
+        _settings = settings;
     }
 
     /// <summary>The section the user drilled in from (Dashboard vs Jobs); "Back" returns here.</summary>
@@ -133,6 +136,13 @@ public sealed partial class JobDetailViewModel : ObservableObject
     public async Task LoadAsync(Guid jobId)
     {
         var job = await _jobs.GetAsync(jobId);
+        if (job is not null)
+        {
+            // Classify before assigning Job so the header's tag chips bind with the result in place
+            // (SyncJob.TagChips is a plain property and does not raise change notifications).
+            job.TagChips = JobTags.Classify(job.Tags, await _settings.GetProductionTagsAsync());
+        }
+
         Job = job;
         if (job is null)
         {

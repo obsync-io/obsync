@@ -18,6 +18,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     private readonly IObjectStateRepository _objectStates;
     private readonly IJobRunCoordinator _coordinator;
     private readonly IShellNavigator _navigator;
+    private readonly IAppSettingsRepository _settings;
 
     private bool _reloading;
 
@@ -33,7 +34,8 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     public DashboardViewModel(
         IJobRepository jobs, IConnectionProfileRepository connections, IRepositoryProfileRepository repositories,
         IRunRepository runs, IObjectStateRepository objectStates,
-        IJobRunCoordinator coordinator, IShellNavigator navigator)
+        IJobRunCoordinator coordinator, IShellNavigator navigator,
+        IAppSettingsRepository settings)
     {
         _jobs = jobs;
         _connections = connections;
@@ -42,6 +44,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         _objectStates = objectStates;
         _coordinator = coordinator;
         _navigator = navigator;
+        _settings = settings;
         _coordinator.RunStateChanged += OnRunStateChanged;
     }
 
@@ -99,7 +102,8 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     public async Task LoadAsync()
     {
         var jobs = await _jobs.GetAllAsync();
-        await JobDisplay.PopulateAsync(jobs, _connections, _repositories);
+        var markers = await _settings.GetProductionTagsAsync();
+        await JobDisplay.PopulateAsync(jobs, _connections, _repositories, markers);
         Jobs.Clear();
         foreach (var job in jobs)
         {

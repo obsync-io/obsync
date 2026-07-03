@@ -353,6 +353,12 @@
                         <TextBlock Text="JOB NAME" Style="{StaticResource Caption}" />
                         <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
 
+                        <TextBlock Text="TAGS (COMMA-SEPARATED, OPTIONAL)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding Tags, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,2"
+                                 ToolTip="Environment tags, e.g. prod, finance. A production tag prompts before a manual run." />
+                        <TextBlock Text="A tag matching the production list (Settings) shows red and confirms before a manual run."
+                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16" />
+
                         <TextBlock Text="SERVER" Style="{StaticResource Caption}" />
                         <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection}"
                                   DisplayMemberPath="Name" Margin="0,4,0,10" />

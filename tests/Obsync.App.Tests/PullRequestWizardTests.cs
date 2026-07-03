@@ -98,4 +98,39 @@ public sealed class PullRequestWizardTests
         Assert.Equal(CommitMode.DirectCommit, saved!.CommitMode);
         Assert.Empty(saved.Reviewers);
     }
+
+    [Fact]
+    public async Task Save_PersistsParsedTags()
+    {
+        var connectionId = Guid.NewGuid();
+        var repositoryId = Guid.NewGuid();
+
+        SyncJob? saved = null;
+        var jobs = Substitute.For<IJobRepository>();
+        jobs.UpsertAsync(Arg.Do<SyncJob>(j => saved = j), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+
+        var connections = Substitute.For<IConnectionProfileRepository>();
+        connections.GetAllAsync(Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult<IReadOnlyList<SqlConnectionProfile>>(
+                [new SqlConnectionProfile { Id = connectionId, Name = "Prod", ServerName = "SVR" }]));
+        var repositories = Substitute.For<IRepositoryProfileRepository>();
+        repositories.GetAllAsync(Arg.Any<CancellationToken>()).Returns(
+            Task.FromResult<IReadOnlyList<GitRepositoryProfile>>(
+                [new GitRepositoryProfile { Id = repositoryId, Name = "R", Owner = "o", RepositoryName = "r", DefaultBranch = "main" }]));
+        var clock = Substitute.For<IClock>();
+        clock.UtcNow.Returns(DateTimeOffset.UnixEpoch);
+
+        var vm = new CreateJobViewModel(
+            connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
+            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>());
+        await vm.LoadAsync();
+        vm.InitializeForEdit(ExistingJob(connectionId, repositoryId));
+
+        vm.Tags = " prod , finance , Prod "; // trimmed, de-duped (case-insensitive)
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(saved);
+        Assert.Equal(["prod", "finance"], saved!.Tags);
+    }
 }

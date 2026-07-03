@@ -17,6 +17,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IJobRunCoordinator _coordinator;
     private readonly IAuditWriter _audit;
+    private readonly IAppSettingsRepository _settings;
 
     private bool _reloading;
 
@@ -29,13 +30,15 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         IConnectionProfileRepository connections,
         IRepositoryProfileRepository repositories,
         IJobRunCoordinator coordinator,
-        IAuditWriter audit)
+        IAuditWriter audit,
+        IAppSettingsRepository settings)
     {
         _jobs = jobs;
         _connections = connections;
         _repositories = repositories;
         _coordinator = coordinator;
         _audit = audit;
+        _settings = settings;
         _coordinator.RunStateChanged += OnRunStateChanged;
     }
 
@@ -65,7 +68,8 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     public async Task LoadAsync()
     {
         var jobs = await _jobs.GetAllAsync();
-        await JobDisplay.PopulateAsync(jobs, _connections, _repositories);
+        var markers = await _settings.GetProductionTagsAsync();
+        await JobDisplay.PopulateAsync(jobs, _connections, _repositories, markers);
         Jobs.Clear();
         foreach (var job in jobs)
         {

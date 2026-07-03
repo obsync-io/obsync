@@ -65,6 +65,46 @@
                 </Border>
             </DataTemplate>
 
+            <!-- Environment tag chip (DataContext = TagChip). Production tags read red. -->
+            <DataTemplate x:Key="TagChipTemplate">
+                <Border CornerRadius="{StaticResource RadiusPill}" Padding="8,2" Margin="0,4,6,0">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{StaticResource NeutralSoftBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsProduction}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource ErrorSoftBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Text}" FontSize="11" FontWeight="SemiBold">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsProduction}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Border>
+            </DataTemplate>
+
+            <!-- Reusable horizontal chip list (ItemsSource = a TagChip collection). -->
+            <Style x:Key="TagChipsList" TargetType="ItemsControl">
+                <Setter Property="ItemTemplate" Value="{StaticResource TagChipTemplate}" />
+                <Setter Property="ItemsPanel">
+                    <Setter.Value>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <!-- ViewModel -> View mapping (MVVM, no code-behind navigation) -->
             <DataTemplate DataType="{x:Type vm:DashboardViewModel}">
                 <views:DashboardView />
