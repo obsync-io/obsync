@@ -42,6 +42,14 @@
                             <TextBlock Text="Run Now" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button Style="{StaticResource SecondaryButton}" Command="{Binding ExportReportCommand}" Margin="0,0,10,0"
+                            ToolTip="Export this run as HTML, CSV, or JSON">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconExport}"
+                                       FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Export report" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button Style="{StaticResource SecondaryButton}" Click="OnEdit">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconEdit}"
@@ -77,6 +85,10 @@
             <!-- Live status message from the most recent action -->
             <TextBlock Style="{StaticResource Muted}" Text="{Binding StatusMessage}" Margin="0,8,0,0" TextWrapping="Wrap"
                        Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+
+            <!-- Result of the last "Export report" action -->
+            <TextBlock Style="{StaticResource Muted}" Text="{Binding ReportMessage}" Margin="0,8,0,0" TextWrapping="Wrap"
+                       Visibility="{Binding ReportMessage, Converter={StaticResource NullToVisibility}}" />
         </StackPanel>
 
         <!-- ================================== Tabs ================================== -->

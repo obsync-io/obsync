@@ -108,6 +108,20 @@ for an app run, or the service account for a scheduled run). View the recent tra
 **Settings → Recent activity**. The trail lives in the local SQLite database and never contains
 secrets.
 
+## Run reports
+
+Any run can be exported as a shareable file for a reviewer, an auditor, or a ticket — on demand,
+nothing is written automatically. Use **Export report** on the Job Workspace (exports the latest run)
+or on the **History** page (select any past run), then choose a format:
+
+- **HTML** — a formatted, self-contained document (run summary + changed objects + log timeline) that
+  opens in any browser offline; no external styles, scripts, or fonts.
+- **CSV** — one row per changed object, for Excel or a pipeline.
+- **JSON** — the full run structured for tooling.
+
+Reports are built from the same data shown in the app and contain no secrets (SQL passwords and GitHub
+tokens live only in Windows Credential Manager).
+
 ## Ignoring objects (`.obsyncignore`)
 
 To keep noisy objects out of version control, commit a `.obsyncignore` file in a job's destination

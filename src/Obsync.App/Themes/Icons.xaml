@@ -25,6 +25,7 @@
     <sys:String x:Key="IconBack">&#xE72B;</sys:String>
     <sys:String x:Key="IconRefresh">&#xE72C;</sys:String>
     <sys:String x:Key="IconOpenExternal">&#xE8A7;</sys:String>
+    <sys:String x:Key="IconExport">&#xE896;</sys:String>
     <sys:String x:Key="IconCheck">&#xE73E;</sys:String>
     <sys:String x:Key="IconWarning">&#xE7BA;</sys:String>
     <sys:String x:Key="IconError">&#xEA39;</sys:String>

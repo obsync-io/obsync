@@ -30,6 +30,7 @@ public static class AppServices
         // Supportability: environment health checks and the secret-masked support bundle.
         services.AddSingleton<IDiagnosticsService, DiagnosticsService>();
         services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();
+        services.AddSingleton<IRunReportWriter, RunReportWriter>();
 
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());

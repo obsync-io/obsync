@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Obsync.App.Services;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -18,10 +20,17 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
     private const string AllJobs = "All jobs";
 
     private readonly IRunRepository _runs;
+    private readonly IRunReportWriter _reportWriter;
 
     [ObservableProperty] private string _selectedJob = AllJobs;
     [ObservableProperty] private StatusFilterOption _selectedStatus;
     [ObservableProperty] private string _searchText = string.Empty;
+
+    /// <summary>The run selected in the grid; the "Export report" action targets it.</summary>
+    [ObservableProperty] private SyncRun? _selectedRun;
+
+    /// <summary>Inline feedback for the "Export report" action (save path or error).</summary>
+    [ObservableProperty] private string? _reportMessage;
 
     /// <summary>The full loaded set; <see cref="RunsView"/> is the filtered projection the grid binds to.</summary>
     public ObservableCollection<SyncRun> Runs { get; } = [];
@@ -44,9 +53,10 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     public ICollectionView RunsView { get; }
 
-    public HistoryViewModel(IRunRepository runs)
+    public HistoryViewModel(IRunRepository runs, IRunReportWriter reportWriter)
     {
         _runs = runs;
+        _reportWriter = reportWriter;
         _selectedStatus = StatusOptions[0];
         RunsView = CollectionViewSource.GetDefaultView(Runs);
         RunsView.Filter = FilterRun;
@@ -83,6 +93,29 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
     partial void OnSelectedStatusChanged(StatusFilterOption value) => RunsView.Refresh();
 
     partial void OnSearchTextChanged(string value) => RunsView.Refresh();
+
+    partial void OnSelectedRunChanged(SyncRun? value) => ExportReportCommand.NotifyCanExecuteChanged();
+
+    private bool CanExportReport() => SelectedRun is not null;
+
+    // History does not preload a run's changes/logs, so fetch them for the selected run before exporting.
+    [RelayCommand(CanExecute = nameof(CanExportReport))]
+    private async Task ExportReportAsync()
+    {
+        if (SelectedRun is not { } run)
+        {
+            return;
+        }
+
+        var changes = await _runs.GetChangesAsync(run.Id);
+        var logs = await _runs.GetLogsAsync(run.Id);
+
+        var message = await RunReportExport.PromptAndWriteAsync(_reportWriter, run, changes, logs);
+        if (message is not null)
+        {
+            ReportMessage = message;
+        }
+    }
 
     private bool FilterRun(object item)
     {

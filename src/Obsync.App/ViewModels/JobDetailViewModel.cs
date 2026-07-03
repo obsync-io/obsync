@@ -23,6 +23,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IJobRunCoordinator _coordinator;
     private readonly IShellNavigator _navigator;
+    private readonly IRunReportWriter _reportWriter;
 
     private readonly List<SyncRunLog> _allLogs = [];
     private GitRepositoryProfile? _repository;
@@ -48,6 +49,9 @@ public sealed partial class JobDetailViewModel : ObservableObject
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
 
+    /// <summary>Inline feedback for the "Export report" action (save path or error).</summary>
+    [ObservableProperty] private string? _reportMessage;
+
     /// <summary>The most recent run, used for the Overview status panel (counts, error, timing).</summary>
     [ObservableProperty] private SyncRun? _latestRun;
 
@@ -62,7 +66,11 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
     partial void OnLastErrorChanged(string? value) => OnPropertyChanged(nameof(HasError));
 
-    partial void OnLatestRunChanged(SyncRun? value) => OnPropertyChanged(nameof(HasLatestRun));
+    partial void OnLatestRunChanged(SyncRun? value)
+    {
+        OnPropertyChanged(nameof(HasLatestRun));
+        ExportReportCommand.NotifyCanExecuteChanged();
+    }
 
     public ObservableCollection<SyncRun> Runs { get; } = [];
     public ObservableCollection<ObjectChange> Changes { get; } = [];
@@ -74,7 +82,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IConnectionProfileRepository connections,
         IRepositoryProfileRepository repositories,
         IJobRunCoordinator coordinator,
-        IShellNavigator navigator)
+        IShellNavigator navigator,
+        IRunReportWriter reportWriter)
     {
         _jobs = jobs;
         _runs = runs;
@@ -82,6 +91,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _repositories = repositories;
         _coordinator = coordinator;
         _navigator = navigator;
+        _reportWriter = reportWriter;
     }
 
     /// <summary>The section the user drilled in from (Dashboard vs Jobs); "Back" returns here.</summary>
@@ -252,6 +262,25 @@ public sealed partial class JobDetailViewModel : ObservableObject
         if (run is null)
         {
             StatusMessage = "A run is already in progress for this job.";
+        }
+    }
+
+    private bool CanExportReport() => LatestRun is not null;
+
+    // Exports the latest run — the one whose changes and logs the Overview already shows. Uses the full
+    // log set (not the Debug-filtered view) so the report is faithful regardless of the UI toggle.
+    [RelayCommand(CanExecute = nameof(CanExportReport))]
+    private async Task ExportReportAsync()
+    {
+        if (LatestRun is null)
+        {
+            return;
+        }
+
+        var message = await RunReportExport.PromptAndWriteAsync(_reportWriter, LatestRun, Changes, _allLogs);
+        if (message is not null)
+        {
+            ReportMessage = message;
         }
     }
 
