@@ -203,6 +203,25 @@ secret-free JSON file that references the server and repository by name; **Impor
 page re-attaches it to the matching profiles on another machine — passwords and tokens never
 leave Windows Credential Manager.
 
+## Alerting
+
+Obsync can alert people when a sync run finishes — the service-side counterpart to the in-app
+toasts, so unattended drift and failures are noticed without opening the app. Two channels, both
+configured globally in Settings → Alerts:
+
+- **Email (SMTP)** — host/port/TLS, optional authentication (the password lives in Windows
+  Credential Manager, like every other secret), a from address, and comma-separated recipients.
+- **Webhook** — a JSON POST to any http(s) endpoint (Teams, Slack, or your own service). Honors
+  the configured proxy.
+
+Triggers are independently toggleable: run failed (on by default), run finished with warnings (on
+by default), and changes detected/committed (off by default — noisy). A filter restricts alerts to
+scheduled/startup runs (on by default), since a manual run already has the user watching. Delivery
+is best-effort: an alert failure never fails or delays the run.
+
+Alerts are sent by whichever host ran the job — the app for Run Now, the Windows Service for
+scheduled runs — so the service account must be able to reach the SMTP relay or webhook endpoint.
+
 ## Run reports
 
 Any run can be exported as a shareable file for a reviewer, an auditor, or a ticket — on demand,

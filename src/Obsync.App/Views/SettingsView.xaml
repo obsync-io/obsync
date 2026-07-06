@@ -152,6 +152,60 @@
                 </StackPanel>
             </Border>
 
+            <!-- Alerts -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="Alerts" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="Email or webhook alerts when scheduled runs need attention — sent by whichever host ran the job, so they work with the app closed." />
+
+                    <CheckBox Content="Email alerts" IsChecked="{Binding AlertEmailEnabled}" Margin="0,0,0,12" />
+                    <StackPanel Visibility="{Binding AlertEmailEnabled, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="SMTP HOST" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding SmtpHost, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                        <TextBlock Text="PORT" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding SmtpPortText, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="110" HorizontalAlignment="Left" Margin="0,4,0,12"
+                                 MaxLength="5" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+
+                        <CheckBox Content="Use TLS" IsChecked="{Binding SmtpUseTls}" Margin="0,0,0,16" />
+
+                        <TextBlock Text="USERNAME (OPTIONAL)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding SmtpUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                        <TextBlock Text="PASSWORD (LEAVE BLANK TO KEEP THE SAVED ONE)" Style="{StaticResource Caption}" />
+                        <PasswordBox x:Name="SmtpPasswordBox" PasswordChanged="OnSmtpPasswordChanged" Margin="0,4,0,16" />
+
+                        <TextBlock Text="FROM ADDRESS" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding AlertFromAddress, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                        <TextBlock Text="TO (COMMA-SEPARATED)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding AlertToAddresses, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                    </StackPanel>
+
+                    <CheckBox Content="Webhook alerts" IsChecked="{Binding AlertWebhookEnabled}" Margin="0,0,0,12" />
+                    <StackPanel Visibility="{Binding AlertWebhookEnabled, Converter={StaticResource BoolToVisibility}}">
+                        <TextBlock Text="WEBHOOK URL (RECEIVES A JSON POST PER ALERT)" Style="{StaticResource Caption}" />
+                        <TextBox Text="{Binding AlertWebhookUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                    </StackPanel>
+
+                    <CheckBox Content="Alert when a run fails" IsChecked="{Binding AlertOnFailure}" />
+                    <CheckBox Content="Alert when a run finishes with warnings" IsChecked="{Binding AlertOnWarning}" Margin="0,8,0,0" />
+                    <CheckBox Content="Alert when changes are detected and committed" IsChecked="{Binding AlertOnChanges}" Margin="0,8,0,0" />
+                    <CheckBox Content="Only for scheduled and startup runs" IsChecked="{Binding AlertScheduledOnly}" Margin="0,8,0,16" />
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Save alerts" Style="{StaticResource PrimaryButton}" Command="{Binding SaveAlertsCommand}" Margin="0,0,8,0"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                        <Button Content="Send test alert" Style="{StaticResource SecondaryButton}" Command="{Binding SendTestAlertCommand}"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding AlertStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding AlertStatus, Converter={StaticResource NullToVisibility}}" />
+                </StackPanel>
+            </Border>
+
             <!-- Data locations -->
             <Border Style="{StaticResource Card}" Margin="0,0,0,18">
                 <StackPanel>

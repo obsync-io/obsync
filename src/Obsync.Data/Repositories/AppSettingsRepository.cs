@@ -10,6 +10,11 @@ public interface IAppSettingsRepository
     Task<ProxySettings> GetProxyAsync(CancellationToken cancellationToken = default);
     Task UpsertProxyAsync(ProxySettings settings, CancellationToken cancellationToken = default);
 
+    /// <summary>Global run-alert configuration (email + webhook). The SMTP password lives in
+    /// Windows Credential Manager, never here.</summary>
+    Task<AlertSettings> GetAlertSettingsAsync(CancellationToken cancellationToken = default);
+    Task UpsertAlertSettingsAsync(AlertSettings settings, CancellationToken cancellationToken = default);
+
     /// <summary>The tag words that mark a job as production (arms the Run-Now guard). Defaults to <c>prod, production</c>.</summary>
     Task<IReadOnlyList<string>> GetProductionTagsAsync(CancellationToken cancellationToken = default);
     Task SetProductionTagsAsync(IReadOnlyList<string> markers, CancellationToken cancellationToken = default);
@@ -41,6 +46,7 @@ public interface IAppSettingsRepository
 public sealed class AppSettingsRepository : IAppSettingsRepository
 {
     private const string ProxyKey = "proxy";
+    private const string AlertsKey = "alerts";
     private const string ProductionTagsKey = "productionTags";
     private const string RunRetentionDaysKey = "runRetentionDays";
     private const string CommitterKey = "gitCommitter";
@@ -62,6 +68,15 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
 
     public Task UpsertProxyAsync(ProxySettings settings, CancellationToken cancellationToken = default) =>
         SetValueAsync(ProxyKey, ObsyncJson.Serialize(settings), cancellationToken);
+
+    public async Task<AlertSettings> GetAlertSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        var json = await GetValueAsync(AlertsKey, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrEmpty(json) ? new AlertSettings() : ObsyncJson.Deserialize<AlertSettings>(json);
+    }
+
+    public Task UpsertAlertSettingsAsync(AlertSettings settings, CancellationToken cancellationToken = default) =>
+        SetValueAsync(AlertsKey, ObsyncJson.Serialize(settings), cancellationToken);
 
     public async Task<IReadOnlyList<string>> GetProductionTagsAsync(CancellationToken cancellationToken = default)
     {

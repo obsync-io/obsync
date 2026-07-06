@@ -35,4 +35,7 @@ public static class CredentialKeys
 
     /// <summary>Key for the single global authenticated-proxy password.</summary>
     public static string Proxy() => $"{Prefix}:Proxy";
+
+    /// <summary>Key for the single global SMTP password used for email alerts.</summary>
+    public static string SmtpPassword() => $"{Prefix}:Smtp";
 }

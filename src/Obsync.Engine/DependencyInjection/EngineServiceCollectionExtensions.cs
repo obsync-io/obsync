@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Obsync.Data.DependencyInjection;
+using Obsync.Engine.Alerting;
 using Obsync.Git.DependencyInjection;
 using Obsync.GitHub.DependencyInjection;
 using Obsync.Metadata.DependencyInjection;
@@ -33,6 +34,10 @@ public static class EngineServiceCollectionExtensions
         services.AddObsyncGit();
         services.AddObsyncGitHub();
         services.AddObsyncEngine(configureEngine);
+
+        // Best-effort run alerting (email/webhook). Lives in the engine so both hosts — the app's
+        // Run Now and the service's scheduled runs — send alerts the same way.
+        services.TryAddSingleton<IRunAlertService, RunAlertService>();
         return services;
     }
 }

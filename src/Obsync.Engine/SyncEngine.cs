@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Obsync.Data.Repositories;
+using Obsync.Engine.Alerting;
 using Obsync.Git;
 using Obsync.GitHub;
 using Obsync.Metadata;
@@ -46,6 +47,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IScriptNormalizer _normalizer;
     private readonly IObjectHasher _hasher;
     private readonly IObjectFilePathMapper _pathMapper;
+    private readonly IRunAlertService _alerts;
     private readonly IClock _clock;
     private readonly ObsyncEngineOptions _options;
     private readonly ILogger<SyncEngine> _logger;
@@ -69,6 +71,7 @@ public sealed class SyncEngine : ISyncEngine
         IScriptNormalizer normalizer,
         IObjectHasher hasher,
         IObjectFilePathMapper pathMapper,
+        IRunAlertService alerts,
         IClock clock,
         IOptions<ObsyncEngineOptions> options,
         ILogger<SyncEngine> logger)
@@ -91,6 +94,7 @@ public sealed class SyncEngine : ISyncEngine
         _normalizer = normalizer;
         _hasher = hasher;
         _pathMapper = pathMapper;
+        _alerts = alerts;
         _clock = clock;
         _options = options.Value;
         _logger = logger;
@@ -214,6 +218,18 @@ public sealed class SyncEngine : ISyncEngine
                 // Standard cadences compute a preview here; the scheduler refines cron next-runs.
                 NextRunAt = job.Schedule.GetNextRun(completed) ?? job.RunSummary.NextRunAt,
             }, persistToken).ConfigureAwait(false);
+        }
+
+        // Best-effort alerting (email/webhook) after the run is fully persisted, with a
+        // non-cancelled token for the same reason as above. A send failure is logged and
+        // swallowed — an alert never fails or delays the run beyond the sender's short timeout.
+        try
+        {
+            await _alerts.NotifyAsync(run, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Alert delivery for run {RunKey} failed.", run.RunKey);
         }
 
         return run;

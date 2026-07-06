@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.App.Services;
 using Obsync.Data.Repositories;
+using Obsync.Engine.Alerting;
 using Obsync.Metadata;
 using Obsync.Shared;
 using Obsync.Shared.Abstractions;
@@ -27,6 +28,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     private readonly IAppSettingsRepository _settings;
     private readonly ICredentialStore _credentials;
     private readonly IProxyProvider _proxy;
+    private readonly IRunAlertService _alerts;
 
     public SettingsViewModel(
         IAuditWriter audit,
@@ -34,7 +36,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         ISupportBundleWriter bundle,
         IAppSettingsRepository settings,
         ICredentialStore credentials,
-        IProxyProvider proxy)
+        IProxyProvider proxy,
+        IRunAlertService alerts)
     {
         _audit = audit;
         _diagnostics = diagnostics;
@@ -42,6 +45,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         _settings = settings;
         _credentials = credentials;
         _proxy = proxy;
+        _alerts = alerts;
     }
 
     public string DataRoot => ObsyncPaths.Root;
@@ -188,6 +192,23 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         }
 
         ProductionTagsText = string.Join(", ", await _settings.GetProductionTagsAsync());
+
+        var alerts = await _settings.GetAlertSettingsAsync();
+        AlertEmailEnabled = alerts.EmailEnabled;
+        SmtpHost = alerts.SmtpHost ?? string.Empty;
+        SmtpPortText = alerts.SmtpPort.ToString();
+        SmtpUseTls = alerts.SmtpUseTls;
+        SmtpUsername = alerts.SmtpUsername ?? string.Empty;
+        AlertFromAddress = alerts.FromAddress ?? string.Empty;
+        AlertToAddresses = alerts.ToAddresses ?? string.Empty;
+        AlertWebhookEnabled = alerts.WebhookEnabled;
+        AlertWebhookUrl = alerts.WebhookUrl ?? string.Empty;
+        AlertOnFailure = alerts.OnFailure;
+        AlertOnWarning = alerts.OnWarning;
+        AlertOnChanges = alerts.OnChanges;
+        AlertScheduledOnly = alerts.ScheduledRunsOnly;
+        SmtpPassword = string.Empty;
+        SmtpPasswordShouldClear?.Invoke(this, EventArgs.Empty);
 
         var proxy = await _settings.GetProxyAsync();
         SelectedProxyMode = proxy.Mode;
@@ -419,6 +440,140 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         catch (Exception ex)
         {
             NotifyStatus = $"Could not save — {ex.Message}";
+        }
+    }
+
+    // --- Alerts (email + webhook) -----------------------------------------------------------------
+
+    [ObservableProperty] private bool _alertEmailEnabled;
+    [ObservableProperty] private string _smtpHost = string.Empty;
+    [ObservableProperty] private string _smtpPortText = "587";
+    [ObservableProperty] private bool _smtpUseTls = true;
+    [ObservableProperty] private string _smtpUsername = string.Empty;
+    [ObservableProperty] private string _alertFromAddress = string.Empty;
+    [ObservableProperty] private string _alertToAddresses = string.Empty;
+    [ObservableProperty] private bool _alertWebhookEnabled;
+    [ObservableProperty] private string _alertWebhookUrl = string.Empty;
+    [ObservableProperty] private bool _alertOnFailure = true;
+    [ObservableProperty] private bool _alertOnWarning = true;
+    [ObservableProperty] private bool _alertOnChanges;
+    [ObservableProperty] private bool _alertScheduledOnly = true;
+    [ObservableProperty] private string? _alertStatus;
+
+    /// <summary>Set from the view's PasswordBox; never bound directly.</summary>
+    public string SmtpPassword { get; set; } = string.Empty;
+
+    /// <summary>Raised so the view clears its SMTP-password PasswordBox (after save / reload).</summary>
+    public event EventHandler? SmtpPasswordShouldClear;
+
+    [RelayCommand]
+    private async Task SaveAlertsAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        if (AlertEmailEnabled && (string.IsNullOrWhiteSpace(SmtpHost)
+            || string.IsNullOrWhiteSpace(AlertFromAddress) || string.IsNullOrWhiteSpace(AlertToAddresses)))
+        {
+            AlertStatus = "Email alerts need an SMTP host, a from address, and at least one recipient.";
+            return;
+        }
+
+        var port = string.IsNullOrWhiteSpace(SmtpPortText) ? 587 : int.TryParse(SmtpPortText.Trim(), out var parsed) ? parsed : 0;
+        if (AlertEmailEnabled && port is < 1 or > 65535)
+        {
+            AlertStatus = "Enter an SMTP port between 1 and 65535 (587 is the usual submission port).";
+            return;
+        }
+
+        if (AlertWebhookEnabled
+            && (!Uri.TryCreate(AlertWebhookUrl.Trim(), UriKind.Absolute, out var url)
+                || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps)))
+        {
+            AlertStatus = "Webhook alerts need a full http(s) URL, e.g. https://example.com/hooks/obsync.";
+            return;
+        }
+
+        IsBusy = true;
+        AlertStatus = "Saving alert settings…";
+        try
+        {
+            var settings = new AlertSettings
+            {
+                EmailEnabled = AlertEmailEnabled,
+                SmtpHost = string.IsNullOrWhiteSpace(SmtpHost) ? null : SmtpHost.Trim(),
+                SmtpPort = port,
+                SmtpUseTls = SmtpUseTls,
+                SmtpUsername = string.IsNullOrWhiteSpace(SmtpUsername) ? null : SmtpUsername.Trim(),
+                FromAddress = string.IsNullOrWhiteSpace(AlertFromAddress) ? null : AlertFromAddress.Trim(),
+                ToAddresses = string.IsNullOrWhiteSpace(AlertToAddresses) ? null : AlertToAddresses.Trim(),
+                WebhookEnabled = AlertWebhookEnabled,
+                WebhookUrl = string.IsNullOrWhiteSpace(AlertWebhookUrl) ? null : AlertWebhookUrl.Trim(),
+                OnFailure = AlertOnFailure,
+                OnWarning = AlertOnWarning,
+                OnChanges = AlertOnChanges,
+                ScheduledRunsOnly = AlertScheduledOnly,
+            };
+            await _settings.UpsertAlertSettingsAsync(settings);
+            SmtpPortText = settings.SmtpPort.ToString();
+
+            // Store the password when provided; keep the saved one when blank on an authenticated
+            // relay (mirrors the proxy pattern); otherwise remove it.
+            if (settings.RequiresPassword)
+            {
+                if (!string.IsNullOrEmpty(SmtpPassword))
+                {
+                    _credentials.Store(CredentialKeys.SmtpPassword(), SmtpPassword);
+                }
+            }
+            else
+            {
+                _credentials.Delete(CredentialKeys.SmtpPassword());
+            }
+
+            SmtpPassword = string.Empty;
+            SmtpPasswordShouldClear?.Invoke(this, EventArgs.Empty);
+            AlertStatus = settings.EmailEnabled || settings.WebhookEnabled
+                ? "Alert settings saved."
+                : "Alert settings saved — no channel is enabled, so no alerts are sent.";
+        }
+        catch (Exception ex)
+        {
+            AlertStatus = $"Could not save the alert settings — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task SendTestAlertAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        AlertStatus = "Sending a test alert…";
+        try
+        {
+            // Tests the SAVED settings — save first if you have just edited them.
+            var result = await _alerts.SendTestAsync(CancellationToken.None);
+            AlertStatus = result.IsSuccess
+                ? "Test alert sent — check the inbox and/or the webhook endpoint."
+                : result.Error;
+        }
+        catch (Exception ex)
+        {
+            AlertStatus = $"Test failed — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 

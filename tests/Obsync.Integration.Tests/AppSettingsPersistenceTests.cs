@@ -7,7 +7,7 @@ using Obsync.Shared.Models;
 
 namespace Obsync.Integration.Tests;
 
-/// <summary>Exercises the V006 app_settings table: the proxy configuration round-trips as JSON.</summary>
+/// <summary>Exercises the V006 app_settings table: the proxy and alert configurations round-trip as JSON.</summary>
 public sealed class AppSettingsPersistenceTests : IAsyncLifetime, IDisposable
 {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"obsync-settings-test-{Guid.NewGuid():N}.db");
@@ -62,6 +62,59 @@ public sealed class AppSettingsPersistenceTests : IAsyncLifetime, IDisposable
 
         Assert.Equal(ProxyMode.System, loaded.Mode);
         Assert.Null(loaded.Url);
+    }
+
+    [Fact]
+    public async Task Alerts_DefaultsWhenUnset()
+    {
+        var settings = await _provider.GetRequiredService<IAppSettingsRepository>().GetAlertSettingsAsync();
+
+        Assert.False(settings.EmailEnabled);
+        Assert.False(settings.WebhookEnabled);
+        Assert.Equal(587, settings.SmtpPort);
+        Assert.True(settings.SmtpUseTls);
+        Assert.True(settings.OnFailure);
+        Assert.True(settings.OnWarning);
+        Assert.False(settings.OnChanges);
+        Assert.True(settings.ScheduledRunsOnly);
+    }
+
+    [Fact]
+    public async Task Alerts_RoundTrip()
+    {
+        var repo = _provider.GetRequiredService<IAppSettingsRepository>();
+        await repo.UpsertAlertSettingsAsync(new AlertSettings
+        {
+            EmailEnabled = true,
+            SmtpHost = "smtp.corp.example",
+            SmtpPort = 25,
+            SmtpUseTls = false,
+            SmtpUsername = "svc-obsync",
+            FromAddress = "obsync@corp.example",
+            ToAddresses = "dba@corp.example, ops@corp.example",
+            WebhookEnabled = true,
+            WebhookUrl = "https://hooks.corp.example/obsync",
+            OnFailure = false,
+            OnWarning = false,
+            OnChanges = true,
+            ScheduledRunsOnly = false,
+        });
+
+        var loaded = await repo.GetAlertSettingsAsync();
+
+        Assert.True(loaded.EmailEnabled);
+        Assert.Equal("smtp.corp.example", loaded.SmtpHost);
+        Assert.Equal(25, loaded.SmtpPort);
+        Assert.False(loaded.SmtpUseTls);
+        Assert.Equal("svc-obsync", loaded.SmtpUsername);
+        Assert.Equal("obsync@corp.example", loaded.FromAddress);
+        Assert.Equal("dba@corp.example, ops@corp.example", loaded.ToAddresses);
+        Assert.True(loaded.WebhookEnabled);
+        Assert.Equal("https://hooks.corp.example/obsync", loaded.WebhookUrl);
+        Assert.False(loaded.OnFailure);
+        Assert.False(loaded.OnWarning);
+        Assert.True(loaded.OnChanges);
+        Assert.False(loaded.ScheduledRunsOnly);
     }
 
     public void Dispose()
