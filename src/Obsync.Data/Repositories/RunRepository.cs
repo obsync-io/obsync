@@ -173,6 +173,9 @@ public sealed class RunRepository : IRunRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        // One transaction for the batch: Dapper executes once per item, and without this each row
+        // would pay its own auto-commit fsync.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await connection.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO run_logs (run_id, timestamp, level, message, detail)
@@ -186,7 +189,9 @@ public sealed class RunRepository : IRunRepository
                 message = l.Message,
                 detail = l.Detail,
             }),
+            transaction,
             cancellationToken: cancellationToken)).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<SyncRunLog>> GetLogsAsync(Guid runId, CancellationToken cancellationToken = default)
@@ -209,6 +214,9 @@ public sealed class RunRepository : IRunRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        // One transaction for the batch — a VLDB first run records every object as an Added change,
+        // so this insert can carry hundreds of thousands of rows.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await connection.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO run_changes (run_id, change_type, object_type, schema_name, object_name, relative_path, previous_hash, new_hash)
@@ -225,7 +233,9 @@ public sealed class RunRepository : IRunRepository
                 prev = c.PreviousHash,
                 @new = c.NewHash,
             }),
+            transaction,
             cancellationToken: cancellationToken)).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, CancellationToken cancellationToken = default)
