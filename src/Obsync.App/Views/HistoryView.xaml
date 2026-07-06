@@ -81,27 +81,37 @@
             <DataGrid ItemsSource="{Binding RunsView}" SelectedItem="{Binding SelectedRun}"
                       Visibility="{Binding Runs.Count, Converter={StaticResource CountToVisibility}}">
                 <DataGrid.Columns>
-                    <DataGridTextColumn Header="Job" Binding="{Binding JobName}" Width="2*" />
-                    <DataGridTemplateColumn Header="Tags" Width="1.3*">
+                    <DataGridTextColumn Header="Job" Binding="{Binding JobName}" Width="2*" MinWidth="120">
+                        <DataGridTextColumn.ElementStyle>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="ToolTip" Value="{Binding JobName}" />
+                            </Style>
+                        </DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTemplateColumn Header="Tags" Width="1.3*" MinWidth="70">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <ItemsControl ItemsSource="{Binding TagChips}" Style="{StaticResource TagChipsList}" VerticalAlignment="Center" />
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" />
-                    <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" />
-                    <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" />
-                    <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" />
-                    <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.4*">
+                    <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" MinWidth="130" />
+                    <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" MinWidth="70" />
+                    <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" MinWidth="64" />
+                    <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" MinWidth="64" />
+                    <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.4*" MinWidth="90">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
                                 <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
                                 <Setter Property="VerticalAlignment" Value="Center" />
+                                <Setter Property="ToolTip" Value="{Binding CommitSha}" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>
                     </DataGridTextColumn>
-                    <DataGridTemplateColumn Header="Status" Width="1.2*">
+                    <DataGridTemplateColumn Header="Status" Width="1.2*" MinWidth="90">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
                                 <ContentControl Content="{Binding Status}" ContentTemplate="{StaticResource StatusBadgeTemplate}"

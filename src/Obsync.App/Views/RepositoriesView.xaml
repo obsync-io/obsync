@@ -24,10 +24,26 @@
                 <DataGrid ItemsSource="{Binding Repositories}"
                           Visibility="{Binding Repositories.Count, Converter={StaticResource CountToVisibility}}">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
-                        <DataGridTextColumn Header="Repository" Binding="{Binding FullName}" Width="*" />
+                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" MinWidth="90">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="ToolTip" Value="{Binding Name}" />
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Repository" Binding="{Binding FullName}" Width="*" MinWidth="110">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    <Setter Property="VerticalAlignment" Value="Center" />
+                                    <Setter Property="ToolTip" Value="{Binding FullName}" />
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
                         <DataGridTextColumn Header="Branch" Binding="{Binding DefaultBranch}" Width="Auto" />
-                        <DataGridTemplateColumn Header="" Width="Auto">
+                        <DataGridTemplateColumn Header="" Width="88">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

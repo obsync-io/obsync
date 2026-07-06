@@ -232,9 +232,25 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Object" Binding="{Binding QualifiedName}" Width="*" />
-                            <DataGridTextColumn Header="Path" Binding="{Binding RelativePath}" Width="2*" />
-                            <DataGridTemplateColumn Header="Actions" Width="Auto">
+                            <DataGridTextColumn Header="Object" Binding="{Binding QualifiedName}" Width="*" MinWidth="140">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="VerticalAlignment" Value="Center" />
+                                        <Setter Property="ToolTip" Value="{Binding QualifiedName}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Path" Binding="{Binding RelativePath}" Width="2*" MinWidth="160">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="VerticalAlignment" Value="Center" />
+                                        <Setter Property="ToolTip" Value="{Binding RelativePath}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTemplateColumn Header="Actions" Width="88">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
@@ -264,12 +280,21 @@
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
                     <DataGrid ItemsSource="{Binding Runs}" AutoGenerateColumns="False" IsReadOnly="True">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" />
-                            <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" />
-                            <DataGridTextColumn Header="Objects scanned" Binding="{Binding ObjectsScanned}" Width="*" />
-                            <DataGridTextColumn Header="Objects changed" Binding="{Binding ChangeCount}" Width="*" />
-                            <DataGridTextColumn Header="Commit SHA" Binding="{Binding CommitSha}" Width="1.4*" />
-                            <DataGridTemplateColumn Header="Status" Width="Auto">
+                            <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" MinWidth="130" />
+                            <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" MinWidth="70" />
+                            <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" MinWidth="64" />
+                            <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" MinWidth="64" />
+                            <DataGridTextColumn Header="Commit SHA" Binding="{Binding CommitSha}" Width="1.4*" MinWidth="90">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                        <Setter Property="VerticalAlignment" Value="Center" />
+                                        <Setter Property="ToolTip" Value="{Binding CommitSha}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTemplateColumn Header="Status" Width="Auto" MinWidth="90">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <ContentControl Content="{Binding Status}" ContentTemplate="{StaticResource StatusBadgeTemplate}"
@@ -312,7 +337,15 @@
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat=HH:mm:ss}" Width="Auto" />
                                 <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="Auto" />
-                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*" />
+                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                            <Setter Property="VerticalAlignment" Value="Center" />
+                                            <Setter Property="ToolTip" Value="{Binding Message}" />
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
                             </DataGrid.Columns>
                         </DataGrid>
                     </DockPanel>

@@ -509,7 +509,10 @@
         <Setter Property="SelectionMode" Value="Single" />
         <Setter Property="SelectionUnit" Value="FullRow" />
         <Setter Property="AutoGenerateColumns" Value="False" />
-        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+        <!-- Never scroll horizontally: overflow would push the trailing (Actions/Status) column
+             out of view. Columns must fit the viewport — star-size content columns with MinWidth
+             + CharacterEllipsis, and give action columns a FIXED width. -->
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
         <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
         <Setter Property="EnableRowVirtualization" Value="True" />
     </Style>
