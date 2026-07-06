@@ -36,6 +36,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
     private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
+    private readonly IReferenceDataReader _referenceDataReader;
     private readonly IGitWorkspace _gitWorkspace;
     private readonly IGitHubService _gitHub;
     private readonly IProxyProvider _proxy;
@@ -56,6 +57,7 @@ public sealed class SyncEngine : ISyncEngine
         IEnumerable<IObjectScriptProvider> scriptProviders,
         ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
+        IReferenceDataReader referenceDataReader,
         IGitWorkspace gitWorkspace,
         IGitHubService gitHub,
         IProxyProvider proxy,
@@ -75,6 +77,7 @@ public sealed class SyncEngine : ISyncEngine
         _scriptProviders = [.. scriptProviders];
         _probe = probe;
         _artifactReader = artifactReader;
+        _referenceDataReader = referenceDataReader;
         _gitWorkspace = gitWorkspace;
         _gitHub = gitHub;
         _proxy = proxy;
@@ -445,7 +448,10 @@ public sealed class SyncEngine : ISyncEngine
         // Runs concurrently across workers for objects, then sequentially for the trailing artifacts.
         async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath, CancellationToken ct)
         {
-            var isArtifact = identity.Type == SqlObjectType.DatabaseArtifact;
+            // Synthetic items (manifest artifacts, reference data) skip the object inventory, the
+            // scanned counter, and the ignore rules — they are engine-generated from explicit
+            // configuration, not discovered schema objects.
+            var isArtifact = identity.Type is SqlObjectType.DatabaseArtifact or SqlObjectType.ReferenceData;
             var key = StateKey(identity);
             seen.TryAdd(key, 0);
 
@@ -551,16 +557,27 @@ public sealed class SyncEngine : ISyncEngine
             workers,
             cancellationToken).ConfigureAwait(false);
 
+        // A reference table that cannot be scripted this run is reported like a scripting skip:
+        // counted as failed and marked "seen" so its committed file is never deleted by a blip.
+        void RecordDataSkip(ScriptedObjectIdentity identity, string reason)
+        {
+            seen.TryAdd(StateKey(identity), 0);
+            context.IncrementFailed();
+            skipped.Add($"Reference data {DescribeIdentity(identity)} — {reason}");
+        }
+
+        // Artifacts, reference data, and deletions run after the parallel phase, so they touch the
+        // accumulators alone.
+        await GenerateDatabaseArtifactsAsync(context, database, [.. inventory], ApplyItemAsync, cancellationToken).ConfigureAwait(false);
+        await GenerateReferenceDataAsync(context, database, ApplyItemAsync, RecordDataSkip, cancellationToken).ConfigureAwait(false);
+
         if (!skipped.IsEmpty)
         {
             var details = skipped.ToList();
             context.Log(SyncLogLevel.Warning,
-                $"{details.Count:N0} object(s) in {database} could not be scripted and were skipped.",
+                $"{details.Count:N0} item(s) in {database} could not be scripted and were skipped.",
                 string.Join("\n", details.Take(100)));
         }
-
-        // Artifacts and deletions run after the parallel phase, so they touch the accumulators alone.
-        await GenerateDatabaseArtifactsAsync(context, database, [.. inventory], ApplyItemAsync, cancellationToken).ConfigureAwait(false);
 
         await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
 
@@ -634,6 +651,63 @@ public sealed class SyncEngine : ISyncEngine
                 context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
             await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Scripts each configured reference table's data through the shared change-detection path.
+    /// Per-table problems (missing table, over the cap, SQL errors) become reported skips — one
+    /// bad entry never sinks the run.
+    /// </summary>
+    private async Task GenerateReferenceDataAsync(
+        RunContext context, string database,
+        Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply,
+        Action<ScriptedObjectIdentity, string> recordSkip, CancellationToken cancellationToken)
+    {
+        var tables = context.Job.Selection.ReferenceDataTables;
+        if (tables.Count == 0)
+        {
+            return;
+        }
+
+        context.Report(SyncPhase.Scripting, $"Scripting reference data in {database}…");
+        foreach (var entry in tables)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (schema, table) = SplitTableName(entry);
+            var identity = new ScriptedObjectIdentity(SqlObjectType.ReferenceData, schema, table);
+            try
+            {
+                var result = await _referenceDataReader.ReadTableDataAsync(
+                    context.Connection, context.SqlPassword, database, schema, table,
+                    context.Job.Advanced.ReferenceDataMaxRows,
+                    context.Job.Advanced.SqlCommandTimeoutSeconds,
+                    context.Job.Advanced.SqlLockTimeoutSeconds,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (result.SkipReason is not null)
+                {
+                    recordSkip(identity, result.SkipReason);
+                    continue;
+                }
+
+                await apply(identity, result.Script!, RepositoryLayout.ReferenceDataFile(schema, table), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                recordSkip(identity, ex.Message);
+            }
+        }
+    }
+
+    // Internal for tests: "schema.table" → parts; a bare table name defaults to dbo.
+    internal static (string Schema, string Table) SplitTableName(string entry)
+    {
+        var trimmed = entry.Trim();
+        var dot = trimmed.IndexOf('.');
+        return dot < 0
+            ? ("dbo", trimmed)
+            : (trimmed[..dot].Trim(), trimmed[(dot + 1)..].Trim());
     }
 
     private static ScriptedObjectIdentity ArtifactIdentity(string name) =>

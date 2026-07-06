@@ -27,6 +27,19 @@ public sealed partial class SelectableObjectType(SqlObjectType type, string disp
     [ObservableProperty] private bool _isSelected;
 }
 
+/// <summary>A table that can be picked for reference-data versioning.</summary>
+public sealed partial class SelectableTable(string qualifiedName, long? rowCount = null) : ObservableObject
+{
+    public string QualifiedName { get; } = qualifiedName;
+
+    /// <summary>Approximate row count, when the list came from the server (null for saved entries).</summary>
+    public long? RowCount { get; } = rowCount;
+
+    public string Display => RowCount is { } rows ? $"{QualifiedName}   ·   {rows:N0} rows" : QualifiedName;
+
+    [ObservableProperty] private bool _isSelected;
+}
+
 /// <summary>One labelled line on the Review step.</summary>
 public sealed record ReviewItem(string Label, string Value);
 
@@ -55,6 +68,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private SqlConnectionProfile? _selectedConnection;
     [ObservableProperty] private bool _syncAllUserDatabases;
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
+    [ObservableProperty] private bool _includeReferenceData;
+    [ObservableProperty] private string _tableSourceDatabase = string.Empty;
+    [ObservableProperty] private int _referenceDataMaxRows = 5000;
     [ObservableProperty] private GitRepositoryProfile? _selectedRepository;
     [ObservableProperty] private string _branch = "main";
     [ObservableProperty] private string _destinationFolder = string.Empty;
@@ -88,6 +104,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public ObservableCollection<GitRepositoryProfile> Repositories { get; } = [];
     public ObservableCollection<SelectableDatabase> Databases { get; } = [];
     public ObservableCollection<SelectableObjectType> ObjectTypes { get; } = [];
+    public ObservableCollection<SelectableTable> ReferenceTables { get; } = [];
     public ObservableCollection<ReviewItem> ReviewItems { get; } = [];
 
     public IReadOnlyList<ObjectSelectionPreset> Presets { get; } = Enum.GetValues<ObjectSelectionPreset>();
@@ -197,6 +214,16 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     partial void OnSelectedPresetChanged(ObjectSelectionPreset value) => OnPropertyChanged(nameof(IsCustomPreset));
 
+    partial void OnIncludeReferenceDataChanged(bool value)
+    {
+        // Default the table-source picker to the first relevant database from the Source step.
+        if (value && TableSourceDatabase.Length == 0)
+        {
+            TableSourceDatabase = Databases.FirstOrDefault(d => d.IsSelected)?.Name
+                ?? Databases.FirstOrDefault()?.Name ?? string.Empty;
+        }
+    }
+
     partial void OnSelectedScheduleKindChanged(ScheduleKind value)
     {
         OnPropertyChanged(nameof(ShowHourly));
@@ -274,6 +301,15 @@ public sealed partial class CreateJobViewModel : ObservableObject
         WindowEnd = job.Schedule.WindowEnd.ToString("HH:mm");
         SelectedDayScope = job.Schedule.DayScope;
 
+        IncludeReferenceData = job.Selection.ReferenceDataTables.Count > 0;
+        ReferenceTables.Clear();
+        foreach (var tableName in job.Selection.ReferenceDataTables)
+        {
+            ReferenceTables.Add(new SelectableTable(tableName) { IsSelected = true });
+        }
+
+        ReferenceDataMaxRows = job.Advanced.ReferenceDataMaxRows;
+
         MaxParallelWorkers = job.Advanced.MaxParallelWorkers;
         QueryTimeoutSeconds = job.Advanced.SqlCommandTimeoutSeconds;
         LockTimeoutSeconds = job.Advanced.SqlLockTimeoutSeconds;
@@ -328,6 +364,71 @@ public sealed partial class CreateJobViewModel : ObservableObject
         }
     }
 
+    [RelayCommand]
+    private async Task LoadTablesAsync()
+    {
+        if (SelectedConnection is null)
+        {
+            StatusMessage = "Select a server on the Source step first.";
+            return;
+        }
+
+        var database = TableSourceDatabase.Trim();
+        if (database.Length == 0)
+        {
+            StatusMessage = "Pick a database to list tables from.";
+            return;
+        }
+
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        StatusMessage = "Loading tables…";
+        try
+        {
+            var password = SelectedConnection.RequiresPassword
+                ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(SelectedConnection.Id))
+                : null;
+            var result = await _probe.GetTablesAsync(SelectedConnection, password, database);
+            if (result.IsFailure)
+            {
+                StatusMessage = result.Error;
+                return;
+            }
+
+            // Preserve checked tables (e.g. saved entries when editing) across a refresh, and keep
+            // any checked entry the loaded database doesn't have — it may exist in another database.
+            var selected = ReferenceTables.Where(t => t.IsSelected).Select(t => t.QualifiedName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            ReferenceTables.Clear();
+            foreach (var tableInfo in result.Value)
+            {
+                ReferenceTables.Add(new SelectableTable(tableInfo.QualifiedName, tableInfo.RowCount)
+                {
+                    IsSelected = selected.Remove(tableInfo.QualifiedName),
+                });
+            }
+
+            foreach (var leftover in selected)
+            {
+                ReferenceTables.Add(new SelectableTable(leftover) { IsSelected = true });
+            }
+
+            StatusMessage = $"Found {result.Value.Count} table(s) in {database}.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not load tables — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     // --- Stepper navigation --------------------------------------------------------------------
 
     [RelayCommand]
@@ -367,6 +468,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
         1 when SelectedConnection is null => "Select a server.",
         1 when !SyncAllUserDatabases && !Databases.Any(d => d.IsSelected) => "Select at least one database.",
         2 when IsCustomPreset && !ObjectTypes.Any(t => t.IsSelected) => "Select at least one object type for the Custom preset.",
+        2 when IncludeReferenceData && !ReferenceTables.Any(t => t.IsSelected) =>
+            "Select at least one reference table, or turn reference data off.",
+        2 when IncludeReferenceData && ReferenceDataMaxRows < 1 => "The reference-data row cap must be at least 1.",
         3 when IsExportOnly && string.IsNullOrWhiteSpace(ExportPath) => "Enter an export destination (a folder or .zip path).",
         3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
         3 when IsGitMode && string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
@@ -396,6 +500,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
             ? databases.Count == 0 ? "All user databases" : $"All user databases, excluding {string.Join(", ", databases)}"
             : databases.Count == 0 ? "—" : string.Join(", ", databases)));
         ReviewItems.Add(new ReviewItem("Objects", objects));
+        if (IncludeReferenceData && ReferenceTables.Any(t => t.IsSelected))
+        {
+            var tables = ReferenceTables.Where(t => t.IsSelected).Select(t => t.QualifiedName).ToList();
+            ReviewItems.Add(new ReviewItem("Reference data",
+                $"{string.Join(", ", tables)} · cap {ReferenceDataMaxRows:N0} rows/table"));
+        }
         if (IsExportOnly)
         {
             ReviewItems.Add(new ReviewItem("Export to", string.IsNullOrWhiteSpace(ExportPath) ? "—" : ExportPath.Trim()));
@@ -515,6 +625,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             job.Selection.CustomTypes = [.. ObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)];
         }
+
+        job.Selection.ReferenceDataTables = IncludeReferenceData
+            ? [.. ReferenceTables.Where(t => t.IsSelected).Select(t => t.QualifiedName)]
+            : [];
+        job.Advanced.ReferenceDataMaxRows = Math.Max(1, ReferenceDataMaxRows);
 
         job.Schedule = BuildSchedule();
         // Mutate the existing Advanced object so the unsurfaced retry counts are preserved.

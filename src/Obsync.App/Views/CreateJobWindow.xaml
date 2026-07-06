@@ -416,6 +416,50 @@
                                 </ScrollViewer>
                             </Border>
                         </StackPanel>
+
+                        <Border Style="{StaticResource Divider}" Margin="0,20,0,16" />
+
+                        <CheckBox Content="Version reference data (INSERT scripts)"
+                                  IsChecked="{Binding IncludeReferenceData}" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="Lookup/static tables are exported as deterministic INSERT scripts under data/ and change-tracked like any object. Tables over the row cap are reported, never truncated." />
+
+                        <StackPanel Visibility="{Binding IncludeReferenceData, Converter={StaticResource BoolToVisibility}}">
+                            <Grid Margin="0,14,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="BROWSE TABLES IN" Style="{StaticResource Caption}" />
+                                    <ComboBox ItemsSource="{Binding Databases}" DisplayMemberPath="Name"
+                                              SelectedValuePath="Name" SelectedValue="{Binding TableSourceDatabase}"
+                                              Margin="0,4,0,0" />
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="Load tables" Style="{StaticResource SecondaryButton}"
+                                        VerticalAlignment="Bottom" Command="{Binding LoadTablesCommand}"
+                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                            </Grid>
+
+                            <TextBlock Text="REFERENCE TABLES" Style="{StaticResource Caption}" Margin="0,14,0,0" />
+                            <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,4,0,0">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding ReferenceTables}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected}" Margin="0,4" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+
+                            <TextBlock Text="ROW CAP PER TABLE" Style="{StaticResource Caption}" Margin="0,14,0,0" />
+                            <TextBox Text="{Binding ReferenceDataMaxRows, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140" HorizontalAlignment="Left" Margin="0,4,0,0"
+                                     MaxLength="7" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 

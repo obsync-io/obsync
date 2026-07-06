@@ -18,3 +18,14 @@ public sealed class SqlDatabaseInfo
     public long SizeMb { get; init; }
     public bool IsOnline { get; init; } = true;
 }
+
+/// <summary>A table in a database, listed when picking reference-data tables.</summary>
+public sealed class SqlTableInfo
+{
+    public string Schema { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public long RowCount { get; init; }
+
+    /// <summary>The <c>schema.table</c> form used in the job's reference-table list.</summary>
+    public string QualifiedName => $"{Schema}.{Name}";
+}

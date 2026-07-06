@@ -58,11 +58,12 @@ public sealed class ObjectSelectionTests
     public void Catalog_EveryScriptableTypeHasADescriptor()
     {
         // Every user-selectable, provider-routed type must have a catalog descriptor. The synthetic
-        // DatabaseArtifact type is deliberately excluded — the engine generates those files directly
-        // with fixed paths and never routes them through the catalog or the path mapper.
+        // DatabaseArtifact/ReferenceData types are deliberately excluded — the engine generates
+        // those files directly with fixed paths and never routes them through the catalog or the
+        // path mapper.
         foreach (var type in Enum.GetValues<SqlObjectType>())
         {
-            if (type == SqlObjectType.DatabaseArtifact)
+            if (type is SqlObjectType.DatabaseArtifact or SqlObjectType.ReferenceData)
             {
                 continue;
             }
@@ -71,9 +72,11 @@ public sealed class ObjectSelectionTests
         }
     }
 
-    [Fact]
-    public void Catalog_DatabaseArtifactIsNotCataloged()
+    [Theory]
+    [InlineData(SqlObjectType.DatabaseArtifact)]
+    [InlineData(SqlObjectType.ReferenceData)]
+    public void Catalog_SyntheticTypesAreNotCataloged(SqlObjectType type)
     {
-        Assert.False(SqlObjectTypeCatalog.TryGet(SqlObjectType.DatabaseArtifact, out _));
+        Assert.False(SqlObjectTypeCatalog.TryGet(type, out _));
     }
 }

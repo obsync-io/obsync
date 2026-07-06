@@ -20,6 +20,12 @@ public sealed class JobAdvancedOptions
 
     /// <summary>Number of attempts for transient Git network failures (clone/fetch/push).</summary>
     public int GitRetryCount { get; set; } = 3;
+
+    /// <summary>
+    /// Row cap per reference-data table. A table with more rows is reported as a skip instead of
+    /// being scripted — reference data is meant for lookup tables, not fact data.
+    /// </summary>
+    public int ReferenceDataMaxRows { get; set; } = 5000;
 }
 
 /// <summary>A denormalized snapshot of a job's most recent run, for fast dashboard rendering.</summary>

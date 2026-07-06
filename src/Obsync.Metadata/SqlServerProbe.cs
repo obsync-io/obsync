@@ -13,6 +13,10 @@ public interface ISqlServerProbe
 
     Task<Result<IReadOnlyList<SqlDatabaseInfo>>> GetDatabasesAsync(
         SqlConnectionProfile profile, string? password, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists a database's user tables with approximate row counts (for the reference-data picker).</summary>
+    Task<Result<IReadOnlyList<SqlTableInfo>>> GetTablesAsync(
+        SqlConnectionProfile profile, string? password, string database, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="ISqlServerProbe" />
@@ -108,6 +112,49 @@ public sealed class SqlServerProbe : ISqlServerProbe
         {
             _logger.LogWarning("Enumerating databases on {Server} failed: {Message}", profile.ServerName, ex.Message);
             return Result.Failure<IReadOnlyList<SqlDatabaseInfo>>(FriendlyMessage(ex));
+        }
+    }
+
+    public async Task<Result<IReadOnlyList<SqlTableInfo>>> GetTablesAsync(
+        SqlConnectionProfile profile, string? password, string database, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await using var connection = new SqlConnection(_connectionStrings.Create(profile, password, database));
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            await using var command = connection.CreateCommand();
+            // Row counts come from partition metadata (approximate but instant — no table scans).
+            command.CommandText =
+                """
+                SELECT s.name AS SchemaName, t.name AS TableName,
+                       CAST(ISNULL(SUM(p.rows), 0) AS bigint) AS RowCnt
+                FROM sys.tables t
+                JOIN sys.schemas s ON s.schema_id = t.schema_id
+                LEFT JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
+                WHERE t.is_ms_shipped = 0
+                GROUP BY s.name, t.name
+                ORDER BY s.name, t.name;
+                """;
+
+            var tables = new List<SqlTableInfo>();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                tables.Add(new SqlTableInfo
+                {
+                    Schema = reader.GetString(0),
+                    Name = reader.GetString(1),
+                    RowCount = reader.GetInt64(2),
+                });
+            }
+
+            return Result.Success<IReadOnlyList<SqlTableInfo>>(tables);
+        }
+        catch (SqlException ex)
+        {
+            _logger.LogWarning("Enumerating tables in {Database} on {Server} failed: {Message}", database, profile.ServerName, ex.Message);
+            return Result.Failure<IReadOnlyList<SqlTableInfo>>(FriendlyMessage(ex));
         }
     }
 

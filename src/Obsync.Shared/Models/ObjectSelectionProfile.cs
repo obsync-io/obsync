@@ -43,6 +43,15 @@ public sealed class ObjectSelectionProfile
     /// <summary>Glob patterns (matched against <c>schema.name</c>) to exclude from scripting.</summary>
     public List<string> IgnorePatterns { get; set; } = [];
 
+    /// <summary>
+    /// Reference/static tables whose DATA is versioned as deterministic INSERT scripts under
+    /// <c>data/</c>. Entries are <c>schema.table</c> (a bare name means <c>dbo</c>) and apply to
+    /// every database the job scripts; a table missing from a database is reported as a skip.
+    /// Tables above <see cref="JobAdvancedOptions.ReferenceDataMaxRows"/> are skipped, never
+    /// silently truncated.
+    /// </summary>
+    public List<string> ReferenceDataTables { get; set; } = [];
+
     /// <summary>Resolves the effective set of object types in redeploy order.</summary>
     public IReadOnlyList<SqlObjectType> ResolveTypes() =>
         Preset == ObjectSelectionPreset.Custom

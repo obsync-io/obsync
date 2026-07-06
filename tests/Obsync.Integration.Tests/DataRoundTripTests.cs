@@ -71,6 +71,8 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
             DatabaseScope = DatabaseScope.AllUserDatabases,
             Databases = [],
             ExcludedDatabases = ["Scratch", "TempWork"],
+            Selection = new ObjectSelectionProfile { ReferenceDataTables = ["dbo.Currency", "ref.Status"] },
+            Advanced = new JobAdvancedOptions { ReferenceDataMaxRows = 750 },
         };
 
         var jobs = _provider.GetRequiredService<IJobRepository>();
@@ -82,6 +84,8 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
         Assert.Empty(loaded.Databases);
         Assert.Equal(["Scratch", "TempWork"], loaded.ExcludedDatabases);
         Assert.Equal("All user databases (excl. Scratch, TempWork)", loaded.DatabasesDisplay);
+        Assert.Equal(["dbo.Currency", "ref.Status"], loaded.Selection.ReferenceDataTables);
+        Assert.Equal(750, loaded.Advanced.ReferenceDataMaxRows);
     }
 
     [Fact]

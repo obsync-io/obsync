@@ -24,6 +24,23 @@ public static class RepositoryLayout
     /// </summary>
     public const string PermissionsFile = "security/permissions/permissions.sql";
 
+    /// <summary>Folder holding versioned reference/static table data, relative to the database root.</summary>
+    public const string DataFolder = "data";
+
+    /// <summary>
+    /// The repository path for one reference table's data script, e.g. <c>data/dbo.Currency.sql</c>.
+    /// Characters that are invalid in file names are replaced with <c>_</c>.
+    /// </summary>
+    public static string ReferenceDataFile(string schema, string table) =>
+        $"{DataFolder}/{SanitizeFileStem($"{schema}.{table}")}.sql";
+
+    private static string SanitizeFileStem(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var stem = new string([.. name.Select(ch => invalid.Contains(ch) ? '_' : ch)]).TrimEnd('.', ' ');
+        return stem.Length == 0 ? "_" : stem;
+    }
+
     /// <summary>
     /// Joins a base folder and a relative path into a clean, forward-slashed repository path
     /// with no leading, trailing, or duplicate separators.
