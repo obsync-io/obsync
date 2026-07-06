@@ -337,3 +337,8 @@ dotnet test  Obsync.slnx
 ## License
 
 [MIT](LICENSE) © 2026 Obsync Contributors.
+
+Obsync redistributes third-party components under their own licenses — see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The installer additionally bundles an
+unmodified [MinGit (Git for Windows)](https://github.com/git-for-windows/git), which is a
+separate program licensed under GPLv2 and aggregated alongside Obsync.

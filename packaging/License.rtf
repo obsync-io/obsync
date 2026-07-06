@@ -1,5 +1,12 @@
 {\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil\fcharset0 Segoe UI;}}
-\f0\fs18
+{\*\obsyncnote The project URL below is a placeholder; set the final URL at launch.}
+\f0\fs22
+{\b\fs28 Obsync License Agreement and Notices\par}
+\par
+Obsync is free, open-source software. By installing it you accept the MIT License below and acknowledge the third-party and privacy notices that follow.\par
+\par
+{\b\fs24 1. License (MIT)\par}
+\par
 MIT License\par
 \par
 Copyright (c) 2026 Obsync Contributors\par
@@ -9,4 +16,41 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\par
 \par
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\par
+\par
+{\b\fs24 2. Third-Party Software\par}
+\par
+{\b 2.1 Git for Windows (MinGit) - GPLv2\par}
+\par
+This installer distributes an unmodified copy of Git (MinGit 2.55.0.2, from the Git for Windows project). Git is a separate program licensed under the GNU General Public License, version 2 (GPLv2), not under the MIT License above. Its license text is installed alongside it at tools\\git\\LICENSE.txt. The complete corresponding source code is available at https://github.com/git-for-windows/git, which satisfies the GPLv2 source-code offer for this unmodified distribution. Git is aggregated alongside Obsync on the same installation medium; it is not a derivative work of Obsync, and Obsync is not a derivative work of Git.\par
+\par
+{\b 2.2 Redistributed .NET components\par}
+\par
+Obsync is self-contained and redistributes the following components with their own licenses:\par
+\par
+- .NET runtime and Microsoft.Extensions libraries - MIT License\par
+- Microsoft.Data.SqlClient - MIT License\par
+- SQL Server Management Objects (SMO) - MIT License\par
+- Microsoft.Data.Sqlite and SQLitePCLRaw - MIT License / Apache License 2.0 (SQLite itself is public domain)\par
+- Dapper - Apache License 2.0\par
+- Quartz.NET - Apache License 2.0\par
+- Octokit.NET - MIT License\par
+- CommunityToolkit.Mvvm - MIT License\par
+- DiffPlex - Apache License 2.0\par
+- Serilog and Serilog sinks - Apache License 2.0\par
+- System.CommandLine - MIT License\par
+\par
+The full component list with upstream links and license texts is in THIRD-PARTY-NOTICES.md in the Obsync source repository.\par
+\par
+{\b\fs24 3. Privacy and Data Handling\par}
+\par
+Obsync collects no telemetry and sends no data to the publisher. All configuration, job definitions, and run history are stored locally on this machine under %LOCALAPPDATA%\\Obsync. SQL passwords, GitHub tokens, and SMTP passwords are stored exclusively in Windows Credential Manager - never in configuration files, the local database, exports, or logs. The software communicates only with endpoints you configure: your SQL Server, github.com or your repository host, and any optional SMTP or webhook alert endpoints. Obsync reads from SQL Server and never modifies it.\par
+\par
+{\b\fs24 4. No Warranty; Limitation of Liability\par}
+\par
+Obsync is provided "AS IS" under the MIT License. In plain language: you use it at your own risk, and the authors make no promises that it is error-free or fit for your purpose and accept no liability for damages arising from its use. The controlling text is the disclaimer in Section 1, restated here:\par
+\par
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\par
+\par
+Project: https://github.com/obsync\par
+This document is provided for notice purposes and does not add restrictions beyond the MIT License.\par
 }
