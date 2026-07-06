@@ -37,14 +37,14 @@ $stageDir = Join-Path $repoRoot 'artifacts\publish'
 $outDir = Join-Path $repoRoot 'artifacts'
 
 <#
-  Pinned MinGit (bundled so installs have zero prerequisites — no git on PATH needed).
+  Pinned MinGit (bundled so installs have zero prerequisites -- no git on PATH needed).
 
   git is GPLv2; Obsync (MIT) distributes it UNMODIFIED as a separate aggregated program alongside the
   app ("mere aggregation" under GPLv2), and the MinGit zip's own license files (LICENSE.txt and the
   per-component notices it contains) are extracted with it into tools\git\.
 
   pinned: MinGit 2.55.0.2 x64 (git-for-windows v2.55.0.windows.2), SHA256 from the official release
-  notes at https://github.com/git-for-windows/git/releases/tag/v2.55.0.windows.2 — a mismatch below
+  notes at https://github.com/git-for-windows/git/releases/tag/v2.55.0.windows.2 -- a mismatch below
   fails the build; never weaken it to a warning.
 #>
 $minGitVersion = '2.55.0.2'
@@ -140,7 +140,7 @@ $gitStageDir = Join-Path $stageDir 'tools\git'
 Write-Host "Extracting MinGit to $gitStageDir" -ForegroundColor DarkCyan
 Expand-Archive -Path $minGitZipPath -DestinationPath $gitStageDir
 if (-not (Test-Path (Join-Path $gitStageDir 'cmd\git.exe'))) {
-    throw "MinGit extraction did not produce tools\git\cmd\git.exe — the zip layout changed; fix the staging step."
+    throw "MinGit extraction did not produce tools\git\cmd\git.exe -- the zip layout changed; fix the staging step."
 }
 
 # --- Code signing (host exes before wix build; the MSI afterwards) ---
@@ -152,7 +152,7 @@ if ($SigningThumbprint) {
     )
 }
 else {
-    Write-Host 'UNSIGNED build — provide -SigningThumbprint (or set OBSYNC_SIGN_THUMBPRINT) for release.' -ForegroundColor Yellow
+    Write-Host 'UNSIGNED build -- provide -SigningThumbprint (or set OBSYNC_SIGN_THUMBPRINT) for release.' -ForegroundColor Yellow
 }
 
 # --- Ensure the WiX tool + extensions are available ---
