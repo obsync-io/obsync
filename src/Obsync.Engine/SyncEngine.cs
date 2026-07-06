@@ -34,12 +34,14 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
+    private readonly IScriptingWatermarkRepository _watermarks;
     private readonly IAppSettingsRepository _appSettings;
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
     private readonly IServerObjectScriptProvider _serverProvider;
     private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IReferenceDataReader _referenceDataReader;
+    private readonly IModifiedObjectReader _modifiedObjects;
     private readonly IGitWorkspace _gitWorkspace;
     private readonly IGitHubService _gitHub;
     private readonly IProxyProvider _proxy;
@@ -58,12 +60,14 @@ public sealed class SyncEngine : ISyncEngine
         IRepositoryProfileRepository repositories,
         IRunRepository runs,
         IObjectStateRepository objectStates,
+        IScriptingWatermarkRepository watermarks,
         IAppSettingsRepository appSettings,
         IEnumerable<IObjectScriptProvider> scriptProviders,
         IServerObjectScriptProvider serverProvider,
         ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
         IReferenceDataReader referenceDataReader,
+        IModifiedObjectReader modifiedObjects,
         IGitWorkspace gitWorkspace,
         IGitHubService gitHub,
         IProxyProvider proxy,
@@ -81,12 +85,14 @@ public sealed class SyncEngine : ISyncEngine
         _repositories = repositories;
         _runs = runs;
         _objectStates = objectStates;
+        _watermarks = watermarks;
         _appSettings = appSettings;
         _scriptProviders = [.. scriptProviders];
         _serverProvider = serverProvider;
         _probe = probe;
         _artifactReader = artifactReader;
         _referenceDataReader = referenceDataReader;
+        _modifiedObjects = modifiedObjects;
         _gitWorkspace = gitWorkspace;
         _gitHub = gitHub;
         _proxy = proxy;
@@ -590,10 +596,18 @@ public sealed class SyncEngine : ISyncEngine
             ? context.Job.Advanced.MaxParallelWorkers
             : Environment.ProcessorCount;
 
+        // Incremental scripting: snapshot modify_dates FIRST, mark unchanged objects as seen with
+        // their prior hashes, and hand the providers per-type watermark filters. Export runs are
+        // always full snapshots, and a first run (no prior state) has nothing to skip.
+        var incrementalWatermarks = !fullSnapshot && context.Job.Advanced.IncrementalScripting && prior.Count > 0
+            ? await PlanIncrementalAsync(context, database, types, prior, seen, inventory, ignoreRules, cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+
         // A single producer streams from the providers (one SqlDataReader at a time) into a bounded
         // channel; the worker pool normalizes, hashes, diffs, and writes objects in parallel.
         await ChannelPipeline.RunAsync(
-            StreamProvidersAsync(context, database, types, cancellationToken),
+            StreamProvidersAsync(context, database, types, workers, incrementalWatermarks, cancellationToken),
             (raw, ct) => raw.SkipReason is not null
                 ? RecordSkipAsync(raw)
                 : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
@@ -625,6 +639,74 @@ public sealed class SyncEngine : ISyncEngine
         await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
 
         context.PendingStates.AddRange(changedStates);
+    }
+
+    /// <summary>
+    /// The incremental-scripting snapshot pass for one database: reads every capable object's
+    /// <c>modify_date</c> in one bulk query, runs the pure <see cref="IncrementalPlanner"/>, marks
+    /// each planned skip as seen/scanned with its prior hash in the inventory (no state write, no
+    /// file write, no change record), and queues the new watermarks for persistence with the final
+    /// run status. Returns the provider filter — only the safe ("filterable") types' watermarks —
+    /// or null when nothing can be filtered.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<SqlObjectType, DateTime>?> PlanIncrementalAsync(
+        RunContext context, string database, IReadOnlyList<SqlObjectType> types,
+        Dictionary<string, TrackedObjectState> prior,
+        ConcurrentDictionary<string, byte> seen, ConcurrentBag<ObjectInventoryEntry> inventory,
+        IgnoreRules ignoreRules, CancellationToken cancellationToken)
+    {
+        var capableTypes = types.Where(IncrementalPlanner.CapableTypes.Contains).ToList();
+        if (capableTypes.Count == 0)
+        {
+            return null;
+        }
+
+        var watermarks = await _watermarks.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false);
+        var snapshot = await _modifiedObjects.GetSnapshotAsync(
+            context.Connection, context.SqlPassword, database, capableTypes,
+            context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+            cancellationToken).ConfigureAwait(false);
+
+        // "Ignored" for planning purposes means either an ignore-rule match or an out-of-filter
+        // schema — the providers never yield those, so they must neither be skipped as unchanged
+        // nor treated as safety violations. Removing the schema filter later un-ignores them, and
+        // the resulting no-prior violation forces the full scan that brings them into scope.
+        var schemaFilter = context.Job.Selection.SchemaFilter;
+        var plan = IncrementalPlanner.Plan(snapshot, prior, watermarks,
+            (type, schema, name) => ignoreRules.Matches(type, schema, name)
+                || (schemaFilter.Count > 0 && !schemaFilter.Contains(schema)));
+
+        foreach (var skip in plan.SkippedItems)
+        {
+            var identity = new ScriptedObjectIdentity(skip.Item.Type, skip.Item.Schema, skip.Item.Name);
+            seen.TryAdd(StateKey(identity), 0);
+            context.IncrementScanned();
+            // The inventory wants the database-root-relative path; the mapper is deterministic, so
+            // this reproduces exactly what scripting the object would have recorded.
+            inventory.Add(new ObjectInventoryEntry(
+                skip.Item.Type.ToString(), skip.Item.Schema, skip.Item.Name,
+                _pathMapper.MapRelativePath(identity), skip.PriorState.LastHash));
+        }
+
+        if (plan.NewWatermarks.Count > 0)
+        {
+            context.PendingWatermarks[database] = plan.NewWatermarks;
+        }
+
+        if (plan.SkippedItems.Count > 0)
+        {
+            context.Log(SyncLogLevel.Info,
+                $"Incremental: skipped {plan.SkippedItems.Count:N0} unchanged object(s) in {database}.");
+        }
+
+        if (plan.FilterableTypes.Count == 0)
+        {
+            return null;
+        }
+
+        return watermarks
+            .Where(pair => plan.FilterableTypes.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
     }
 
     /// <summary>
@@ -812,7 +894,8 @@ public sealed class SyncEngine : ISyncEngine
     /// producer) advances this, so the providers' SqlDataReaders are never touched concurrently.
     /// </summary>
     private async IAsyncEnumerable<RawScriptedObject> StreamProvidersAsync(
-        RunContext context, string database, IReadOnlyList<SqlObjectType> types,
+        RunContext context, string database, IReadOnlyList<SqlObjectType> types, int workers,
+        IReadOnlyDictionary<SqlObjectType, DateTime>? incrementalWatermarks,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         foreach (var provider in _scriptProviders)
@@ -833,6 +916,10 @@ public sealed class SyncEngine : ISyncEngine
                 CommandTimeoutSeconds = context.Job.Advanced.SqlCommandTimeoutSeconds,
                 SqlLockTimeoutSeconds = context.Job.Advanced.SqlLockTimeoutSeconds,
                 MaxRetries = context.Job.Advanced.SqlRetryCount,
+                IncrementalWatermarks = incrementalWatermarks,
+                // Capped at 8 so a wide worker pool cannot hammer the source server with
+                // scripting connections; SMO uses this to partition large table collections.
+                ScriptingParallelism = Math.Min(8, workers),
             };
 
             await foreach (var raw in provider.ScriptAsync(request, cancellationToken).ConfigureAwait(false))
@@ -1246,6 +1333,16 @@ public sealed class SyncEngine : ISyncEngine
         // One transaction for the whole batch — a VLDB first run persists hundreds of thousands
         // of states, and per-row auto-commits would dominate the run time.
         await _objectStates.UpsertManyAsync(context.PendingStates, cancellationToken).ConfigureAwait(false);
+
+        // Incremental watermarks only advance when the run reached a healthy final status — a
+        // failed or cancelled run must re-examine everything past the last good watermark next time.
+        if (status is RunStatus.Succeeded or RunStatus.NoChanges or RunStatus.Warning)
+        {
+            foreach (var (database, watermarks) in context.PendingWatermarks)
+            {
+                await _watermarks.UpsertManyAsync(context.Job.Id, database, watermarks, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     private static async Task WriteFileAsync(
@@ -1319,6 +1416,11 @@ public sealed class SyncEngine : ISyncEngine
         public ConcurrentBag<ObjectChange> Changes { get; } = new();
         public List<SyncRunLog> Logs { get; } = [];
         public List<TrackedObjectState> PendingStates { get; } = [];
+
+        /// <summary>Per-database incremental watermarks staged during scripting; persisted with the
+        /// final states only when the run ends healthy. Written from single-threaded stages.</summary>
+        public Dictionary<string, IReadOnlyDictionary<SqlObjectType, DateTime>> PendingWatermarks { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
 
         public void Report(SyncPhase phase, string message, int done = 0, int total = 0) =>
             _progress?.Report(new SyncProgress(phase, message, done, total));

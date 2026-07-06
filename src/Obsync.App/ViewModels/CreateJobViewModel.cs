@@ -97,6 +97,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private int _maxParallelWorkers;
     [ObservableProperty] private int _queryTimeoutSeconds = 120;
     [ObservableProperty] private int _lockTimeoutSeconds;
+    [ObservableProperty] private bool _incrementalScripting = true;
 
     [ObservableProperty] private string? _statusMessage;
     [ObservableProperty] private bool _isBusy;
@@ -337,7 +338,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
         MaxParallelWorkers = job.Advanced.MaxParallelWorkers;
         QueryTimeoutSeconds = job.Advanced.SqlCommandTimeoutSeconds;
         LockTimeoutSeconds = job.Advanced.SqlLockTimeoutSeconds;
-        ShowAdvanced = job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0;
+        IncrementalScripting = job.Advanced.IncrementalScripting;
+        ShowAdvanced = job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0
+            || !job.Advanced.IncrementalScripting;
     }
 
     [RelayCommand]
@@ -549,11 +552,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
         ReviewItems.Add(new ReviewItem("Folder", EffectiveDestinationFolder(databases)));
         ReviewItems.Add(new ReviewItem("Schedule", BuildSchedule().Describe()));
-        if (MaxParallelWorkers != 0 || LockTimeoutSeconds != 0 || QueryTimeoutSeconds != 120)
+        if (MaxParallelWorkers != 0 || LockTimeoutSeconds != 0 || QueryTimeoutSeconds != 120 || !IncrementalScripting)
         {
             var workers = MaxParallelWorkers == 0 ? "auto" : MaxParallelWorkers.ToString();
             var lockText = LockTimeoutSeconds == 0 ? "server default" : $"{LockTimeoutSeconds}s";
-            ReviewItems.Add(new ReviewItem("Advanced", $"{workers} workers · query {QueryTimeoutSeconds}s · lock {lockText}"));
+            var incremental = IncrementalScripting ? string.Empty : " · incremental scripting off";
+            ReviewItems.Add(new ReviewItem("Advanced", $"{workers} workers · query {QueryTimeoutSeconds}s · lock {lockText}{incremental}"));
         }
         ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges ? "Commit only when changes are detected" : "Always create a run"));
         ReviewItems.Add(new ReviewItem("Commit mode", SelectedCommitMode switch
@@ -670,6 +674,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         job.Advanced.MaxParallelWorkers = Math.Max(0, MaxParallelWorkers);
         job.Advanced.SqlCommandTimeoutSeconds = Math.Max(1, QueryTimeoutSeconds);
         job.Advanced.SqlLockTimeoutSeconds = Math.Max(0, LockTimeoutSeconds);
+        job.Advanced.IncrementalScripting = IncrementalScripting;
         job.UpdatedAt = _clock.UtcNow;
         if (!IsEditMode)
         {

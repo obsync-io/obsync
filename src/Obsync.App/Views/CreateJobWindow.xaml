@@ -623,8 +623,12 @@
                             <TextBox Text="{Binding QueryTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
                                      MaxLength="5" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
                             <TextBlock Text="LOCK TIMEOUT (SECONDS, 0 = SERVER DEFAULT)" Style="{StaticResource Caption}" />
-                            <TextBox Text="{Binding LockTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4"
+                            <TextBox Text="{Binding LockTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
                                      MaxLength="5" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                            <CheckBox Content="Incremental scripting (recommended for very large databases)"
+                                      IsChecked="{Binding IncrementalScripting}" Margin="0,0,0,6" />
+                            <TextBlock Text="Skips objects unchanged since the last run using SQL Server's modify_date. Permission- or extended-property-only changes don't update modify_date — turn this off and run once to capture those."
+                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,4" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

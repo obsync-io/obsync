@@ -26,6 +26,21 @@ public sealed class ScriptRequest
 
     /// <summary>Number of attempts (1 = no retry) for transient SQL failures while reading metadata.</summary>
     public int MaxRetries { get; init; } = 3;
+
+    /// <summary>
+    /// Per-type incremental floor: a provider may skip reading objects whose
+    /// <c>modify_date</c> is strictly older than the type's watermark (the comparison is
+    /// <c>modify_date &gt;= watermark</c>, so a boundary-tick object is re-read). The engine's
+    /// snapshot pass has already accounted for every filtered object. Null, or a type missing
+    /// from the dictionary, means "no filter — read everything".
+    /// </summary>
+    public IReadOnlyDictionary<SqlObjectType, DateTime>? IncrementalWatermarks { get; init; }
+
+    /// <summary>
+    /// How many source-server connections a provider may fan scripting out across (1 = the
+    /// single shared connection). Only the SMO provider's large collections use this.
+    /// </summary>
+    public int ScriptingParallelism { get; init; } = 1;
 }
 
 /// <summary>The raw (pre-normalization) script for a single object, as produced by a provider.</summary>
