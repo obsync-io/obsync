@@ -417,6 +417,12 @@
                             </Border>
                         </StackPanel>
 
+                        <TextBlock Text="SCHEMA FILTER (COMMA-SEPARATED, OPTIONAL)" Style="{StaticResource Caption}" Margin="0,18,0,0" />
+                        <TextBox Text="{Binding SchemaFilter, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,2"
+                                 ToolTip="Only these schemas are scripted, e.g. dbo, sales. Leave empty for all schemas." />
+                        <TextBlock Text="Empty = all schemas. Useful on multi-tenant servers to version only the schemas you own."
+                                   Style="{StaticResource Caption}" TextWrapping="Wrap" />
+
                         <Border Style="{StaticResource Divider}" Margin="0,20,0,16" />
 
                         <CheckBox Content="Version server-level objects (logins, Agent jobs, linked servers…)"

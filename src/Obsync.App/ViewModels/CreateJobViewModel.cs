@@ -99,6 +99,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private int _lockTimeoutSeconds;
     [ObservableProperty] private bool _incrementalScripting = true;
 
+    /// <summary>Comma-separated schema allow-list; empty = all schemas.</summary>
+    [ObservableProperty] private string _schemaFilter = string.Empty;
+
     [ObservableProperty] private string? _statusMessage;
     [ObservableProperty] private bool _isBusy;
 
@@ -291,6 +294,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         Reviewers = string.Join(", ", job.Reviewers);
         ExportPath = job.ExportPath ?? string.Empty;
         SelectedPreset = job.Selection.Preset;
+        SchemaFilter = string.Join(", ", job.Selection.SchemaFilter);
 
         // In the dynamic scope the checklist holds the EXCLUSIONS; otherwise the selected list.
         SyncAllUserDatabases = job.DatabaseScope == DatabaseScope.AllUserDatabases;
@@ -340,7 +344,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         LockTimeoutSeconds = job.Advanced.SqlLockTimeoutSeconds;
         IncrementalScripting = job.Advanced.IncrementalScripting;
         ShowAdvanced = job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0
-            || !job.Advanced.IncrementalScripting;
+            || job.Advanced.SqlCommandTimeoutSeconds != 120 || !job.Advanced.IncrementalScripting;
     }
 
     [RelayCommand]
@@ -504,6 +508,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
         3 when IsGitMode && string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
         4 when SelectedScheduleKind == ScheduleKind.Cron && string.IsNullOrWhiteSpace(CronExpression) => "Enter a cron expression.",
+        4 when SelectedScheduleKind is ScheduleKind.Daily or ScheduleKind.Weekly
+            && !TimeOnly.TryParseExact(TimeOfDay, "HH:mm", out _) => "Enter a valid time of day (HH:mm).",
         4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowStart, "HH:mm", out _) => "Enter a valid window start time (HH:mm).",
         4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowEnd, "HH:mm", out _) => "Enter a valid window end time (HH:mm).",
         _ => null,
@@ -529,6 +535,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
             ? databases.Count == 0 ? "All user databases" : $"All user databases, excluding {string.Join(", ", databases)}"
             : databases.Count == 0 ? "—" : string.Join(", ", databases)));
         ReviewItems.Add(new ReviewItem("Objects", objects));
+        if (ParseSchemaFilter() is { Count: > 0 } schemas)
+        {
+            ReviewItems.Add(new ReviewItem("Schemas", string.Join(", ", schemas)));
+        }
         if (IncludeServerObjects && ServerObjectTypes.Any(t => t.IsSelected))
         {
             ReviewItems.Add(new ReviewItem("Server objects",
@@ -574,6 +584,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         ReviewItems.Add(new ReviewItem("Security",
             "SQL password and GitHub token are read from Windows Credential Manager; never written to disk or logs."));
     }
+
+    // Parse the schema-filter textbox into the case-insensitive allow-list the engine consumes.
+    private HashSet<string> ParseSchemaFilter() => new(
+        SchemaFilter.Split([',', ';', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        StringComparer.OrdinalIgnoreCase);
 
     // Parse the reviewers textbox: split on commas/whitespace/semicolons, strip a leading '@',
     // drop blanks, de-dupe case-insensitively.
@@ -661,6 +676,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
             job.Selection.CustomTypes = [.. ObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)];
         }
 
+        job.Selection.SchemaFilter = ParseSchemaFilter();
         job.Selection.ServerTypes = IncludeServerObjects
             ? [.. ServerObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)]
             : [];

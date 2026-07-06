@@ -539,7 +539,7 @@ public sealed class SyncEngine : ISyncEngine
                 changeType = ChangeType.Modified;
             }
 
-            await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, ct)
+            await WriteFileAsync(context, localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, ct)
                 .ConfigureAwait(false);
 
             if (changeType == ChangeType.Added)
@@ -551,7 +551,7 @@ public sealed class SyncEngine : ISyncEngine
                 context.IncrementModified();
             }
 
-            context.Changes.Add(new ObjectChange
+            context.AddChange(new ObjectChange
             {
                 ChangeType = changeType,
                 ObjectType = identity.Type,
@@ -778,7 +778,7 @@ public sealed class SyncEngine : ISyncEngine
                 changeType = ChangeType.Modified;
             }
 
-            await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, serverRoot, relativePath, ct)
+            await WriteFileAsync(context, localPath, repoRelativePath, script, context.Job.LocalExportPath, serverRoot, relativePath, ct)
                 .ConfigureAwait(false);
 
             if (changeType == ChangeType.Added)
@@ -790,7 +790,7 @@ public sealed class SyncEngine : ISyncEngine
                 context.IncrementModified();
             }
 
-            context.Changes.Add(new ObjectChange
+            context.AddChange(new ObjectChange
             {
                 ChangeType = changeType,
                 ObjectType = identity.Type,
@@ -1046,7 +1046,7 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             context.IncrementDeleted();
-            context.Changes.Add(new ObjectChange
+            context.AddChange(new ObjectChange
             {
                 ChangeType = ChangeType.Deleted,
                 ObjectType = state.ObjectType,
@@ -1119,7 +1119,7 @@ public sealed class SyncEngine : ISyncEngine
         SyncRun run, RunContext context, GitWorkspaceContext gitContext, bool allowEmpty, CancellationToken cancellationToken)
     {
         context.Report(SyncPhase.Committing, "Creating commit…");
-        var (subject, body) = CommitMessageBuilder.Build(run, context.Job, [.. context.Changes]);
+        var (subject, body) = CommitMessageBuilder.Build(run, context.Job, context.Changes);
         var commit = await _gitWorkspace.CommitAllAsync(gitContext, subject, body, allowEmpty, cancellationToken).ConfigureAwait(false);
 
         if (!commit.Success)
@@ -1346,19 +1346,29 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     private static async Task WriteFileAsync(
-        string localPath, string repoRelativePath, string content,
+        RunContext context, string localPath, string repoRelativePath, string content,
         string? localExportRoot, string dbFolder, string relativePath, CancellationToken cancellationToken)
     {
         var absolute = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(absolute)!);
+        EnsureDirectory(context, Path.GetDirectoryName(absolute)!);
         await File.WriteAllTextAsync(absolute, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
 
         if (!string.IsNullOrWhiteSpace(localExportRoot))
         {
             var exportRelative = RepositoryLayout.Combine(dbFolder, relativePath).Replace('/', Path.DirectorySeparatorChar);
             var exportPath = Path.Combine(localExportRoot, exportRelative);
-            Directory.CreateDirectory(Path.GetDirectoryName(exportPath)!);
+            EnsureDirectory(context, Path.GetDirectoryName(exportPath)!);
             await File.WriteAllTextAsync(exportPath, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    // Objects of a type share a handful of folders; without this cache a VLDB run issues one
+    // CreateDirectory syscall per object (hundreds of thousands, nearly all redundant).
+    private static void EnsureDirectory(RunContext context, string directory)
+    {
+        if (context.EnsuredDirectories.TryAdd(directory, 0))
+        {
+            Directory.CreateDirectory(directory);
         }
     }
 
@@ -1413,7 +1423,24 @@ public sealed class SyncEngine : ISyncEngine
         public void IncrementFailed() => Interlocked.Increment(ref _failed);
 
         // Changes are added concurrently by workers; Logs and PendingStates only from single-threaded stages.
-        public ConcurrentBag<ObjectChange> Changes { get; } = new();
+        private readonly List<ObjectChange> _changes = [];
+        private readonly Lock _changesGate = new();
+
+        /// <summary>Records one change. Called concurrently by pipeline workers — a locked List is
+        /// far cheaper at VLDB scale than a ConcurrentBag (no per-thread segments, no copy to read).</summary>
+        public void AddChange(ObjectChange change)
+        {
+            lock (_changesGate)
+            {
+                _changes.Add(change);
+            }
+        }
+
+        /// <summary>Read only after the parallel phase — finalize/persist run single-threaded.</summary>
+        public IReadOnlyList<ObjectChange> Changes => _changes;
+
+        /// <summary>Directories already created this run, so writers skip redundant syscalls.</summary>
+        public ConcurrentDictionary<string, byte> EnsuredDirectories { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<SyncRunLog> Logs { get; } = [];
         public List<TrackedObjectState> PendingStates { get; } = [];
 
