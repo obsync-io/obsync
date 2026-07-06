@@ -17,15 +17,26 @@
                 <TextBlock Text="History" Style="{StaticResource PageTitle}" />
                 <TextBlock Text="Runs, commits, and changed objects" Style="{StaticResource Muted}" Margin="0,4,0,18" />
             </StackPanel>
-            <StackPanel Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" MaxWidth="320">
-                <Button Style="{StaticResource SecondaryButton}" HorizontalAlignment="Right"
-                        Command="{Binding ExportReportCommand}" ToolTip="Export the selected run as HTML, CSV, or JSON">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconExport}"
-                                   FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="Export report" VerticalAlignment="Center" />
-                    </StackPanel>
-                </Button>
+            <StackPanel Grid.Column="1" VerticalAlignment="Top" HorizontalAlignment="Right" MaxWidth="420">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Style="{StaticResource SecondaryButton}" Margin="0,0,10,0"
+                            Command="{Binding ViewChangesCommand}"
+                            ToolTip="View the scripts that changed in the selected run">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconDiff}"
+                                       FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="View changes" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource SecondaryButton}"
+                            Command="{Binding ExportReportCommand}" ToolTip="Export the selected run as HTML, CSV, or JSON">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconExport}"
+                                       FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Export report" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
                 <TextBlock Style="{StaticResource Muted}" Text="{Binding ReportMessage}" Margin="0,8,0,0"
                            TextWrapping="Wrap" TextAlignment="Right"
                            Visibility="{Binding ReportMessage, Converter={StaticResource NullToVisibility}}" />
@@ -85,7 +96,7 @@
                     <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.4*">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
-                                <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
+                                <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
                                 <Setter Property="VerticalAlignment" Value="Center" />
                             </Style>
                         </DataGridTextColumn.ElementStyle>

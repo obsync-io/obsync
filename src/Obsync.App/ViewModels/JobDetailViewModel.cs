@@ -71,6 +71,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(HasLatestRun));
         ExportReportCommand.NotifyCanExecuteChanged();
+        ViewDiffCommand.NotifyCanExecuteChanged();
     }
 
     public ObservableCollection<SyncRun> Runs { get; } = [];
@@ -313,6 +314,22 @@ public sealed partial class JobDetailViewModel : ObservableObject
         {
             OpenUrl(PullRequestUrl);
         }
+    }
+
+    private bool CanViewDiff(ObjectChange? change) => LatestRun?.CommitSha is not null;
+
+    // The diff comes from the latest run's commit in the local clone; without a CommitSha (failed,
+    // no-changes, or export-only run) there is nothing to diff and the row buttons stay disabled.
+    [RelayCommand(CanExecute = nameof(CanViewDiff))]
+    private async Task ViewDiffAsync(ObjectChange? change)
+    {
+        if (LatestRun is not { CommitSha: not null } run)
+        {
+            return;
+        }
+
+        await Views.ScriptDiffWindow.ShowDialogAsync(
+            System.Windows.Application.Current?.MainWindow, run, [.. Changes], _repository, change);
     }
 
     [RelayCommand]

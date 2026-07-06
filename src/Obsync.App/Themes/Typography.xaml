@@ -9,6 +9,9 @@
     <!-- Windows 11 Fluent system font; falls back to Segoe UI on Windows 10. -->
     <FontFamily x:Key="AppFontFamily">Segoe UI Variable Text, Segoe UI</FontFamily>
 
+    <!-- Monospace for code, diffs, line numbers, and commit SHAs. -->
+    <FontFamily x:Key="MonoFontFamily">Cascadia Mono, Cascadia Code, Consolas</FontFamily>
+
     <Style x:Key="PageTitle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
         <Setter Property="FontSize" Value="22" />

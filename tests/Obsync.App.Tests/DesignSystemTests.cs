@@ -12,12 +12,15 @@ namespace Obsync.App.Tests;
 /// Template application is where WPF surfaces errors like an unset <c>Foreground</c> or a broken
 /// resource reference, so this reproduces view-load crashes that a plain build cannot catch.
 /// </summary>
+[Collection("wpf application")]
 public sealed class DesignSystemTests
 {
     private static readonly string[] ExpectedKeys =
     [
         "AccentBrush", "CardBrush", "BorderBrush", "PanelBrush", "SuccessSoftBrush", "AccentSoftBrush",
-        "AppFontFamily", "IconFontFamily", "RadiusCard", "RadiusPill", "CardPadding",
+        "DiffAddedEmphasisBrush", "DiffDeletedEmphasisBrush",
+        "AppFontFamily", "IconFontFamily", "MonoFontFamily", "IconDiff", "IconCopy",
+        "RadiusCard", "RadiusPill", "CardPadding",
         "PageTitle", "SectionTitle", "MetricValue", "Body", "BodyStrong", "Muted", "Caption", "Icon",
         "Card", "Panel", "Divider", "PrimaryButton", "SecondaryButton", "SubtleButton",
         "IconButton", "LinkButton", "NavButton",

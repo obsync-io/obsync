@@ -23,6 +23,10 @@
     <Color x:Key="NeutralSoftColor">#F1F5F9</Color>
     <Color x:Key="RowHoverColor">#F8FAFC</Color>
 
+    <!-- Diff word-level highlights: stronger than the soft line tints so intra-line changes pop. -->
+    <Color x:Key="DiffAddedEmphasisColor">#BFE8CD</Color>
+    <Color x:Key="DiffDeletedEmphasisColor">#F5C8C8</Color>
+
     <SolidColorBrush x:Key="AppBackgroundBrush" Color="{StaticResource AppBackgroundColor}" />
     <SolidColorBrush x:Key="CardBrush" Color="{StaticResource CardColor}" />
     <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
@@ -41,6 +45,9 @@
     <SolidColorBrush x:Key="AccentSoftBrush" Color="{StaticResource AccentSoftColor}" />
     <SolidColorBrush x:Key="NeutralSoftBrush" Color="{StaticResource NeutralSoftColor}" />
     <SolidColorBrush x:Key="RowHoverBrush" Color="{StaticResource RowHoverColor}" />
+
+    <SolidColorBrush x:Key="DiffAddedEmphasisBrush" Color="{StaticResource DiffAddedEmphasisColor}" />
+    <SolidColorBrush x:Key="DiffDeletedEmphasisBrush" Color="{StaticResource DiffDeletedEmphasisColor}" />
 
     <!-- ============ Tokens ============ -->
     <!-- Corner radii -->

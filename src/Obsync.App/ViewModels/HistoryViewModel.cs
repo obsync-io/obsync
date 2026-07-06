@@ -20,6 +20,8 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
     private const string AllJobs = "All jobs";
 
     private readonly IRunRepository _runs;
+    private readonly IJobRepository _jobs;
+    private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunReportWriter _reportWriter;
     private readonly IAppSettingsRepository _settings;
 
@@ -54,9 +56,16 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     public ICollectionView RunsView { get; }
 
-    public HistoryViewModel(IRunRepository runs, IRunReportWriter reportWriter, IAppSettingsRepository settings)
+    public HistoryViewModel(
+        IRunRepository runs,
+        IJobRepository jobs,
+        IRepositoryProfileRepository repositories,
+        IRunReportWriter reportWriter,
+        IAppSettingsRepository settings)
     {
         _runs = runs;
+        _jobs = jobs;
+        _repositories = repositories;
         _reportWriter = reportWriter;
         _settings = settings;
         _selectedStatus = StatusOptions[0];
@@ -98,7 +107,11 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     partial void OnSearchTextChanged(string value) => RunsView.Refresh();
 
-    partial void OnSelectedRunChanged(SyncRun? value) => ExportReportCommand.NotifyCanExecuteChanged();
+    partial void OnSelectedRunChanged(SyncRun? value)
+    {
+        ExportReportCommand.NotifyCanExecuteChanged();
+        ViewChangesCommand.NotifyCanExecuteChanged();
+    }
 
     private bool CanExportReport() => SelectedRun is not null;
 
@@ -119,6 +132,26 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         {
             ReportMessage = message;
         }
+    }
+
+    private bool CanViewChanges() => SelectedRun?.CommitSha is not null;
+
+    // History does not preload a run's changes, so fetch them (and the job's repository, for the
+    // GitHub links) on demand before opening the diff viewer.
+    [RelayCommand(CanExecute = nameof(CanViewChanges))]
+    private async Task ViewChangesAsync()
+    {
+        if (SelectedRun is not { CommitSha: not null } run)
+        {
+            return;
+        }
+
+        var changes = await _runs.GetChangesAsync(run.Id);
+        var job = await _jobs.GetAsync(run.JobId);
+        var repository = job?.RepositoryProfileId is { } repositoryId ? await _repositories.GetAsync(repositoryId) : null;
+
+        await Views.ScriptDiffWindow.ShowDialogAsync(
+            System.Windows.Application.Current?.MainWindow, run, changes, repository);
     }
 
     private bool FilterRun(object item)

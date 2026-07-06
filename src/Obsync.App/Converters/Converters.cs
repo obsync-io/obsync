@@ -129,6 +129,26 @@ public sealed class ChangeTypeToBadgeBackgroundConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Maps a <see cref="ViewModels.DiffRowKind"/> to its line-background tint.</summary>
+public sealed class DiffRowKindToBackgroundConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var key = value switch
+        {
+            ViewModels.DiffRowKind.Added => "SuccessSoftBrush",
+            ViewModels.DiffRowKind.Deleted => "ErrorSoftBrush",
+            ViewModels.DiffRowKind.Imaginary => "NeutralSoftBrush",
+            _ => null,
+        };
+
+        return key is null ? Brushes.Transparent : Application.Current.TryFindResource(key) as Brush ?? Brushes.Transparent;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>Maps a <see cref="ConnectionTestStatus"/> to a friendly label.</summary>
 public sealed class ConnectionStatusToTextConverter : IValueConverter
 {

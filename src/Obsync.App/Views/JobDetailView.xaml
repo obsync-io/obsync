@@ -237,12 +237,20 @@
                             <DataGridTemplateColumn Header="Actions" Width="Auto">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub" AutomationProperties.Name="Open in GitHub"
-                                                Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}">
-                                            <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconOpenExternal}"
-                                                       FontSize="15" />
-                                        </Button>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Style="{StaticResource IconButton}" ToolTip="View diff" AutomationProperties.Name="View diff"
+                                                    Command="{Binding DataContext.ViewDiffCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}">
+                                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconDiff}"
+                                                           FontSize="15" />
+                                            </Button>
+                                            <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub" AutomationProperties.Name="Open in GitHub"
+                                                    Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}">
+                                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconOpenExternal}"
+                                                           FontSize="15" />
+                                            </Button>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

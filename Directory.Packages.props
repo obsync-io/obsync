@@ -33,6 +33,7 @@
 
   <ItemGroup Label="WPF / MVVM">
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageVersion Include="DiffPlex" Version="1.7.2" />
   </ItemGroup>
 
   <ItemGroup Label="Logging (Serilog)">

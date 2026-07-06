@@ -19,6 +19,7 @@
             <conv:StatusToTextConverter x:Key="StatusToText" />
             <conv:ChangeTypeToBrushConverter x:Key="ChangeTypeToBrush" />
             <conv:ChangeTypeToBadgeBackgroundConverter x:Key="ChangeTypeToBadgeBackground" />
+            <conv:DiffRowKindToBackgroundConverter x:Key="DiffRowBackground" />
             <conv:MsToDurationConverter x:Key="MsToDuration" />
             <conv:LocalDateTimeConverter x:Key="LocalDateTime" />
             <conv:CountToVisibilityConverter x:Key="CountToVisibility" />
