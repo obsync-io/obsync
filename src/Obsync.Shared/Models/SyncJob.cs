@@ -26,6 +26,14 @@ public sealed class JobAdvancedOptions
     /// being scripted — reference data is meant for lookup tables, not fact data.
     /// </summary>
     public int ReferenceDataMaxRows { get; set; } = 5000;
+
+    /// <summary>
+    /// Skip re-scripting objects whose <c>sys.objects.modify_date</c> is older than the last
+    /// successful run's watermark. The big steady-state win on very large databases. Caveat:
+    /// permission- or extended-property-only changes don't bump <c>modify_date</c>; turning this
+    /// off for one run captures those. Export runs are always full snapshots.
+    /// </summary>
+    public bool IncrementalScripting { get; set; } = true;
 }
 
 /// <summary>A denormalized snapshot of a job's most recent run, for fast dashboard rendering.</summary>

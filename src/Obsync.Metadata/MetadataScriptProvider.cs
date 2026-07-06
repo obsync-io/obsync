@@ -89,6 +89,8 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
              WHERE o.is_ms_shipped = 0 AND o.type IN ({codes})
              """);
         AppendSchemaFilter(sql, "s.name", request.Selection.SchemaFilter);
+        var watermark = IncrementalWatermark(request, type);
+        AppendWatermarkFilter(sql, "o.modify_date", watermark);
         sql.Append(" ORDER BY s.name, o.name;");
 
         await using var command = CreateCommand(connection, sql.ToString(), request);
@@ -98,6 +100,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         }
 
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
+        AddWatermarkParameter(command, watermark);
 
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -135,10 +138,14 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             WHERE t.is_ms_shipped = 0 AND t.parent_class = 1
             """);
         AppendSchemaFilter(sql, "ps.name", request.Selection.SchemaFilter);
+        // sys.triggers.modify_date carries the same catalog value as sys.objects.modify_date.
+        var watermark = IncrementalWatermark(request, SqlObjectType.Trigger);
+        AppendWatermarkFilter(sql, "t.modify_date", watermark);
         sql.Append(" ORDER BY ps.name, t.name;");
 
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
+        AddWatermarkParameter(command, watermark);
 
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -234,10 +241,13 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             WHERE sy.is_ms_shipped = 0
             """);
         AppendSchemaFilter(sql, "s.name", request.Selection.SchemaFilter);
+        var watermark = IncrementalWatermark(request, SqlObjectType.Synonym);
+        AppendWatermarkFilter(sql, "sy.modify_date", watermark);
         sql.Append(" ORDER BY s.name, sy.name;");
 
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
+        AddWatermarkParameter(command, watermark);
 
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -265,10 +275,13 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             JOIN sys.schemas s ON s.schema_id = q.schema_id
             """);
         AppendSchemaFilter(sql, "s.name", request.Selection.SchemaFilter, prefixWhere: true);
+        var watermark = IncrementalWatermark(request, SqlObjectType.Sequence);
+        AppendWatermarkFilter(sql, "q.modify_date", watermark, prefixWhere: request.Selection.SchemaFilter.Count == 0);
         sql.Append(" ORDER BY s.name, q.name;");
 
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
+        AddWatermarkParameter(command, watermark);
 
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -344,6 +357,30 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         foreach (var schema in schemaFilter)
         {
             command.Parameters.AddWithValue($"@sf{index++}", schema);
+        }
+    }
+
+    /// <summary>The type's incremental floor from the request, or null when the type is unfiltered.</summary>
+    private static DateTime? IncrementalWatermark(ScriptRequest request, SqlObjectType type) =>
+        request.IncrementalWatermarks is { } watermarks && watermarks.TryGetValue(type, out var watermark)
+            ? watermark
+            : null;
+
+    // >= (not >) so an object modified in the same datetime tick as the watermark is re-read;
+    // the engine's snapshot pass has already marked every filtered-out object as seen.
+    private static void AppendWatermarkFilter(StringBuilder sql, string column, DateTime? watermark, bool prefixWhere = false)
+    {
+        if (watermark is not null)
+        {
+            sql.Append(prefixWhere ? " WHERE " : " AND ").Append(column).Append(" >= @incrementalWm");
+        }
+    }
+
+    private static void AddWatermarkParameter(SqlCommand command, DateTime? watermark)
+    {
+        if (watermark is { } value)
+        {
+            command.Parameters.AddWithValue("@incrementalWm", value);
         }
     }
 

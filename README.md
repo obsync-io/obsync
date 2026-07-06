@@ -203,6 +203,38 @@ secret-free JSON file that references the server and repository by name; **Impor
 page re-attaches it to the matching profiles on another machine — passwords and tokens never
 leave Windows Credential Manager.
 
+## Performance on very large databases
+
+Obsync targets VLDBs — hundreds of thousands of objects. Two things in the job wizard's
+Schedule → advanced settings matter at that scale:
+
+- **Max parallel workers** — how many objects are normalized/hashed/written concurrently per
+  database (0 = one per CPU core). Scripting itself also fans out: large SMO table collections
+  are partitioned across worker connections, capped at 8 so the source server is never hammered.
+- **Query / lock timeouts** — bound how long a metadata read may run or wait on locks.
+
+### Incremental scripting
+
+On by default (and recommended for very large databases). Steady-state runs read one cheap
+snapshot of `sys.objects.modify_date`, then re-read only the objects that changed since the last
+successful run — everything else keeps its recorded hash and committed file untouched, so a
+nightly run on a 500k-object database only pays for the day's changes.
+
+Correctness guardrails, applied automatically:
+
+- Watermarks only advance when a run ends healthy (success, no-changes, or warning); after a
+  failed or cancelled run everything past the last good watermark is re-examined.
+- If an object turns up that is older than the watermark but was never scripted (say the schema
+  filter or the object selection changed), its whole type gets a full scan that run — nothing is
+  ever silently left unscripted.
+- Export runs are always full snapshots.
+
+**Caveat:** permission- or extended-property-only changes don't update SQL Server's
+`modify_date`, so incremental runs won't notice them on otherwise-unchanged objects. Turn the
+option off and run once to capture those, then turn it back on. Only tables, views, procedures,
+functions, triggers, synonyms, and sequences are filtered — every other type is always fully
+scanned (they are few).
+
 ## Alerting
 
 Obsync can alert people when a sync run finishes — the service-side counterpart to the in-app

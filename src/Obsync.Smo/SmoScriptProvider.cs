@@ -1,11 +1,13 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.SqlServer.Management.Smo;
 using Obsync.Shared;
 using Obsync.Shared.Models;
 using Obsync.Shared.Objects;
 using Obsync.Shared.Scripting;
+using SmoServer = Microsoft.SqlServer.Management.Smo.Server;
 
 namespace Obsync.Smo;
 
@@ -13,9 +15,18 @@ namespace Obsync.Smo;
 /// The high-fidelity path: scripts tables and complex objects (UDTs, partitions, full-text,
 /// assemblies, security policies, etc.) via SQL Server Management Objects. Heavy collections use
 /// bulk prefetch with narrowed init-fields so per-object scripting does not trigger N+1 round trips.
+/// Large work lists are partitioned across worker connections (SMO is not thread-safe across a
+/// shared connection, so each slice gets its own Server) up to the request's scripting parallelism.
 /// </summary>
 public sealed class SmoScriptProvider : IObjectScriptProvider
 {
+    /// <summary>
+    /// Work lists smaller than this are scripted sequentially on the primary connection — the
+    /// fan-out cost (one extra connection + collection enumeration per slice) beats the win.
+    /// The same constant sizes the slices: K = min(parallelism, count / 32).
+    /// </summary>
+    internal const int MinItemsPerSlice = 32;
+
     private readonly ILogger<SmoScriptProvider> _logger;
 
     public SmoScriptProvider(ILogger<SmoScriptProvider> logger) => _logger = logger;
@@ -53,12 +64,7 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
     {
         var server = SmoConnection.BuildServer(request);
         await SmoConnection.ConnectWithRetryAsync(server, request.MaxRetries, _logger, cancellationToken).ConfigureAwait(false);
-
-        // Bound how long SMO's metadata reads wait on locks (fail fast on a busy server). 0 = unset.
-        if (request.SqlLockTimeoutSeconds > 0)
-        {
-            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {request.SqlLockTimeoutSeconds * 1000};");
-        }
+        ApplyLockTimeout(server, request);
 
         var database = server.Databases[request.Database]
             ?? throw new InvalidOperationException($"Database '{request.Database}' was not found on the server.");
@@ -73,8 +79,15 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            Prefetch(database, typeMap, options, type);
+            SetInitFields(server, typeMap);
 
+            // Phase 1 (primary connection): materialize the filtered work list with light init
+            // fields. Only Table is watermark-capable on the SMO path — DateLastModified carries
+            // the same catalog value as sys.objects.modify_date.
+            var watermark = type == SqlObjectType.Table && request.IncrementalWatermarks is { } watermarks
+                && watermarks.TryGetValue(type, out var floor) ? floor : (DateTime?)null;
+
+            var work = new List<(string Schema, string Name, IScriptable Instance)>();
             foreach (var obj in typeMap.GetCollection(database))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -84,32 +97,243 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
                     continue;
                 }
 
-                // yield return cannot live inside a try/catch, so capture the outcome first.
-                string? script = null;
-                string? skipReason = null;
-                try
+                // Skip WITHOUT yielding: the engine's snapshot pass already marked it as seen.
+                if (watermark is { } wm && obj is Table table && table.DateLastModified < wm)
                 {
-                    var batches = ((IScriptable)obj).Script(options).Cast<string>();
-                    script = string.Join("\nGO\n", batches);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning("Failed to script {Type} {Schema}.{Name}: {Message}", type, schema, name, ex.Message);
-                    skipReason = $"SMO could not script this object: {ex.Message}";
-                }
-
-                var identity = new ScriptedObjectIdentity(type, schema, name);
-                if (skipReason is not null)
-                {
-                    // Report the failure instead of silently dropping the object.
-                    yield return RawScriptedObject.Skipped(identity, skipReason);
                     continue;
                 }
 
-                yield return RawScriptedObject.Scripted(identity, script!);
-                await Task.Yield();
+                work.Add((schema, name, (IScriptable)obj));
+            }
+
+            var sliceCount = ComputeSliceCount(work.Count, request.ScriptingParallelism);
+            if (sliceCount <= 1)
+            {
+                // Prefetch only pays off for a full sweep of a heavy collection; a watermark has
+                // already narrowed the list, and lazy loading per object is cheaper than bulk
+                // prefetching children for every table in the database.
+                if (watermark is null)
+                {
+                    Prefetch(database, typeMap, options, type);
+                }
+
+                foreach (var (schema, name, instance) in work)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return ScriptOne(instance, new ScriptedObjectIdentity(type, schema, name), options);
+                    await Task.Yield();
+                }
+
+                continue;
+            }
+
+            var names = work.Select(w => (w.Schema, w.Name)).ToList();
+            await foreach (var raw in ScriptPartitionedAsync(request, type, typeMap, names, sliceCount, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return raw;
             }
         }
+    }
+
+    /// <summary>
+    /// Phase 2 for a large work list: partition it into contiguous slices and script each slice on
+    /// its own connection, funneling results through a channel back to the single enumerator.
+    /// Fault discipline mirrors <c>ChannelPipeline</c>: per-object failures become
+    /// <see cref="RawScriptedObject.Skipped"/>, while the first REAL slice-level fault (e.g. a
+    /// connection failure) cancels the peers and completes the channel with that exception.
+    /// </summary>
+    private async IAsyncEnumerable<RawScriptedObject> ScriptPartitionedAsync(
+        ScriptRequest request, SqlObjectType type, SmoTypeMap typeMap,
+        IReadOnlyList<(string Schema, string Name)> work, int sliceCount,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // Unbounded is fine: items are strings the workers have already produced.
+        var channel = Channel.CreateUnbounded<RawScriptedObject>(new UnboundedChannelOptions { SingleReader = true });
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var token = linkedCts.Token;
+
+        // First non-cancellation fault wins; teardown-induced OperationCanceledExceptions never
+        // mask a real error.
+        var gate = new object();
+        Exception? failure = null;
+        void Record(Exception ex)
+        {
+            if (ex is OperationCanceledException)
+            {
+                return;
+            }
+
+            lock (gate)
+            {
+                failure ??= ex;
+            }
+        }
+
+        var workers = PartitionSlices(work.Count, sliceCount)
+            .Select(slice => Task.Run(async () =>
+            {
+                try
+                {
+                    await ScriptSliceAsync(request, type, typeMap, work, slice, channel.Writer, token).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Record(ex);
+                    await linkedCts.CancelAsync().ConfigureAwait(false); // stop the sibling slices
+                }
+            }, CancellationToken.None))
+            .ToArray();
+
+        // Workers swallow their own faults into `failure`, so WhenAll cannot throw; completing the
+        // channel with the captured failure (or null) is what unblocks — and faults — the reader.
+        var completion = Task.Run(async () =>
+        {
+            await Task.WhenAll(workers).ConfigureAwait(false);
+            channel.Writer.Complete(failure);
+        }, CancellationToken.None);
+
+        await foreach (var raw in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            yield return raw;
+        }
+
+        await completion.ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>Scripts one contiguous slice of the work list on its own dedicated SMO connection.</summary>
+    private async Task ScriptSliceAsync(
+        ScriptRequest request, SqlObjectType type, SmoTypeMap typeMap,
+        IReadOnlyList<(string Schema, string Name)> work, (int Offset, int Count) slice,
+        ChannelWriter<RawScriptedObject> writer, CancellationToken cancellationToken)
+    {
+        // SMO is not thread-safe across a shared connection — every slice builds its own Server.
+        var server = SmoConnection.BuildServer(request);
+        try
+        {
+            await SmoConnection.ConnectWithRetryAsync(server, request.MaxRetries, _logger, cancellationToken).ConfigureAwait(false);
+            ApplyLockTimeout(server, request);
+            SetInitFields(server, typeMap);
+
+            var database = server.Databases[request.Database]
+                ?? throw new InvalidOperationException($"Database '{request.Database}' was not found on the server.");
+            // ScriptingOptions is mutable — never share one instance across slices.
+            var options = SmoScriptingOptionsFactory.Create(request.Selection);
+
+            for (var i = slice.Offset; i < slice.Offset + slice.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (schema, name) = work[i];
+                var identity = new ScriptedObjectIdentity(type, schema, name);
+
+                RawScriptedObject result;
+                try
+                {
+                    result = Resolve(database, typeMap, schema, name) is IScriptable instance
+                        ? ScriptOne(instance, identity, options)
+                        : RawScriptedObject.Skipped(identity,
+                            "The object was no longer found when scripting reached it (it may have been dropped during the run).");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning("Failed to resolve {Type} {Schema}.{Name}: {Message}", type, schema, name, ex.Message);
+                    result = RawScriptedObject.Skipped(identity, $"SMO could not script this object: {ex.Message}");
+                }
+
+                await writer.WriteAsync(result, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            try
+            {
+                server.ConnectionContext.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                // Best-effort teardown; a failed disconnect must not mask the slice's outcome.
+                _logger.LogDebug("Disconnecting a scripting worker connection failed: {Message}", ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many slices a work list is split into: 1 (sequential on the primary connection) when
+    /// the list is small or parallelism is off, otherwise capped by both the parallelism and the
+    /// per-slice minimum so tiny slices never spawn their own connections.
+    /// </summary>
+    internal static int ComputeSliceCount(int itemCount, int parallelism) =>
+        parallelism <= 1 || itemCount < MinItemsPerSlice
+            ? 1
+            : Math.Min(parallelism, Math.Max(1, itemCount / MinItemsPerSlice));
+
+    /// <summary>
+    /// Splits <paramref name="itemCount"/> items into <paramref name="sliceCount"/> contiguous
+    /// (offset, count) slices whose sizes differ by at most one and sum to the item count.
+    /// </summary>
+    internal static IReadOnlyList<(int Offset, int Count)> PartitionSlices(int itemCount, int sliceCount)
+    {
+        var slices = new List<(int Offset, int Count)>(sliceCount);
+        var baseSize = itemCount / sliceCount;
+        var remainder = itemCount % sliceCount;
+        var offset = 0;
+        for (var i = 0; i < sliceCount; i++)
+        {
+            var size = baseSize + (i < remainder ? 1 : 0);
+            slices.Add((offset, size));
+            offset += size;
+        }
+
+        return slices;
+    }
+
+    // Scripting failures become reported skips, never silent drops — the caller yields the result.
+    private RawScriptedObject ScriptOne(IScriptable instance, ScriptedObjectIdentity identity, ScriptingOptions options)
+    {
+        try
+        {
+            var batches = instance.Script(options).Cast<string>();
+            return RawScriptedObject.Scripted(identity, string.Join("\nGO\n", batches));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Failed to script {Type} {Schema}.{Name}: {Message}",
+                identity.Type, identity.Schema, identity.Name, ex.Message);
+            return RawScriptedObject.Skipped(identity, $"SMO could not script this object: {ex.Message}");
+        }
+    }
+
+    /// <summary>Looks an object up by key in its (freshly loaded) collection; null when it vanished mid-run.</summary>
+    private static object? Resolve(Database database, SmoTypeMap typeMap, string schema, string name)
+    {
+        dynamic collection = typeMap.GetCollection(database);
+        return typeMap.SchemaScoped ? collection[name, schema] : collection[name];
+    }
+
+    // Bound how long SMO's metadata reads wait on locks (fail fast on a busy server). 0 = unset.
+    private static void ApplyLockTimeout(SmoServer server, ScriptRequest request)
+    {
+        if (request.SqlLockTimeoutSeconds > 0)
+        {
+            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {request.SqlLockTimeoutSeconds * 1000};");
+        }
+    }
+
+    // Narrow the heavy collections' enumeration to the fields the filters need. DateLastModified
+    // rides along for Table so the incremental watermark check never triggers per-object fetches.
+    private static void SetInitFields(SmoServer server, SmoTypeMap typeMap)
+    {
+        if (typeMap.HeavyClrType is null)
+        {
+            return;
+        }
+
+        string[] fields = typeMap.HeavyClrType == typeof(Table)
+            ? ["Schema", "Name", "IsSystemObject", "DateLastModified"]
+            : ["Schema", "Name", "IsSystemObject"];
+        server.SetDefaultInitFields(typeMap.HeavyClrType, fields);
     }
 
     private void Prefetch(Database database, SmoTypeMap typeMap, ScriptingOptions options, SqlObjectType type)
@@ -121,7 +345,6 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
 
         try
         {
-            database.Parent.SetDefaultInitFields(typeMap.HeavyClrType, "Schema", "Name", "IsSystemObject");
             database.PrefetchObjects(typeMap.HeavyClrType, options);
         }
         catch (Exception ex)
