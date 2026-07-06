@@ -50,6 +50,19 @@ public enum CommitMode
     ExportOnly = 3,
 }
 
+/// <summary>How a job decides which databases on the server to script.</summary>
+public enum DatabaseScope
+{
+    /// <summary>Script the fixed list the user picked in the wizard.</summary>
+    SelectedDatabases = 0,
+
+    /// <summary>
+    /// Script every online user database on the server (minus the exclusion list), resolved fresh
+    /// at the start of each run — databases created later are picked up automatically.
+    /// </summary>
+    AllUserDatabases = 1,
+}
+
 /// <summary>Which days a maintenance window applies to.</summary>
 public enum MaintenanceDayScope
 {

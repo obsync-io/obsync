@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Obsync.Data.Repositories;
 using Obsync.Git;
 using Obsync.GitHub;
+using Obsync.Metadata;
 using Obsync.Shared;
 using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
@@ -33,6 +34,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
+    private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IGitWorkspace _gitWorkspace;
     private readonly IGitHubService _gitHub;
@@ -52,6 +54,7 @@ public sealed class SyncEngine : ISyncEngine
         IRunRepository runs,
         IObjectStateRepository objectStates,
         IEnumerable<IObjectScriptProvider> scriptProviders,
+        ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
         IGitWorkspace gitWorkspace,
         IGitHubService gitHub,
@@ -70,6 +73,7 @@ public sealed class SyncEngine : ISyncEngine
         _runs = runs;
         _objectStates = objectStates;
         _scriptProviders = [.. scriptProviders];
+        _probe = probe;
         _artifactReader = artifactReader;
         _gitWorkspace = gitWorkspace;
         _gitHub = gitHub;
@@ -140,7 +144,11 @@ public sealed class SyncEngine : ISyncEngine
             TriggeredBy = CurrentActor.Name,
             Status = RunStatus.Running,
             ServerName = connection.ServerName,
-            Databases = string.Join(", ", job.Databases),
+            // The dynamic scope is resolved against the live server inside ExecuteAsync; until then
+            // the run row shows the scope description rather than a stale list.
+            Databases = job.DatabaseScope == DatabaseScope.AllUserDatabases
+                ? "All user databases"
+                : string.Join(", ", job.Databases),
             StartedAt = started,
             Tags = [.. job.Tags],
         };
@@ -220,6 +228,17 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
+        // Resolve the concrete database list before either delivery path. The dynamic scope queries
+        // the server fresh on every run, so databases created after the job was saved are picked up
+        // automatically. Returns null after marking the run Failed with an actionable message.
+        var databases = await ResolveDatabasesAsync(run, context, cancellationToken).ConfigureAwait(false);
+        if (databases is null)
+        {
+            return;
+        }
+
+        context.Databases = databases;
+
         // Export Only scripts straight to a folder/zip — no git clone, commit, push, or token.
         if (context.Job.CommitMode == CommitMode.ExportOnly)
         {
@@ -271,13 +290,68 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         var types = context.Job.Selection.ResolveTypes();
-        foreach (var database in context.Job.Databases)
+        foreach (var database in context.Databases)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await ScriptDatabaseAsync(run, context, database, types, localPath, cancellationToken).ConfigureAwait(false);
         }
 
         await FinalizeAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the databases this run will script. A fixed list passes through unchanged; the
+    /// dynamic scope enumerates the server's online user databases minus the exclusion list.
+    /// Returns null (with the run marked Failed) when the server can't be enumerated or nothing matches.
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> ResolveDatabasesAsync(
+        SyncRun run, RunContext context, CancellationToken cancellationToken)
+    {
+        if (context.Job.DatabaseScope != DatabaseScope.AllUserDatabases)
+        {
+            return context.Job.Databases;
+        }
+
+        context.Report(SyncPhase.Connecting, "Resolving user databases…");
+        var result = await _probe.GetDatabasesAsync(context.Connection, context.SqlPassword, cancellationToken).ConfigureAwait(false);
+        if (result.IsFailure)
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage = $"Could not enumerate the server's databases: {result.Error}";
+            context.Log(SyncLogLevel.Error, run.ErrorMessage);
+            return null;
+        }
+
+        var databases = FilterUserDatabases(result.Value, context.Job.ExcludedDatabases, out var offline);
+        foreach (var name in offline)
+        {
+            context.Log(SyncLogLevel.Warning, $"Skipping database '{name}' — it is not online.");
+        }
+
+        if (databases.Count == 0)
+        {
+            run.Status = RunStatus.Failed;
+            run.ErrorMessage = "No online user databases matched the job's scope. " +
+                "Check the exclusion list, or verify the server has user databases.";
+            context.Log(SyncLogLevel.Error, run.ErrorMessage);
+            return null;
+        }
+
+        run.Databases = string.Join(", ", databases);
+        context.Log(SyncLogLevel.Info, $"Resolved {databases.Count} user database(s): {run.Databases}.");
+        return databases;
+    }
+
+    // Internal for tests: the pure scope-filtering rule (online, not excluded, name-ordered).
+    internal static List<string> FilterUserDatabases(
+        IReadOnlyList<SqlDatabaseInfo> found, IReadOnlyCollection<string> excludedDatabases, out List<string> skippedOffline)
+    {
+        var excluded = new HashSet<string>(excludedDatabases, StringComparer.OrdinalIgnoreCase);
+        skippedOffline = [.. found.Where(d => !d.IsOnline && !excluded.Contains(d.Name)).Select(d => d.Name)];
+        return [.. found
+            .Where(d => d.IsOnline && !excluded.Contains(d.Name))
+            .Select(d => d.Name)
+            .Order(StringComparer.OrdinalIgnoreCase)];
     }
 
     // Export Only: script a full snapshot straight to a folder or .zip — no git, no GitHub, no state.
@@ -301,7 +375,7 @@ public sealed class SyncEngine : ISyncEngine
         Directory.CreateDirectory(outputRoot);
 
         var types = context.Job.Selection.ResolveTypes();
-        foreach (var database in context.Job.Databases)
+        foreach (var database in context.Databases)
         {
             cancellationToken.ThrowIfCancellationRequested();
             await ScriptDatabaseAsync(run, context, database, types, outputRoot, cancellationToken, fullSnapshot: true)
@@ -343,7 +417,10 @@ public sealed class SyncEngine : ISyncEngine
         SyncRun run, RunContext context, string database, IReadOnlyList<SqlObjectType> types,
         string localPath, CancellationToken cancellationToken, bool fullSnapshot = false)
     {
-        var dbFolder = context.Job.Databases.Count > 1
+        // The dynamic scope always nests a per-database folder — the resolved set can grow over
+        // time, and flipping a single-database layout to nested later would move every file. A
+        // fixed list keeps the existing rule: nest only when more than one database is selected.
+        var dbFolder = context.Job.DatabaseScope == DatabaseScope.AllUserDatabases || context.Databases.Count > 1
             ? RepositoryLayout.Combine(context.Job.DestinationFolder, database)
             : context.Job.DestinationFolder;
 
@@ -902,8 +979,13 @@ public sealed class SyncEngine : ISyncEngine
             Repository = repository;
             SqlPassword = sqlPassword;
             GitToken = gitToken;
+            Databases = job.Databases;
             _progress = progress;
         }
+
+        /// <summary>The concrete databases this run scripts — the job's fixed list, or the
+        /// dynamic scope resolved against the live server at the start of the run.</summary>
+        public IReadOnlyList<string> Databases { get; set; }
 
         public SyncJob Job { get; }
         public SqlConnectionProfile Connection { get; }

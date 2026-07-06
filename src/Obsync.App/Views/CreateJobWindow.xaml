@@ -366,7 +366,13 @@
                                 HorizontalAlignment="Left" Command="{Binding LoadDatabasesCommand}" Margin="0,0,0,16"
                                 IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
 
-                        <TextBlock Text="DATABASES" Style="{StaticResource Caption}" />
+                        <TextBlock Text="DATABASE SCOPE" Style="{StaticResource Caption}" />
+                        <CheckBox Content="Sync all user databases on this server"
+                                  IsChecked="{Binding SyncAllUserDatabases}" Margin="0,6,0,2" />
+                        <TextBlock Text="{Binding DatabasesHint}" Style="{StaticResource Caption}"
+                                   TextWrapping="Wrap" Margin="0,0,0,14" />
+
+                        <TextBlock Text="{Binding DatabasesHeader}" Style="{StaticResource Caption}" />
                         <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,4,0,0">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <ItemsControl ItemsSource="{Binding Databases}">

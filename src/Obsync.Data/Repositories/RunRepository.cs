@@ -69,7 +69,7 @@ public sealed class RunRepository : IRunRepository
         await connection.ExecuteAsync(new CommandDefinition(
             """
             UPDATE runs SET
-                status = $status, completed_at = $completed, duration_ms = $duration,
+                status = $status, databases = $dbs, completed_at = $completed, duration_ms = $duration,
                 objects_scanned = $scanned, objects_added = $added, objects_modified = $modified,
                 objects_deleted = $deleted, objects_failed = $failed, commit_sha = $sha, commit_url = $url,
                 pr_url = $prUrl, pr_number = $prNumber, error_message = $error

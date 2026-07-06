@@ -57,6 +57,34 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task Job_WithDynamicDatabaseScope_RoundTrips()
+    {
+        var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };
+        await _provider.GetRequiredService<IConnectionProfileRepository>().UpsertAsync(connection);
+
+        var job = new SyncJob
+        {
+            Name = "All-DB estate sync",
+            ConnectionProfileId = connection.Id,
+            CommitMode = CommitMode.ExportOnly,
+            ExportPath = @"C:\exports",
+            DatabaseScope = DatabaseScope.AllUserDatabases,
+            Databases = [],
+            ExcludedDatabases = ["Scratch", "TempWork"],
+        };
+
+        var jobs = _provider.GetRequiredService<IJobRepository>();
+        await jobs.UpsertAsync(job);
+        var loaded = await jobs.GetAsync(job.Id);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(DatabaseScope.AllUserDatabases, loaded!.DatabaseScope);
+        Assert.Empty(loaded.Databases);
+        Assert.Equal(["Scratch", "TempWork"], loaded.ExcludedDatabases);
+        Assert.Equal("All user databases (excl. Scratch, TempWork)", loaded.DatabasesDisplay);
+    }
+
+    [Fact]
     public async Task Run_WithLogsAndChanges_RoundTrips()
     {
         var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };

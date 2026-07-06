@@ -53,6 +53,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private string _tags = string.Empty;
     [ObservableProperty] private SqlConnectionProfile? _selectedConnection;
+    [ObservableProperty] private bool _syncAllUserDatabases;
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
     [ObservableProperty] private GitRepositoryProfile? _selectedRepository;
     [ObservableProperty] private string _branch = "main";
@@ -180,6 +181,20 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     partial void OnIsEditModeChanged(bool value) => OnPropertyChanged(nameof(Title));
 
+    /// <summary>Caption over the database checklist — its meaning flips with the scope.</summary>
+    public string DatabasesHeader => SyncAllUserDatabases ? "EXCLUDE DATABASES (OPTIONAL)" : "DATABASES";
+
+    /// <summary>One-line explanation of what checking a database does in the current scope.</summary>
+    public string DatabasesHint => SyncAllUserDatabases
+        ? "Every online user database is scripted on each run — databases created later are picked up automatically. Check any you want left out."
+        : "Check the databases to include in this job.";
+
+    partial void OnSyncAllUserDatabasesChanged(bool value)
+    {
+        OnPropertyChanged(nameof(DatabasesHeader));
+        OnPropertyChanged(nameof(DatabasesHint));
+    }
+
     partial void OnSelectedPresetChanged(ObjectSelectionPreset value) => OnPropertyChanged(nameof(IsCustomPreset));
 
     partial void OnSelectedScheduleKindChanged(ScheduleKind value)
@@ -233,8 +248,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
         ExportPath = job.ExportPath ?? string.Empty;
         SelectedPreset = job.Selection.Preset;
 
+        // In the dynamic scope the checklist holds the EXCLUSIONS; otherwise the selected list.
+        SyncAllUserDatabases = job.DatabaseScope == DatabaseScope.AllUserDatabases;
         Databases.Clear();
-        foreach (var database in job.Databases)
+        foreach (var database in SyncAllUserDatabases ? job.ExcludedDatabases : job.Databases)
         {
             Databases.Add(new SelectableDatabase(database) { IsSelected = true });
         }
@@ -348,7 +365,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     {
         1 when string.IsNullOrWhiteSpace(Name) => "Enter a job name.",
         1 when SelectedConnection is null => "Select a server.",
-        1 when !Databases.Any(d => d.IsSelected) => "Select at least one database.",
+        1 when !SyncAllUserDatabases && !Databases.Any(d => d.IsSelected) => "Select at least one database.",
         2 when IsCustomPreset && !ObjectTypes.Any(t => t.IsSelected) => "Select at least one object type for the Custom preset.",
         3 when IsExportOnly && string.IsNullOrWhiteSpace(ExportPath) => "Enter an export destination (a folder or .zip path).",
         3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
@@ -375,7 +392,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
         ReviewItems.Add(new ReviewItem("Source", SelectedConnection is null
             ? "—"
             : $"{SelectedConnection.Name} ({SelectedConnection.ServerName}) · {SelectedConnection.AuthenticationMode}"));
-        ReviewItems.Add(new ReviewItem("Databases", databases.Count == 0 ? "—" : string.Join(", ", databases)));
+        ReviewItems.Add(new ReviewItem("Databases", SyncAllUserDatabases
+            ? databases.Count == 0 ? "All user databases" : $"All user databases, excluding {string.Join(", ", databases)}"
+            : databases.Count == 0 ? "—" : string.Join(", ", databases)));
         ReviewItems.Add(new ReviewItem("Objects", objects));
         if (IsExportOnly)
         {
@@ -420,9 +439,13 @@ public sealed partial class CreateJobViewModel : ObservableObject
             .Distinct(StringComparer.OrdinalIgnoreCase)];
 
     private string EffectiveDestinationFolder(IReadOnlyList<string> databases) =>
-        string.IsNullOrWhiteSpace(DestinationFolder)
-            ? $"environments/{SelectedConnection?.ServerName}/{(databases.Count > 0 ? databases[0] : "db")}"
-            : DestinationFolder.Trim();
+        !string.IsNullOrWhiteSpace(DestinationFolder)
+            ? DestinationFolder.Trim()
+            // The dynamic scope always gets per-database subfolders from the engine, so its default
+            // root stops at the server; a fixed list centers on the (first) database.
+            : SyncAllUserDatabases
+                ? $"environments/{SelectedConnection?.ServerName}"
+                : $"environments/{SelectedConnection?.ServerName}/{(databases.Count > 0 ? databases[0] : "db")}";
 
     private ScheduleProfile BuildSchedule()
     {
@@ -478,7 +501,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
         job.RepositoryProfileId = IsExportOnly ? null : SelectedRepository!.Id;
         job.Branch = IsExportOnly ? null : (string.IsNullOrWhiteSpace(Branch) ? SelectedRepository!.DefaultBranch : Branch.Trim());
         job.ExportPath = IsExportOnly ? ExportPath.Trim() : null;
-        job.Databases = selectedDatabases;
+        // In the dynamic scope the checklist holds exclusions; the engine resolves the real list per run.
+        job.DatabaseScope = SyncAllUserDatabases ? DatabaseScope.AllUserDatabases : DatabaseScope.SelectedDatabases;
+        job.Databases = SyncAllUserDatabases ? [] : selectedDatabases;
+        job.ExcludedDatabases = SyncAllUserDatabases ? selectedDatabases : [];
         job.DestinationFolder = EffectiveDestinationFolder(selectedDatabases);
         job.LocalExportPath = string.IsNullOrWhiteSpace(LocalExportPath) ? null : LocalExportPath.Trim();
         job.CommitMode = SelectedCommitMode;

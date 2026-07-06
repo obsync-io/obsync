@@ -50,8 +50,17 @@ public sealed class SyncJob
     // --- Source ---
     public Guid ConnectionProfileId { get; set; }
 
-    /// <summary>One or more databases to script. The design centers on one, but several are supported.</summary>
+    /// <summary>How the databases to script are chosen: a fixed list, or all user databases.</summary>
+    public DatabaseScope DatabaseScope { get; set; } = DatabaseScope.SelectedDatabases;
+
+    /// <summary>One or more databases to script. The design centers on one, but several are supported.
+    /// Empty when <see cref="DatabaseScope"/> is <see cref="DatabaseScope.AllUserDatabases"/> — the
+    /// engine resolves the live list at the start of each run.</summary>
     public List<string> Databases { get; set; } = [];
+
+    /// <summary>Databases to leave out when <see cref="DatabaseScope"/> is
+    /// <see cref="DatabaseScope.AllUserDatabases"/>. Compared case-insensitively.</summary>
+    public List<string> ExcludedDatabases { get; set; } = [];
 
     // --- Destination ---
 
@@ -103,8 +112,10 @@ public sealed class SyncJob
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 
-    /// <summary>Comma-separated database list, for display in lists and tables.</summary>
-    public string DatabasesDisplay => string.Join(", ", Databases);
+    /// <summary>Comma-separated database list (or the dynamic-scope description), for display in lists and tables.</summary>
+    public string DatabasesDisplay => DatabaseScope == DatabaseScope.AllUserDatabases
+        ? ExcludedDatabases.Count > 0 ? $"All user databases (excl. {string.Join(", ", ExcludedDatabases)})" : "All user databases"
+        : string.Join(", ", Databases);
 
     // --- Transient display fields ---
     // Populated by list view models after resolving the connection/repository profiles. These are

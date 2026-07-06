@@ -33,7 +33,9 @@ public sealed class JobRepository : IJobRepository
         public long Enabled { get; set; }
         public string ConnectionProfileId { get; set; } = string.Empty;
         public string? RepositoryProfileId { get; set; }
+        public long DatabaseScope { get; set; }
         public string DatabasesJson { get; set; } = "[]";
+        public string? ExcludedDatabasesJson { get; set; }
         public string? Branch { get; set; }
         public string DestinationFolder { get; set; } = string.Empty;
         public long CommitMode { get; set; }
@@ -52,7 +54,8 @@ public sealed class JobRepository : IJobRepository
     private const string SelectColumns = """
         SELECT id AS Id, name AS Name, description AS Description, enabled AS Enabled,
                connection_profile_id AS ConnectionProfileId, repository_profile_id AS RepositoryProfileId,
-               databases_json AS DatabasesJson, branch AS Branch, destination_folder AS DestinationFolder,
+               database_scope AS DatabaseScope, databases_json AS DatabasesJson,
+               excluded_databases_json AS ExcludedDatabasesJson, branch AS Branch, destination_folder AS DestinationFolder,
                commit_mode AS CommitMode, local_export_path AS LocalExportPath, export_path AS ExportPath,
                reviewers_json AS ReviewersJson, tags_json AS TagsJson,
                selection_json AS SelectionJson,
@@ -85,16 +88,19 @@ public sealed class JobRepository : IJobRepository
         await connection.ExecuteAsync(new CommandDefinition(
             """
             INSERT INTO jobs
-                (id, name, description, enabled, connection_profile_id, repository_profile_id, databases_json,
+                (id, name, description, enabled, connection_profile_id, repository_profile_id, database_scope, databases_json,
+                 excluded_databases_json,
                  branch, destination_folder, commit_mode, local_export_path, export_path, reviewers_json, tags_json, selection_json, schedule_json,
                  advanced_json, run_summary_json, created_at, updated_at)
             VALUES
-                ($id, $name, $desc, $enabled, $conn, $repo, $dbs, $branch, $folder, $commit, $local, $export, $reviewers, $tags,
+                ($id, $name, $desc, $enabled, $conn, $repo, $scope, $dbs, $excluded, $branch, $folder, $commit, $local, $export, $reviewers, $tags,
                  $selection, $schedule, $advanced, $summary, $created, $updated)
             ON CONFLICT (id) DO UPDATE SET
                 name = excluded.name, description = excluded.description, enabled = excluded.enabled,
                 connection_profile_id = excluded.connection_profile_id,
-                repository_profile_id = excluded.repository_profile_id, databases_json = excluded.databases_json,
+                repository_profile_id = excluded.repository_profile_id,
+                database_scope = excluded.database_scope, databases_json = excluded.databases_json,
+                excluded_databases_json = excluded.excluded_databases_json,
                 branch = excluded.branch, destination_folder = excluded.destination_folder,
                 commit_mode = excluded.commit_mode, local_export_path = excluded.local_export_path,
                 export_path = excluded.export_path, reviewers_json = excluded.reviewers_json,
@@ -114,7 +120,9 @@ public sealed class JobRepository : IJobRepository
                 enabled = job.Enabled ? 1 : 0,
                 conn = job.ConnectionProfileId.ToString(),
                 repo = job.RepositoryProfileId?.ToString(),
+                scope = (int)job.DatabaseScope,
                 dbs = ObsyncJson.Serialize(job.Databases),
+                excluded = ObsyncJson.Serialize(job.ExcludedDatabases),
                 branch = job.Branch,
                 folder = job.DestinationFolder,
                 commit = (int)job.CommitMode,
@@ -175,7 +183,11 @@ public sealed class JobRepository : IJobRepository
             Enabled = row.Enabled != 0,
             ConnectionProfileId = Guid.Parse(row.ConnectionProfileId),
             RepositoryProfileId = string.IsNullOrEmpty(row.RepositoryProfileId) ? null : Guid.Parse(row.RepositoryProfileId),
+            DatabaseScope = (DatabaseScope)row.DatabaseScope,
             Databases = ObsyncJson.Deserialize<List<string>>(row.DatabasesJson),
+            ExcludedDatabases = string.IsNullOrEmpty(row.ExcludedDatabasesJson)
+                ? []
+                : ObsyncJson.Deserialize<List<string>>(row.ExcludedDatabasesJson),
             Branch = row.Branch,
             DestinationFolder = row.DestinationFolder,
             CommitMode = (CommitMode)row.CommitMode,
