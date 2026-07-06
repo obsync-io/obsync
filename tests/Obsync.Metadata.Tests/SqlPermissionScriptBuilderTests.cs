@@ -71,4 +71,31 @@ public sealed class SqlPermissionScriptBuilderTests
     {
         Assert.Throws<ArgumentException>(() => SqlPermissionScriptBuilder.Build("  ", ["DB"]));
     }
+
+    [Fact]
+    public void Build_WithServerObjects_AddsTheServerSectionBeforeThePerDatabaseBlocks()
+    {
+        var script = SqlPermissionScriptBuilder.Build("svc_obsync", ["SalesDB"], includeServerObjects: true);
+
+        // The executable statements (the header only mentions the server-wide grants in a comment).
+        Assert.Contains("USE [master];\nGO\n\nGRANT VIEW ANY DEFINITION TO [svc_obsync];\nGRANT VIEW SERVER STATE TO [svc_obsync];", script);
+        Assert.Contains("USE [msdb];", script);
+        Assert.Contains("ALTER ROLE [SQLAgentReaderRole] ADD MEMBER [svc_obsync];", script);
+        // Server grants come first: master before the SalesDB block.
+        Assert.True(script.IndexOf("USE [master];", StringComparison.Ordinal)
+            < script.IndexOf("USE [SalesDB];", StringComparison.Ordinal));
+        // Still no elevated grants.
+        Assert.DoesNotContain("GRANT CONTROL", script);
+        Assert.DoesNotContain("GRANT ALTER", script);
+    }
+
+    [Fact]
+    public void Build_WithoutServerObjects_OmitsTheServerSection()
+    {
+        var script = SqlPermissionScriptBuilder.Build("svc_obsync", ["SalesDB"]);
+
+        Assert.DoesNotContain("USE [master];", script);
+        Assert.DoesNotContain("USE [msdb];", script);
+        Assert.DoesNotContain("SQLAgentReaderRole", script);
+    }
 }

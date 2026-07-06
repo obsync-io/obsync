@@ -68,6 +68,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private SqlConnectionProfile? _selectedConnection;
     [ObservableProperty] private bool _syncAllUserDatabases;
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
+    [ObservableProperty] private bool _includeServerObjects;
     [ObservableProperty] private bool _includeReferenceData;
     [ObservableProperty] private string _tableSourceDatabase = string.Empty;
     [ObservableProperty] private int _referenceDataMaxRows = 5000;
@@ -104,6 +105,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public ObservableCollection<GitRepositoryProfile> Repositories { get; } = [];
     public ObservableCollection<SelectableDatabase> Databases { get; } = [];
     public ObservableCollection<SelectableObjectType> ObjectTypes { get; } = [];
+    public ObservableCollection<SelectableObjectType> ServerObjectTypes { get; } = [];
     public ObservableCollection<SelectableTable> ReferenceTables { get; } = [];
     public ObservableCollection<ReviewItem> ReviewItems { get; } = [];
 
@@ -148,9 +150,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _clock = clock;
         _audit = audit;
 
+        // The main picker offers database objects; server-scoped types have their own checklist.
         foreach (var descriptor in SqlObjectTypeCatalog.All)
         {
-            ObjectTypes.Add(new SelectableObjectType(descriptor.Type, descriptor.DisplayName));
+            (descriptor.IsServerScoped ? ServerObjectTypes : ObjectTypes)
+                .Add(new SelectableObjectType(descriptor.Type, descriptor.DisplayName));
         }
     }
 
@@ -213,6 +217,18 @@ public sealed partial class CreateJobViewModel : ObservableObject
     }
 
     partial void OnSelectedPresetChanged(ObjectSelectionPreset value) => OnPropertyChanged(nameof(IsCustomPreset));
+
+    partial void OnIncludeServerObjectsChanged(bool value)
+    {
+        // First switch-on with nothing picked yet: default to every server type.
+        if (value && !ServerObjectTypes.Any(t => t.IsSelected))
+        {
+            foreach (var type in ServerObjectTypes)
+            {
+                type.IsSelected = true;
+            }
+        }
+    }
 
     partial void OnIncludeReferenceDataChanged(bool value)
     {
@@ -287,6 +303,14 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             objectType.IsSelected = job.Selection.CustomTypes.Contains(objectType.Type);
         }
+
+        // Restore the checks before the toggle so switching it on keeps the saved subset intact.
+        foreach (var serverType in ServerObjectTypes)
+        {
+            serverType.IsSelected = job.Selection.ServerTypes.Contains(serverType.Type);
+        }
+
+        IncludeServerObjects = job.Selection.ServerTypes.Count > 0;
 
         SelectedScheduleKind = job.Schedule.Kind;
         IntervalHours = job.Schedule.IntervalHours;
@@ -468,6 +492,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         1 when SelectedConnection is null => "Select a server.",
         1 when !SyncAllUserDatabases && !Databases.Any(d => d.IsSelected) => "Select at least one database.",
         2 when IsCustomPreset && !ObjectTypes.Any(t => t.IsSelected) => "Select at least one object type for the Custom preset.",
+        2 when IncludeServerObjects && !ServerObjectTypes.Any(t => t.IsSelected) =>
+            "Select at least one server object type, or turn server-level objects off.",
         2 when IncludeReferenceData && !ReferenceTables.Any(t => t.IsSelected) =>
             "Select at least one reference table, or turn reference data off.",
         2 when IncludeReferenceData && ReferenceDataMaxRows < 1 => "The reference-data row cap must be at least 1.",
@@ -500,6 +526,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
             ? databases.Count == 0 ? "All user databases" : $"All user databases, excluding {string.Join(", ", databases)}"
             : databases.Count == 0 ? "—" : string.Join(", ", databases)));
         ReviewItems.Add(new ReviewItem("Objects", objects));
+        if (IncludeServerObjects && ServerObjectTypes.Any(t => t.IsSelected))
+        {
+            ReviewItems.Add(new ReviewItem("Server objects",
+                string.Join(", ", ServerObjectTypes.Where(t => t.IsSelected).Select(t => t.DisplayName))));
+        }
         if (IncludeReferenceData && ReferenceTables.Any(t => t.IsSelected))
         {
             var tables = ReferenceTables.Where(t => t.IsSelected).Select(t => t.QualifiedName).ToList();
@@ -626,6 +657,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
             job.Selection.CustomTypes = [.. ObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)];
         }
 
+        job.Selection.ServerTypes = IncludeServerObjects
+            ? [.. ServerObjectTypes.Where(t => t.IsSelected).Select(t => t.Type)]
+            : [];
         job.Selection.ReferenceDataTables = IncludeReferenceData
             ? [.. ReferenceTables.Where(t => t.IsSelected).Select(t => t.QualifiedName)]
             : [];

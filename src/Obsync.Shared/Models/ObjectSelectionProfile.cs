@@ -16,6 +16,13 @@ public sealed class ObjectSelectionProfile
     /// </summary>
     public HashSet<SqlObjectType> CustomTypes { get; set; } = [];
 
+    /// <summary>
+    /// Server-level (instance-scoped) object types this job additionally versions under the
+    /// repository's <c>server/</c> tree — logins, Agent jobs, linked servers, etc. Empty means
+    /// the feature is off. Independent of <see cref="Preset"/>, which covers database objects only.
+    /// </summary>
+    public HashSet<SqlObjectType> ServerTypes { get; set; } = [];
+
     /// <summary>Optional schema allow-list. Empty means all schemas.</summary>
     public HashSet<string> SchemaFilter { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -57,4 +64,7 @@ public sealed class ObjectSelectionProfile
         Preset == ObjectSelectionPreset.Custom
             ? SqlObjectTypeCatalog.InRedeployOrder(CustomTypes)
             : ObjectSelectionPresets.Expand(Preset);
+
+    /// <summary>Resolves the selected server-level object types in catalog (redeploy) order.</summary>
+    public IReadOnlyList<SqlObjectType> ResolveServerTypes() => SqlObjectTypeCatalog.InRedeployOrder(ServerTypes);
 }

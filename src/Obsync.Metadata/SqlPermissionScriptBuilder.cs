@@ -19,9 +19,11 @@ public static class SqlPermissionScriptBuilder
     /// <summary>
     /// Builds the permission script for <paramref name="accountName"/> across the given
     /// <paramref name="databases"/>. The account may be a SQL login or a Windows account
-    /// (e.g. <c>DOMAIN\ObsyncSvc</c>).
+    /// (e.g. <c>DOMAIN\ObsyncSvc</c>). When <paramref name="includeServerObjects"/> is true, a
+    /// server-level section (VIEW ANY DEFINITION / VIEW SERVER STATE in master, plus msdb's
+    /// SQLAgentReaderRole for Agent-job scripting) precedes the per-database grants.
     /// </summary>
-    public static string Build(string accountName, IReadOnlyList<string> databases)
+    public static string Build(string accountName, IReadOnlyList<string> databases, bool includeServerObjects = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
 
@@ -31,6 +33,11 @@ public static class SqlPermissionScriptBuilder
 
         var builder = new StringBuilder();
         builder.Append(Header(literal));
+
+        if (includeServerObjects)
+        {
+            AppendServerObjectGrants(builder, user, literal);
+        }
 
         if (databases.Count == 0)
         {
@@ -55,6 +62,28 @@ public static class SqlPermissionScriptBuilder
         }
 
         return Normalize(builder);
+    }
+
+    // Server-level object scripting (logins, server roles, credentials, linked servers) reads
+    // instance metadata, and SQL Agent jobs/operators/alerts live in msdb — readable via the
+    // built-in SQLAgentReaderRole. Emitted before the per-database blocks, in master first.
+    private static void AppendServerObjectGrants(StringBuilder builder, string user, string literal)
+    {
+        builder.Append('\n');
+        builder.Append("-- Server-level object scripting (logins, server roles, credentials, linked servers).\n");
+        builder.Append("USE [master];\n");
+        builder.Append("GO\n\n");
+        builder.Append("GRANT VIEW ANY DEFINITION TO ").Append(user).Append(";\n");
+        builder.Append("GRANT VIEW SERVER STATE TO ").Append(user).Append(";\n");
+        builder.Append("GO\n\n");
+        builder.Append("-- SQL Agent job/operator/alert scripting reads msdb; SQLAgentReaderRole grants it.\n");
+        builder.Append("USE [msdb];\n");
+        builder.Append("GO\n\n");
+        builder.Append("IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'").Append(literal).Append("')\n");
+        builder.Append("    CREATE USER ").Append(user).Append(" FOR LOGIN ").Append(user).Append(";\n");
+        builder.Append("GO\n\n");
+        builder.Append("ALTER ROLE [SQLAgentReaderRole] ADD MEMBER ").Append(user).Append(";\n");
+        builder.Append("GO\n");
     }
 
     // The header uses a raw string literal, whose newlines follow the source file's encoding.

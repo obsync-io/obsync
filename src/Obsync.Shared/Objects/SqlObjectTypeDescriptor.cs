@@ -17,6 +17,10 @@ namespace Obsync.Shared.Objects;
 /// <param name="RedeployOrder">
 /// Relative ordering for a clean rebuild on a fresh database. Lower runs first.
 /// </param>
+/// <param name="IsServerScoped">
+/// True for instance-scoped objects (logins, Agent jobs, linked servers…) that are scripted
+/// against the server rather than a database and live under the repository's <c>server/</c> tree.
+/// </param>
 public sealed record SqlObjectTypeDescriptor(
     SqlObjectType Type,
     string DisplayName,
@@ -24,4 +28,5 @@ public sealed record SqlObjectTypeDescriptor(
     bool IsSchemaScoped,
     ScriptingStrategy Strategy,
     bool ModuleBased,
-    int RedeployOrder);
+    int RedeployOrder,
+    bool IsServerScoped = false);

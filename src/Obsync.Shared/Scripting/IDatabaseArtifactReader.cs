@@ -18,4 +18,12 @@ public interface IDatabaseArtifactReader
     Task<string> ReadPermissionsAsync(
         SqlConnectionProfile profile, string? password, string database, int commandTimeoutSeconds,
         int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Builds the server-level <c>sp_configure</c> settings script from <c>sys.configurations</c>.
+    /// Connects at the instance level (no catalog) — there is no database parameter.
+    /// </summary>
+    Task<string> ReadServerConfigurationAsync(
+        SqlConnectionProfile profile, string? password, int commandTimeoutSeconds,
+        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default);
 }

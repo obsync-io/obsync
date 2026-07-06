@@ -29,6 +29,29 @@ public sealed class ObjectFilePathMapperTests
         Assert.Equal("security/users/AppLogin.sql", path);
     }
 
+    [Theory]
+    [InlineData(SqlObjectType.AgentJob, "Nightly Sync", "server/agent/jobs/Nightly Sync.sql")]
+    [InlineData(SqlObjectType.ServerLogin, "svc_reporting", "server/logins/svc_reporting.sql")]
+    [InlineData(SqlObjectType.LinkedServer, "WAREHOUSE", "server/linked-servers/WAREHOUSE.sql")]
+    public void MapRelativePath_ServerScopedTypes_MapUnderTheServerTree(
+        SqlObjectType type, string name, string expected)
+    {
+        var path = _mapper.MapRelativePath(new ScriptedObjectIdentity(type, "", name));
+
+        Assert.Equal(expected, path);
+    }
+
+    [Fact]
+    public void MapRelativePath_ServerObjectWithInvalidCharacters_IsSanitized()
+    {
+        var path = _mapper.MapRelativePath(new ScriptedObjectIdentity(SqlObjectType.AgentJob, "", "ETL: hourly?"));
+
+        Assert.StartsWith("server/agent/jobs/", path, StringComparison.Ordinal);
+        Assert.DoesNotContain(':', path);
+        Assert.DoesNotContain('?', path);
+        Assert.EndsWith(".sql", path, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void MapRelativePath_UsesLowercaseGitFriendlyFolders()
     {

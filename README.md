@@ -131,6 +131,32 @@ A job's **Source** step offers two database scopes:
 With the dynamic scope each database gets its own subfolder under the destination folder, so the
 repository layout stays stable as databases come and go.
 
+## Server-level objects
+
+A job can also version the SQL Server **instance** itself. On the **Objects** step, tick
+**Version server-level objects** and pick from: logins, user-defined server roles, server
+credentials, linked servers, and SQL Agent jobs, operators, and alerts. A
+`server/server-configuration.sql` file (the instance's `sp_configure` values) is always captured
+with the pass. Files land under a `server/` tree next to the per-database folders and ride the same
+hash → diff → commit pipeline — an unchanged instance produces no commit, dropped objects are
+deleted (when enabled), and un-scriptable objects are reported as skips:
+
+```
+server/
+  logins/            roles/              credentials/        linked-servers/
+  agent/jobs/        agent/operators/    agent/alerts/
+  server-configuration.sql
+```
+
+Two notes:
+
+- **Secrets never land in the repo.** SMO scripts logins with a placeholder hashed password, and
+  credential scripts carry the identity only — the files document existence, role membership, and
+  configuration, not passwords.
+- **Permissions.** Server-level scripting needs server-wide `VIEW ANY DEFINITION` +
+  `VIEW SERVER STATE`, and Agent jobs additionally need membership in msdb's `SQLAgentReaderRole`.
+  Without the msdb role, Agent objects are reported as skipped (and nothing is deleted).
+
 ## Versioning reference data
 
 Schema without its lookup data is half the picture. On the **Objects** step, tick

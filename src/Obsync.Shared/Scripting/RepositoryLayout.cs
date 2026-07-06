@@ -27,6 +27,20 @@ public static class RepositoryLayout
     /// <summary>Folder holding versioned reference/static table data, relative to the database root.</summary>
     public const string DataFolder = "data";
 
+    /// <summary>Folder holding server-level (instance-scoped) objects, relative to the job's destination folder.</summary>
+    public const string ServerFolder = "server";
+
+    /// <summary>Scripted server-level <c>sp_configure</c> values, relative to the job's destination folder.</summary>
+    public const string ServerConfigurationFile = "server/server-configuration.sql";
+
+    /// <summary>
+    /// Sentinel "database" name scoping server-level rows in per-database state (which requires a
+    /// non-null database name). A <c>$</c> is technically legal inside a bracketed database
+    /// identifier, but the sentinel is vanishingly unlikely to collide with a real database name
+    /// and is validated nowhere else.
+    /// </summary>
+    public const string ServerScopeName = "$server";
+
     /// <summary>
     /// The repository path for one reference table's data script, e.g. <c>data/dbo.Currency.sql</c>.
     /// Characters that are invalid in file names are replaced with <c>_</c>.

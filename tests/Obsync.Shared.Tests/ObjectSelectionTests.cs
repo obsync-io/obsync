@@ -19,11 +19,14 @@ public sealed class ObjectSelectionTests
     }
 
     [Fact]
-    public void FullSchema_CoversEveryCatalogedType()
+    public void FullSchema_CoversEveryCatalogedDatabaseType_AndNoServerScopedType()
     {
+        // Presets choose DATABASE objects only; server-level types are opted into separately
+        // via ObjectSelectionProfile.ServerTypes.
         var types = ObjectSelectionPresets.Expand(ObjectSelectionPreset.FullSchema);
 
-        Assert.Equal(SqlObjectTypeCatalog.All.Count, types.Count);
+        Assert.Equal(SqlObjectTypeCatalog.All.Count(d => !d.IsServerScoped), types.Count);
+        Assert.DoesNotContain(types, t => SqlObjectTypeCatalog.Get(t).IsServerScoped);
     }
 
     [Fact]
@@ -78,5 +81,41 @@ public sealed class ObjectSelectionTests
     public void Catalog_SyntheticTypesAreNotCataloged(SqlObjectType type)
     {
         Assert.False(SqlObjectTypeCatalog.TryGet(type, out _));
+    }
+
+    [Fact]
+    public void Catalog_ServerScopedTypes_LiveUnderTheServerTreeAndAfterDatabaseTypes()
+    {
+        var serverDescriptors = SqlObjectTypeCatalog.All.Where(d => d.IsServerScoped).ToList();
+        var maxDatabaseOrder = SqlObjectTypeCatalog.All.Where(d => !d.IsServerScoped).Max(d => d.RedeployOrder);
+
+        Assert.Equal(7, serverDescriptors.Count);
+        Assert.All(serverDescriptors, d =>
+        {
+            Assert.StartsWith("server/", d.FolderName, StringComparison.Ordinal);
+            Assert.False(d.IsSchemaScoped);
+            Assert.Equal(ScriptingStrategy.Smo, d.Strategy);
+            Assert.True(d.RedeployOrder > maxDatabaseOrder);
+        });
+    }
+
+    [Fact]
+    public void ResolveServerTypes_EmptyByDefault_MeaningTheFeatureIsOff()
+    {
+        Assert.Empty(new ObjectSelectionProfile().ResolveServerTypes());
+    }
+
+    [Fact]
+    public void ResolveServerTypes_ReturnsCatalogOrder()
+    {
+        var profile = new ObjectSelectionProfile
+        {
+            ServerTypes = [SqlObjectType.AgentAlert, SqlObjectType.ServerLogin, SqlObjectType.LinkedServer],
+        };
+
+        var resolved = profile.ResolveServerTypes();
+
+        // Login (order 100) before Linked server (103) before Agent alert (112).
+        Assert.Equal([SqlObjectType.ServerLogin, SqlObjectType.LinkedServer, SqlObjectType.AgentAlert], resolved);
     }
 }

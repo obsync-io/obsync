@@ -38,7 +38,9 @@ public static class ObjectSelectionPresets
     {
         ObjectSelectionPreset.ProgrammabilityOnly => SqlObjectTypeCatalog.InRedeployOrder(_programmability),
         ObjectSelectionPreset.Recommended => SqlObjectTypeCatalog.InRedeployOrder(_recommended),
-        ObjectSelectionPreset.FullSchema => [.. SqlObjectTypeCatalog.All.Select(d => d.Type)],
+        // Presets choose DATABASE objects only; server-level types are opted into separately via
+        // ObjectSelectionProfile.ServerTypes.
+        ObjectSelectionPreset.FullSchema => [.. SqlObjectTypeCatalog.All.Where(d => !d.IsServerScoped).Select(d => d.Type)],
         _ => [],
     };
 }

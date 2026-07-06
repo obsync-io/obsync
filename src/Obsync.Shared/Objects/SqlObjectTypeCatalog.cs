@@ -36,6 +36,15 @@ public static class SqlObjectTypeCatalog
         new(SqlObjectType.Trigger,              "Triggers",                  "triggers",                           true,        ScriptingStrategy.Metadata, true,  46),
         new(SqlObjectType.DatabaseDdlTrigger,   "Database DDL Triggers",     "triggers/database",                  false,       ScriptingStrategy.Metadata, true,  47),
         new(SqlObjectType.SecurityPolicy,       "Security Policies",         "security/policies",                  true,        ScriptingStrategy.Smo,      false, 50),
+
+        // --- Server-scoped (instance-level) objects, versioned under server/ when a job opts in ---
+        new(SqlObjectType.ServerLogin,          "Login",                     "server/logins",                      false,       ScriptingStrategy.Smo,      false, 100, IsServerScoped: true),
+        new(SqlObjectType.ServerRole,           "Server role",               "server/roles",                       false,       ScriptingStrategy.Smo,      false, 101, IsServerScoped: true),
+        new(SqlObjectType.ServerCredential,     "Server credential",         "server/credentials",                 false,       ScriptingStrategy.Smo,      false, 102, IsServerScoped: true),
+        new(SqlObjectType.LinkedServer,         "Linked server",             "server/linked-servers",              false,       ScriptingStrategy.Smo,      false, 103, IsServerScoped: true),
+        new(SqlObjectType.AgentJob,             "SQL Agent job",             "server/agent/jobs",                  false,       ScriptingStrategy.Smo,      false, 110, IsServerScoped: true),
+        new(SqlObjectType.AgentOperator,        "SQL Agent operator",        "server/agent/operators",             false,       ScriptingStrategy.Smo,      false, 111, IsServerScoped: true),
+        new(SqlObjectType.AgentAlert,           "SQL Agent alert",           "server/agent/alerts",                false,       ScriptingStrategy.Smo,      false, 112, IsServerScoped: true),
     ];
 
     private static readonly ImmutableDictionary<SqlObjectType, SqlObjectTypeDescriptor> _byType =

@@ -419,6 +419,28 @@
 
                         <Border Style="{StaticResource Divider}" Margin="0,20,0,16" />
 
+                        <CheckBox Content="Version server-level objects (logins, Agent jobs, linked servers…)"
+                                  IsChecked="{Binding IncludeServerObjects}" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Text="Instance-scoped objects are scripted into a server/ folder. Login scripts document existence and role membership — never real passwords." />
+
+                        <StackPanel Visibility="{Binding IncludeServerObjects, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="SERVER OBJECT TYPES" Style="{StaticResource Caption}" Margin="0,14,0,0" />
+                            <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,4,0,0">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding ServerObjectTypes}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding DisplayName}" IsChecked="{Binding IsSelected}" Margin="0,4" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+
+                        <Border Style="{StaticResource Divider}" Margin="0,20,0,16" />
+
                         <CheckBox Content="Version reference data (INSERT scripts)"
                                   IsChecked="{Binding IncludeReferenceData}" />
                         <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"

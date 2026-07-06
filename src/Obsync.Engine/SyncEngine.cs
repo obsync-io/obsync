@@ -35,6 +35,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IObjectStateRepository _objectStates;
     private readonly IAppSettingsRepository _appSettings;
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
+    private readonly IServerObjectScriptProvider _serverProvider;
     private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IReferenceDataReader _referenceDataReader;
@@ -57,6 +58,7 @@ public sealed class SyncEngine : ISyncEngine
         IObjectStateRepository objectStates,
         IAppSettingsRepository appSettings,
         IEnumerable<IObjectScriptProvider> scriptProviders,
+        IServerObjectScriptProvider serverProvider,
         ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
         IReferenceDataReader referenceDataReader,
@@ -78,6 +80,7 @@ public sealed class SyncEngine : ISyncEngine
         _objectStates = objectStates;
         _appSettings = appSettings;
         _scriptProviders = [.. scriptProviders];
+        _serverProvider = serverProvider;
         _probe = probe;
         _artifactReader = artifactReader;
         _referenceDataReader = referenceDataReader;
@@ -299,6 +302,8 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
+        await ScriptServerAsync(run, context, localPath, cancellationToken).ConfigureAwait(false);
+
         var types = context.Job.Selection.ResolveTypes();
         foreach (var database in context.Databases)
         {
@@ -396,6 +401,8 @@ public sealed class SyncEngine : ISyncEngine
 
         context.Report(SyncPhase.Connecting, $"Connecting to {context.Connection.ServerName}…");
         Directory.CreateDirectory(outputRoot);
+
+        await ScriptServerAsync(run, context, outputRoot, cancellationToken, fullSnapshot: true).ConfigureAwait(false);
 
         var types = context.Job.Selection.ResolveTypes();
         foreach (var database in context.Databases)
@@ -600,6 +607,185 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
+
+        context.PendingStates.AddRange(changedStates);
+    }
+
+    /// <summary>
+    /// Scripts the job's selected server-level (instance-scoped) objects — logins, server roles,
+    /// credentials, linked servers, Agent jobs/operators/alerts — plus the server-configuration
+    /// artifact, through the same hash → diff → write path as database objects. Files land under
+    /// the destination folder's <c>server/</c> tree (the catalog folder names carry the prefix);
+    /// prior state and deletions are scoped by the <see cref="RepositoryLayout.ServerScopeName"/>
+    /// sentinel. No-op when the job selects no server types.
+    /// </summary>
+    private async Task ScriptServerAsync(
+        SyncRun run, RunContext context, string localPath, CancellationToken cancellationToken, bool fullSnapshot = false)
+    {
+        var serverTypes = context.Job.Selection.ResolveServerTypes();
+        if (serverTypes.Count == 0)
+        {
+            return;
+        }
+
+        // Server files sit directly under the destination folder — never inside a per-database folder.
+        var serverRoot = context.Job.DestinationFolder;
+
+        var prior = fullSnapshot
+            ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
+            : (await _objectStates.GetForJobDatabaseAsync(context.Job.Id, RepositoryLayout.ServerScopeName, cancellationToken).ConfigureAwait(false))
+                .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
+
+        // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
+        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var changedStates = new ConcurrentBag<TrackedObjectState>();
+        var skipped = new ConcurrentBag<string>();
+        var failedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
+        // Both the root .obsyncignore and a server/.obsyncignore apply to the server pass.
+        var ignoreRules = await LoadIgnoreRulesAsync(
+            context, localPath, RepositoryLayout.Combine(serverRoot, RepositoryLayout.ServerFolder), cancellationToken).ConfigureAwait(false);
+
+        // The ScriptDatabaseAsync apply path, minus the object inventory (server objects have none).
+        async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath, CancellationToken ct)
+        {
+            var isArtifact = identity.Type is SqlObjectType.DatabaseArtifact;
+            var key = StateKey(identity);
+            seen.TryAdd(key, 0);
+
+            if (!isArtifact && ignoreRules.Matches(identity.Type, identity.Schema, identity.Name))
+            {
+                return;
+            }
+
+            var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
+            var hash = _hasher.ComputeHash(script);
+            var repoRelativePath = RepositoryLayout.Combine(serverRoot, relativePath);
+            var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+            if (!isArtifact)
+            {
+                context.IncrementScanned();
+            }
+
+            var hasPrior = prior.TryGetValue(key, out var priorState);
+            var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
+            if (changeType == ChangeType.Unchanged)
+            {
+                // Self-heal drift exactly like the database pass: rewrite a missing file.
+                if (File.Exists(absolutePath))
+                {
+                    return;
+                }
+
+                changeType = ChangeType.Modified;
+            }
+
+            await WriteFileAsync(localPath, repoRelativePath, script, context.Job.LocalExportPath, serverRoot, relativePath, ct)
+                .ConfigureAwait(false);
+
+            if (changeType == ChangeType.Added)
+            {
+                context.IncrementAdded();
+            }
+            else
+            {
+                context.IncrementModified();
+            }
+
+            context.Changes.Add(new ObjectChange
+            {
+                ChangeType = changeType,
+                ObjectType = identity.Type,
+                Schema = identity.Schema,
+                Name = identity.Name,
+                RelativePath = repoRelativePath,
+                PreviousHash = hasPrior ? priorState!.LastHash : null,
+                NewHash = hash,
+            });
+
+            changedStates.Add(new TrackedObjectState
+            {
+                JobId = context.Job.Id,
+                DatabaseName = RepositoryLayout.ServerScopeName,
+                ObjectType = identity.Type,
+                SchemaName = identity.Schema,
+                ObjectName = identity.Name,
+                ObjectId = identity.ObjectId,
+                FilePath = repoRelativePath,
+                LastHash = hash,
+                LastScriptedAt = _clock.UtcNow,
+                LastRunId = run.Id,
+                LastStatus = RunStatus.Running,
+            });
+        }
+
+        // A server object the provider could not script is recorded as a skip, never silently
+        // dropped. The skip's type is also remembered so the deletion pass below leaves every prior
+        // file of that type alone — an Agent permission blip must not delete committed job scripts.
+        Task RecordSkipAsync(RawScriptedObject raw)
+        {
+            seen.TryAdd(StateKey(raw.Identity), 0);
+            failedTypes.TryAdd(raw.Identity.Type, 0);
+            context.IncrementScanned();
+            context.IncrementFailed();
+            skipped.Add($"{raw.Identity.Type} {DescribeIdentity(raw.Identity)} — {raw.SkipReason}");
+            return Task.CompletedTask;
+        }
+
+        context.Report(SyncPhase.Scripting, "Scripting server-level objects…");
+
+        var workers = context.Job.Advanced.MaxParallelWorkers > 0
+            ? context.Job.Advanced.MaxParallelWorkers
+            : Environment.ProcessorCount;
+
+        var request = new ScriptRequest
+        {
+            Profile = context.Connection,
+            Password = context.SqlPassword,
+            Database = string.Empty, // the server scope has no database
+            Types = serverTypes,
+            Selection = context.Job.Selection,
+            CommandTimeoutSeconds = context.Job.Advanced.SqlCommandTimeoutSeconds,
+            SqlLockTimeoutSeconds = context.Job.Advanced.SqlLockTimeoutSeconds,
+            MaxRetries = context.Job.Advanced.SqlRetryCount,
+        };
+
+        await ChannelPipeline.RunAsync(
+            _serverProvider.ScriptAsync(request, cancellationToken),
+            (raw, ct) => raw.SkipReason is not null
+                ? RecordSkipAsync(raw)
+                : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
+            workers,
+            cancellationToken).ConfigureAwait(false);
+
+        // The server-configuration artifact always rides with the server pass: one cheap bulk query,
+        // and drifted sp_configure values are exactly what instance versioning exists to catch.
+        var configuration = await _artifactReader.ReadServerConfigurationAsync(
+            context.Connection, context.SqlPassword,
+            context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+            cancellationToken).ConfigureAwait(false);
+        await ApplyItemAsync(
+            ArtifactIdentity("server-configuration"), configuration, RepositoryLayout.ServerConfigurationFile, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!skipped.IsEmpty)
+        {
+            var details = skipped.ToList();
+            context.Log(SyncLogLevel.Warning,
+                $"{details.Count:N0} server-level item(s) could not be scripted and were skipped.",
+                string.Join("\n", details.Take(100)));
+        }
+
+        // Suspend deletions for any type that had a scripting failure this run (see RecordSkipAsync).
+        foreach (var (key, state) in prior)
+        {
+            if (failedTypes.ContainsKey(state.ObjectType))
+            {
+                seen.TryAdd(key, 0);
+            }
+        }
+
+        await ApplyDeletionsAsync(context, RepositoryLayout.ServerScopeName, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
 
         context.PendingStates.AddRange(changedStates);
     }

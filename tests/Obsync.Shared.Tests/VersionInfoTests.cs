@@ -10,7 +10,7 @@ public sealed class VersionInfoTests
     {
         var version = VersionInfo.Of(typeof(VersionInfo).Assembly);
 
-        Assert.StartsWith("0.1.0", version);      // from Directory.Build.props <VersionPrefix>
+        Assert.StartsWith("0.2.0", version);      // from Directory.Build.props <VersionPrefix>
         Assert.DoesNotContain("+", version);       // the +<gitsha> suffix is stripped
     }
 }
