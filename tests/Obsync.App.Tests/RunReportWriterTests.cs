@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text;
 using System.Text.Json;
 using Obsync.App.Services;
 using Obsync.Shared;
@@ -9,12 +11,23 @@ namespace Obsync.App.Tests;
 
 /// <summary>
 /// The run-report writer must render a run faithfully in each format, escape untrusted names, and
-/// never expose a secret field. Pure (no database, no filesystem) — it works off supplied run data.
+/// never expose a secret field. Pure (no database, no filesystem) — it works off supplied run data,
+/// streamed to whatever destination the caller provides.
 /// </summary>
 public sealed class RunReportWriterTests
 {
     private static readonly DateTimeOffset GeneratedAt = new(2026, 7, 2, 9, 30, 0, TimeSpan.Zero);
     private readonly RunReportWriter _writer = new();
+
+    /// <summary>Streams the report into memory and decodes it, so the content assertions read the
+    /// exact bytes a file export would contain.</summary>
+    private async Task<string> WriteAsync(
+        ReportFormat format, SyncRun run, IReadOnlyList<ObjectChange> changes, IReadOnlyList<SyncRunLog> logs)
+    {
+        using var stream = new MemoryStream();
+        await _writer.WriteAsync(format, stream, run, changes, logs, GeneratedAt);
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
 
     private static SyncRun SampleRun() => new()
     {
@@ -50,9 +63,9 @@ public sealed class RunReportWriterTests
     ];
 
     [Fact]
-    public void Json_IsStructured_WithReadableEnums_AndNoSecrets()
+    public async Task Json_IsStructured_WithReadableEnums_AndNoSecrets()
     {
-        var json = _writer.Build(ReportFormat.Json, SampleRun(), SampleChanges(), SampleLogs(), GeneratedAt);
+        var json = await WriteAsync(ReportFormat.Json, SampleRun(), SampleChanges(), SampleLogs());
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -76,9 +89,9 @@ public sealed class RunReportWriterTests
     }
 
     [Fact]
-    public void Csv_HasHeader_AndOneRowPerChange()
+    public async Task Csv_HasHeader_AndOneRowPerChange()
     {
-        var csv = _writer.Build(ReportFormat.Csv, SampleRun(), SampleChanges(), SampleLogs(), GeneratedAt);
+        var csv = await WriteAsync(ReportFormat.Csv, SampleRun(), SampleChanges(), SampleLogs());
 
         var lines = csv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(3, lines.Length); // header + 2 changes
@@ -87,39 +100,40 @@ public sealed class RunReportWriterTests
     }
 
     [Fact]
-    public void Csv_QuotesAndEscapes_FieldsWithCommasAndQuotes()
+    public async Task Csv_QuotesAndEscapes_FieldsWithCommasAndQuotes()
     {
         List<ObjectChange> changes =
         [
             new() { ChangeType = ChangeType.Added, ObjectType = SqlObjectType.Table, Schema = "dbo", Name = "Odd,\"Name", RelativePath = "tables/x.sql" },
         ];
 
-        var csv = _writer.Build(ReportFormat.Csv, SampleRun(), changes, [], GeneratedAt);
+        var csv = await WriteAsync(ReportFormat.Csv, SampleRun(), changes, []);
 
         // Embedded comma forces quoting; embedded quote is doubled.
         Assert.Contains("\"Odd,\"\"Name\"", csv);
     }
 
     [Fact]
-    public void Csv_WithNoChanges_IsHeaderOnly()
+    public async Task Csv_WithNoChanges_IsHeaderOnly()
     {
-        var csv = _writer.Build(ReportFormat.Csv, SampleRun(), [], [], GeneratedAt);
+        var csv = await WriteAsync(ReportFormat.Csv, SampleRun(), [], []);
 
         var lines = csv.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
         Assert.Single(lines);
     }
 
     [Fact]
-    public void Html_IsSelfContained_AndEncodesUntrustedNames()
+    public async Task Html_IsSelfContained_AndEncodesUntrustedNames()
     {
         List<ObjectChange> changes =
         [
             new() { ChangeType = ChangeType.Added, ObjectType = SqlObjectType.Table, Schema = "dbo", Name = "<script>x", RelativePath = "tables/x.sql" },
         ];
 
-        var html = _writer.Build(ReportFormat.Html, SampleRun(), changes, SampleLogs(), GeneratedAt);
+        var html = await WriteAsync(ReportFormat.Html, SampleRun(), changes, SampleLogs());
 
-        Assert.Contains("<!doctype html>", html, StringComparison.OrdinalIgnoreCase);
+        // StartsWith also guards against a byte-order mark sneaking into the streamed output.
+        Assert.StartsWith("<!doctype html>", html);
         Assert.Contains("Prod Sync", html);
         Assert.Contains("dbo.&lt;script&gt;x", html);        // object name HTML-encoded
         Assert.DoesNotContain("<script>x", html, StringComparison.Ordinal); // never raw
@@ -128,11 +142,11 @@ public sealed class RunReportWriterTests
     }
 
     [Fact]
-    public void Html_IsDeterministic_ForFixedGeneratedAt()
+    public async Task Html_IsDeterministic_ForFixedGeneratedAt()
     {
         var run = SampleRun();
-        var a = _writer.Build(ReportFormat.Html, run, SampleChanges(), SampleLogs(), GeneratedAt);
-        var b = _writer.Build(ReportFormat.Html, run, SampleChanges(), SampleLogs(), GeneratedAt);
+        var a = await WriteAsync(ReportFormat.Html, run, SampleChanges(), SampleLogs());
+        var b = await WriteAsync(ReportFormat.Html, run, SampleChanges(), SampleLogs());
 
         Assert.Equal(a, b);
     }

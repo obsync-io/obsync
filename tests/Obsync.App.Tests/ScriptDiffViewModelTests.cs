@@ -124,6 +124,14 @@ public sealed class ScriptDiffViewModelTests
 
         vm.FilterText = "orders";
 
+        // The filter is debounced (~250 ms) so typing doesn't rescan the list per keystroke; wait
+        // for the single deferred refresh to have run, then assert.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (vm.ChangesView.Cast<object>().Count() != 1 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
         Assert.Single(vm.ChangesView.Cast<object>());
     }
 

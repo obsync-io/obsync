@@ -76,4 +76,25 @@ public sealed class CommitMessageBuilderTests
         Assert.Contains("Deleted:", body, StringComparison.Ordinal);
         Assert.Contains("  - functions/dbo.fn_OldTax.sql", body, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void Build_Body_ListsTheFiftySmallestPathsPerCategory_ThenSummarizesTheRest()
+    {
+        var (run, job, _) = Sample();
+
+        // 60 added changes fed in reverse: the body must list the 50 ordinally smallest paths in
+        // ascending order (not the first 50 encountered) and summarize the remaining 10.
+        var changes = Enumerable.Range(0, 60)
+            .Reverse()
+            .Select(i => Change(ChangeType.Added, $"procedures/dbo.usp_Proc{i:D3}.sql"))
+            .ToList();
+
+        var (_, body) = CommitMessageBuilder.Build(run, job, changes);
+
+        var expected = "Added:\n"
+            + string.Concat(Enumerable.Range(0, 50).Select(i => $"  - procedures/dbo.usp_Proc{i:D3}.sql\n"))
+            + "  … and 10 more";
+        Assert.Contains(expected, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("usp_Proc050", body, StringComparison.Ordinal);
+    }
 }

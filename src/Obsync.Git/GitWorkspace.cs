@@ -171,13 +171,18 @@ public sealed class GitWorkspace : IGitWorkspace
     public async Task<GitCommitResult> CommitAllAsync(
         GitWorkspaceContext context, string subject, string body, bool allowEmpty = false, CancellationToken cancellationToken = default)
     {
-        var add = await _git.RunAsync(context.LocalPath, ["add", "-A"], cancellationToken).ConfigureAwait(false);
+        // untrackedCache persists untracked-directory mtimes in the index, so the add/status walks
+        // over a large exported tree (a VLDB run writes 100k+ script files) skip unchanged directories
+        // on subsequent runs.
+        var add = await _git.RunAsync(
+            context.LocalPath, ["-c", "core.untrackedCache=true", "add", "-A"], cancellationToken).ConfigureAwait(false);
         if (!add.Success)
         {
             return GitCommitResult.Failed($"git add failed: {Summarize(add.StandardError)}");
         }
 
-        var status = await _git.RunAsync(context.LocalPath, ["status", "--porcelain"], cancellationToken).ConfigureAwait(false);
+        var status = await _git.RunAsync(
+            context.LocalPath, ["-c", "core.untrackedCache=true", "status", "--porcelain"], cancellationToken).ConfigureAwait(false);
         var hasWorkingChanges = !string.IsNullOrWhiteSpace(status.StandardOutput);
         if (!hasWorkingChanges && !allowEmpty)
         {

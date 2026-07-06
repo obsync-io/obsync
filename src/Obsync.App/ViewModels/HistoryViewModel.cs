@@ -19,6 +19,10 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 {
     private const string AllJobs = "All jobs";
 
+    /// <summary>A VLDB run can record hundreds of thousands of changes; the diff viewer's list shows
+    /// at most this many (the report export always contains the complete list).</summary>
+    private const int MaxDiffViewerChanges = 2000;
+
     private readonly IRunRepository _runs;
     private readonly IJobRepository _jobs;
     private readonly IRepositoryProfileRepository _repositories;
@@ -115,7 +119,6 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     private bool CanExportReport() => SelectedRun is not null;
 
-    // History does not preload a run's changes/logs, so fetch them for the selected run before exporting.
     [RelayCommand(CanExecute = nameof(CanExportReport))]
     private async Task ExportReportAsync()
     {
@@ -124,10 +127,7 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
             return;
         }
 
-        var changes = await _runs.GetChangesAsync(run.Id);
-        var logs = await _runs.GetLogsAsync(run.Id);
-
-        var message = await RunReportExport.PromptAndWriteAsync(_reportWriter, run, changes, logs);
+        var message = await RunReportExport.PromptAndWriteAsync(_reportWriter, _runs, run);
         if (message is not null)
         {
             ReportMessage = message;
@@ -146,7 +146,7 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
             return;
         }
 
-        var changes = await _runs.GetChangesAsync(run.Id);
+        var changes = await _runs.GetChangesAsync(run.Id, MaxDiffViewerChanges);
         var job = await _jobs.GetAsync(run.JobId);
         var repository = job?.RepositoryProfileId is { } repositoryId ? await _repositories.GetAsync(repositoryId) : null;
 

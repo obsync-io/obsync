@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -23,13 +24,15 @@ public enum ReportFormat
 
 /// <summary>
 /// Renders a single run — its summary, per-object changes, and log timeline — as a shareable
-/// report string. Pure (no filesystem, no secrets): it reads only the already-persisted,
-/// user-facing run data the caller supplies.
+/// report, written incrementally to the destination stream so a VLDB run's hundreds of thousands
+/// of changes never materialize as one document string. Pure (no secrets): it reads only the
+/// already-persisted, user-facing run data the caller supplies.
 /// </summary>
 public interface IRunReportWriter
 {
-    string Build(
+    Task WriteAsync(
         ReportFormat format,
+        Stream destination,
         SyncRun run,
         IReadOnlyList<ObjectChange> changes,
         IReadOnlyList<SyncRunLog> logs,
@@ -41,33 +44,59 @@ public sealed class RunReportWriter : IRunReportWriter
 {
     private const string Crlf = "\r\n";
 
+    // Matches File.WriteAllTextAsync's default (UTF-8, no byte-order mark).
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding();
+
     private static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() },
     };
 
-    public string Build(
+    public async Task WriteAsync(
         ReportFormat format,
-        SyncRun run,
-        IReadOnlyList<ObjectChange> changes,
-        IReadOnlyList<SyncRunLog> logs,
-        DateTimeOffset generatedAt) => format switch
-    {
-        ReportFormat.Json => BuildJson(run, changes, logs, generatedAt),
-        ReportFormat.Csv => BuildCsv(changes),
-        ReportFormat.Html => BuildHtml(run, changes, logs, generatedAt),
-        _ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown report format."),
-    };
-
-    // ------------------------------------------------------------------ JSON
-
-    private static string BuildJson(
+        Stream destination,
         SyncRun run,
         IReadOnlyList<ObjectChange> changes,
         IReadOnlyList<SyncRunLog> logs,
         DateTimeOffset generatedAt)
     {
+        switch (format)
+        {
+            case ReportFormat.Json:
+                await WriteJsonAsync(destination, run, changes, logs, generatedAt).ConfigureAwait(false);
+                break;
+            case ReportFormat.Csv:
+            case ReportFormat.Html:
+                var writer = new StreamWriter(destination, Utf8NoBom, bufferSize: -1, leaveOpen: true);
+                await using (writer.ConfigureAwait(false))
+                {
+                    if (format == ReportFormat.Csv)
+                    {
+                        WriteCsv(writer, changes);
+                    }
+                    else
+                    {
+                        WriteHtml(writer, run, changes, logs, generatedAt);
+                    }
+                }
+
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(format), format, "Unknown report format.");
+        }
+    }
+
+    // ------------------------------------------------------------------ JSON
+
+    private static async Task WriteJsonAsync(
+        Stream destination,
+        SyncRun run,
+        IReadOnlyList<ObjectChange> changes,
+        IReadOnlyList<SyncRunLog> logs,
+        DateTimeOffset generatedAt)
+    {
+        // The Changes/Logs projections stay lazy; the serializer streams them to the destination.
         var document = new RunReportDocument(
             generatedAt,
             VersionInfo.Of(typeof(RunReportWriter).Assembly),
@@ -77,32 +106,38 @@ public sealed class RunReportWriter : IRunReportWriter
                 run.StartedAt, run.CompletedAt, run.DurationMs,
                 run.ObjectsScanned, run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted, run.ObjectsFailed,
                 run.CommitSha, run.CommitUrl, run.PullRequestNumber, run.PullRequestUrl, run.ErrorMessage),
-            [.. changes.Select(c => new RunReportChange(
-                c.ChangeType, c.ObjectType.ToString(), c.QualifiedName, c.RelativePath, c.PreviousHash, c.NewHash))],
-            [.. logs.Select(l => new RunReportLogEntry(l.Timestamp, l.Level, l.Message, l.Detail))]);
+            changes.Select(c => new RunReportChange(
+                c.ChangeType, c.ObjectType.ToString(), c.QualifiedName, c.RelativePath, c.PreviousHash, c.NewHash)),
+            logs.Select(l => new RunReportLogEntry(l.Timestamp, l.Level, l.Message, l.Detail)));
 
-        return JsonSerializer.Serialize(document, Json);
+        await JsonSerializer.SerializeAsync(destination, document, Json).ConfigureAwait(false);
     }
 
     // ------------------------------------------------------------------ CSV
 
-    private static string BuildCsv(IReadOnlyList<ObjectChange> changes)
+    private static void WriteCsv(TextWriter writer, IReadOnlyList<ObjectChange> changes)
     {
-        var sb = new StringBuilder();
-        sb.Append("ChangeType,ObjectType,Schema,Name,QualifiedName,RelativePath,PreviousHash,NewHash").Append(Crlf);
+        writer.Write("ChangeType,ObjectType,Schema,Name,QualifiedName,RelativePath,PreviousHash,NewHash");
+        writer.Write(Crlf);
         foreach (var c in changes)
         {
-            sb.Append(Csv(c.ChangeType.ToString())).Append(',')
-              .Append(Csv(c.ObjectType.ToString())).Append(',')
-              .Append(Csv(c.Schema)).Append(',')
-              .Append(Csv(c.Name)).Append(',')
-              .Append(Csv(c.QualifiedName)).Append(',')
-              .Append(Csv(c.RelativePath)).Append(',')
-              .Append(Csv(c.PreviousHash ?? string.Empty)).Append(',')
-              .Append(Csv(c.NewHash ?? string.Empty)).Append(Crlf);
+            writer.Write(Csv(c.ChangeType.ToString()));
+            writer.Write(',');
+            writer.Write(Csv(c.ObjectType.ToString()));
+            writer.Write(',');
+            writer.Write(Csv(c.Schema));
+            writer.Write(',');
+            writer.Write(Csv(c.Name));
+            writer.Write(',');
+            writer.Write(Csv(c.QualifiedName));
+            writer.Write(',');
+            writer.Write(Csv(c.RelativePath));
+            writer.Write(',');
+            writer.Write(Csv(c.PreviousHash ?? string.Empty));
+            writer.Write(',');
+            writer.Write(Csv(c.NewHash ?? string.Empty));
+            writer.Write(Crlf);
         }
-
-        return sb.ToString();
     }
 
     // RFC 4180: quote a field only when it contains a comma, quote, or newline; escape quotes by doubling.
@@ -113,109 +148,160 @@ public sealed class RunReportWriter : IRunReportWriter
 
     // ------------------------------------------------------------------ HTML
 
-    private static string BuildHtml(
+    private static void WriteHtml(
+        TextWriter writer,
         SyncRun run,
         IReadOnlyList<ObjectChange> changes,
         IReadOnlyList<SyncRunLog> logs,
         DateTimeOffset generatedAt)
     {
-        var sb = new StringBuilder();
-        sb.Append("<!doctype html>").Append(Crlf)
-          .Append("<html lang=\"en\"><head><meta charset=\"utf-8\">").Append(Crlf)
-          .Append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">").Append(Crlf)
-          .Append("<title>Obsync run report — ").Append(Enc(run.JobName)).Append("</title>").Append(Crlf)
-          .Append("<style>").Append(Css).Append("</style></head><body>").Append(Crlf);
+        writer.Write("<!doctype html>");
+        writer.Write(Crlf);
+        writer.Write("<html lang=\"en\"><head><meta charset=\"utf-8\">");
+        writer.Write(Crlf);
+        writer.Write("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+        writer.Write(Crlf);
+        writer.Write("<title>Obsync run report — ");
+        writer.Write(Enc(run.JobName));
+        writer.Write("</title>");
+        writer.Write(Crlf);
+        writer.Write("<style>");
+        writer.Write(Css);
+        writer.Write("</style></head><body>");
+        writer.Write(Crlf);
 
         // Header
-        sb.Append("<h1>").Append(Enc(run.JobName)).Append("</h1>").Append(Crlf)
-          .Append("<p class=\"sub\">Run <code>").Append(Enc(run.RunKey)).Append("</code> ")
-          .Append(StatusBadge(run.Status)).Append("</p>").Append(Crlf);
+        writer.Write("<h1>");
+        writer.Write(Enc(run.JobName));
+        writer.Write("</h1>");
+        writer.Write(Crlf);
+        writer.Write("<p class=\"sub\">Run <code>");
+        writer.Write(Enc(run.RunKey));
+        writer.Write("</code> ");
+        writer.Write(StatusBadge(run.Status));
+        writer.Write("</p>");
+        writer.Write(Crlf);
 
         // Summary
-        sb.Append("<table class=\"kv\">").Append(Crlf);
-        Row(sb, "Status", run.Status.ToString());
-        Row(sb, "Source server", run.ServerName);
-        Row(sb, "Databases", run.Databases);
-        Row(sb, "Trigger", run.Trigger.ToString());
-        Row(sb, "Started by", run.TriggeredBy ?? "—");
-        Row(sb, "Started", run.StartedAt.LocalDateTime.ToString("F", CultureInfo.CurrentCulture));
-        Row(sb, "Completed", run.CompletedAt is { } done ? done.LocalDateTime.ToString("F", CultureInfo.CurrentCulture) : "—");
-        Row(sb, "Duration", FormatDuration(run.DurationMs));
-        Row(sb, "Objects scanned", run.ObjectsScanned.ToString(CultureInfo.CurrentCulture));
-        Row(sb, "Added / Modified / Deleted",
+        writer.Write("<table class=\"kv\">");
+        writer.Write(Crlf);
+        Row(writer, "Status", run.Status.ToString());
+        Row(writer, "Source server", run.ServerName);
+        Row(writer, "Databases", run.Databases);
+        Row(writer, "Trigger", run.Trigger.ToString());
+        Row(writer, "Started by", run.TriggeredBy ?? "—");
+        Row(writer, "Started", run.StartedAt.LocalDateTime.ToString("F", CultureInfo.CurrentCulture));
+        Row(writer, "Completed", run.CompletedAt is { } done ? done.LocalDateTime.ToString("F", CultureInfo.CurrentCulture) : "—");
+        Row(writer, "Duration", FormatDuration(run.DurationMs));
+        Row(writer, "Objects scanned", run.ObjectsScanned.ToString(CultureInfo.CurrentCulture));
+        Row(writer, "Added / Modified / Deleted",
             $"{run.ObjectsAdded.ToString(CultureInfo.CurrentCulture)} / {run.ObjectsModified.ToString(CultureInfo.CurrentCulture)} / {run.ObjectsDeleted.ToString(CultureInfo.CurrentCulture)}");
-        Row(sb, "Skipped", run.ObjectsFailed.ToString(CultureInfo.CurrentCulture));
-        RowRaw(sb, "Commit", CommitCell(run));
+        Row(writer, "Skipped", run.ObjectsFailed.ToString(CultureInfo.CurrentCulture));
+        RowRaw(writer, "Commit", CommitCell(run));
         if (run.PullRequestUrl is { Length: > 0 } prUrl)
         {
-            RowRaw(sb, "Pull request", Link(prUrl, run.PullRequestNumber is { } n ? "#" + n.ToString(CultureInfo.CurrentCulture) : prUrl));
+            RowRaw(writer, "Pull request", Link(prUrl, run.PullRequestNumber is { } n ? "#" + n.ToString(CultureInfo.CurrentCulture) : prUrl));
         }
 
         if (run.ErrorMessage is { Length: > 0 } error)
         {
-            RowRaw(sb, "Detail", "<span class=\"err\">" + Enc(error) + "</span>");
+            RowRaw(writer, "Detail", "<span class=\"err\">" + Enc(error) + "</span>");
         }
 
-        sb.Append("</table>").Append(Crlf);
+        writer.Write("</table>");
+        writer.Write(Crlf);
 
         // Changes
-        sb.Append("<h2>Changed objects <span class=\"count\">")
-          .Append(changes.Count.ToString(CultureInfo.CurrentCulture)).Append("</span></h2>").Append(Crlf);
+        writer.Write("<h2>Changed objects <span class=\"count\">");
+        writer.Write(changes.Count.ToString(CultureInfo.CurrentCulture));
+        writer.Write("</span></h2>");
+        writer.Write(Crlf);
         if (changes.Count == 0)
         {
-            sb.Append("<p class=\"empty\">No object changes were recorded for this run.</p>").Append(Crlf);
+            writer.Write("<p class=\"empty\">No object changes were recorded for this run.</p>");
+            writer.Write(Crlf);
         }
         else
         {
-            sb.Append("<table class=\"grid\"><thead><tr><th>Change</th><th>Object</th><th>Type</th><th>Path</th></tr></thead><tbody>").Append(Crlf);
+            writer.Write("<table class=\"grid\"><thead><tr><th>Change</th><th>Object</th><th>Type</th><th>Path</th></tr></thead><tbody>");
+            writer.Write(Crlf);
             foreach (var c in changes)
             {
-                sb.Append("<tr><td>").Append(ChangeBadge(c.ChangeType))
-                  .Append("</td><td>").Append(Enc(c.QualifiedName))
-                  .Append("</td><td>").Append(Enc(c.ObjectType.ToString()))
-                  .Append("</td><td><code>").Append(Enc(c.RelativePath)).Append("</code></td></tr>").Append(Crlf);
+                writer.Write("<tr><td>");
+                writer.Write(ChangeBadge(c.ChangeType));
+                writer.Write("</td><td>");
+                writer.Write(Enc(c.QualifiedName));
+                writer.Write("</td><td>");
+                writer.Write(Enc(c.ObjectType.ToString()));
+                writer.Write("</td><td><code>");
+                writer.Write(Enc(c.RelativePath));
+                writer.Write("</code></td></tr>");
+                writer.Write(Crlf);
             }
 
-            sb.Append("</tbody></table>").Append(Crlf);
+            writer.Write("</tbody></table>");
+            writer.Write(Crlf);
         }
 
         // Logs
-        sb.Append("<h2>Log <span class=\"count\">").Append(logs.Count.ToString(CultureInfo.CurrentCulture)).Append("</span></h2>").Append(Crlf);
+        writer.Write("<h2>Log <span class=\"count\">");
+        writer.Write(logs.Count.ToString(CultureInfo.CurrentCulture));
+        writer.Write("</span></h2>");
+        writer.Write(Crlf);
         if (logs.Count == 0)
         {
-            sb.Append("<p class=\"empty\">No log entries were recorded for this run.</p>").Append(Crlf);
+            writer.Write("<p class=\"empty\">No log entries were recorded for this run.</p>");
+            writer.Write(Crlf);
         }
         else
         {
-            sb.Append("<table class=\"grid\"><thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead><tbody>").Append(Crlf);
+            writer.Write("<table class=\"grid\"><thead><tr><th>Time</th><th>Level</th><th>Message</th></tr></thead><tbody>");
+            writer.Write(Crlf);
             foreach (var l in logs)
             {
-                var message = Enc(l.Message);
+                writer.Write("<tr><td class=\"nowrap\">");
+                writer.Write(Enc(l.Timestamp.LocalDateTime.ToString("HH:mm:ss", CultureInfo.CurrentCulture)));
+                writer.Write("</td><td>");
+                writer.Write(Enc(l.Level.ToString()));
+                writer.Write("</td><td>");
+                writer.Write(Enc(l.Message));
                 if (l.Detail is { Length: > 0 } detail)
                 {
-                    message += "<div class=\"detail\">" + Enc(detail) + "</div>";
+                    writer.Write("<div class=\"detail\">");
+                    writer.Write(Enc(detail));
+                    writer.Write("</div>");
                 }
 
-                sb.Append("<tr><td class=\"nowrap\">").Append(Enc(l.Timestamp.LocalDateTime.ToString("HH:mm:ss", CultureInfo.CurrentCulture)))
-                  .Append("</td><td>").Append(Enc(l.Level.ToString()))
-                  .Append("</td><td>").Append(message).Append("</td></tr>").Append(Crlf);
+                writer.Write("</td></tr>");
+                writer.Write(Crlf);
             }
 
-            sb.Append("</tbody></table>").Append(Crlf);
+            writer.Write("</tbody></table>");
+            writer.Write(Crlf);
         }
 
-        sb.Append("<p class=\"footer\">Generated by Obsync ").Append(Enc(VersionInfo.Of(typeof(RunReportWriter).Assembly)))
-          .Append(" · ").Append(Enc(generatedAt.LocalDateTime.ToString("F", CultureInfo.CurrentCulture))).Append("</p>").Append(Crlf)
-          .Append("</body></html>").Append(Crlf);
-
-        return sb.ToString();
+        writer.Write("<p class=\"footer\">Generated by Obsync ");
+        writer.Write(Enc(VersionInfo.Of(typeof(RunReportWriter).Assembly)));
+        writer.Write(" · ");
+        writer.Write(Enc(generatedAt.LocalDateTime.ToString("F", CultureInfo.CurrentCulture)));
+        writer.Write("</p>");
+        writer.Write(Crlf);
+        writer.Write("</body></html>");
+        writer.Write(Crlf);
     }
 
-    private static void Row(StringBuilder sb, string label, string value) =>
-        sb.Append("<tr><th>").Append(Enc(label)).Append("</th><td>").Append(Enc(value)).Append("</td></tr>").Append(Crlf);
+    private static void Row(TextWriter writer, string label, string value) =>
+        RowRaw(writer, label, Enc(value));
 
-    private static void RowRaw(StringBuilder sb, string label, string valueHtml) =>
-        sb.Append("<tr><th>").Append(Enc(label)).Append("</th><td>").Append(valueHtml).Append("</td></tr>").Append(Crlf);
+    private static void RowRaw(TextWriter writer, string label, string valueHtml)
+    {
+        writer.Write("<tr><th>");
+        writer.Write(Enc(label));
+        writer.Write("</th><td>");
+        writer.Write(valueHtml);
+        writer.Write("</td></tr>");
+        writer.Write(Crlf);
+    }
 
     private static string CommitCell(SyncRun run)
     {
@@ -292,12 +378,14 @@ public sealed class RunReportWriter : IRunReportWriter
 
 // Curated report DTOs — a stable shape that also makes "no secrets" self-evident (the run data holds
 // none; passwords/tokens live in Windows Credential Manager).
+// Changes/Logs are IEnumerable so the serializer streams them; a VLDB run's change set never
+// materializes as a second in-memory list.
 internal sealed record RunReportDocument(
     DateTimeOffset GeneratedAtUtc,
     string AppVersion,
     RunReportSummary Run,
-    IReadOnlyList<RunReportChange> Changes,
-    IReadOnlyList<RunReportLogEntry> Logs);
+    IEnumerable<RunReportChange> Changes,
+    IEnumerable<RunReportLogEntry> Logs);
 
 internal sealed record RunReportSummary(
     string RunKey,

@@ -24,7 +24,9 @@ public sealed record ObjectInventoryDocument
 /// </summary>
 public static class ObjectInventoryWriter
 {
-    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
+    // NewLine forces LF regardless of platform so the committed file is byte-stable, without a
+    // post-hoc Replace that would copy the (potentially ~100 MB) document a second time.
+    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, NewLine = "\n" };
 
     public static string Serialize(string server, string database, IEnumerable<ObjectInventoryEntry> entries)
     {
@@ -49,8 +51,6 @@ public static class ObjectInventoryWriter
             Objects = ordered,
         };
 
-        // Force LF regardless of platform/serializer so the committed file is byte-stable.
-        var json = JsonSerializer.Serialize(document, Options).Replace("\r\n", "\n", StringComparison.Ordinal);
-        return json + "\n";
+        return JsonSerializer.Serialize(document, Options) + "\n";
     }
 }
