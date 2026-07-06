@@ -26,7 +26,8 @@ public sealed class DiagnosticsServiceTests
         serverRepo.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(servers));
         var repoRepo = Substitute.For<IRepositoryProfileRepository>();
         repoRepo.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(repositories));
-        return new DiagnosticsService(probe, gitHub, git, credentials, serverRepo, repoRepo, Substitute.For<IProxyProvider>());
+        return new DiagnosticsService(probe, gitHub, git, credentials, serverRepo, repoRepo,
+            Substitute.For<IProxyProvider>(), Substitute.For<IAppSettingsRepository>());
     }
 
     [Fact]

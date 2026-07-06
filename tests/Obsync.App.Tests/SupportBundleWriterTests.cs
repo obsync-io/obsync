@@ -63,7 +63,8 @@ public sealed class SupportBundleWriterTests : IAsyncLifetime, IDisposable
             _provider.GetRequiredService<IConnectionProfileRepository>(),
             _provider.GetRequiredService<IRepositoryProfileRepository>(),
             _provider.GetRequiredService<IRunRepository>(),
-            SystemClock.Instance);
+            SystemClock.Instance,
+            _provider.GetRequiredService<IAppSettingsRepository>());
 
         await writer.WriteAsync(_zipPath, [new DiagnosticResult("Git CLI", DiagnosticStatus.Pass, "git version 2.45.0")]);
 

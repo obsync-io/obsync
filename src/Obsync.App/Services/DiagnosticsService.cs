@@ -39,6 +39,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
     private readonly IConnectionProfileRepository _servers;
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IProxyProvider _proxy;
+    private readonly IAppSettingsRepository _settings;
 
     public DiagnosticsService(
         ISqlServerProbe probe,
@@ -47,7 +48,8 @@ public sealed class DiagnosticsService : IDiagnosticsService
         ICredentialStore credentials,
         IConnectionProfileRepository servers,
         IRepositoryProfileRepository repositories,
-        IProxyProvider proxy)
+        IProxyProvider proxy,
+        IAppSettingsRepository settings)
     {
         _probe = probe;
         _gitHub = gitHub;
@@ -56,6 +58,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         _servers = servers;
         _repositories = repositories;
         _proxy = proxy;
+        _settings = settings;
     }
 
     public async Task<IReadOnlyList<DiagnosticResult>> RunAsync(CancellationToken cancellationToken = default)
@@ -63,7 +66,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         var results = new List<DiagnosticResult>
         {
             await CheckGitAsync(cancellationToken).ConfigureAwait(false),
-            CheckDiskSpace(),
+            await CheckDiskSpaceAsync(cancellationToken).ConfigureAwait(false),
             CheckService(),
             await CheckProxyAsync(cancellationToken).ConfigureAwait(false),
         };
@@ -97,19 +100,38 @@ public sealed class DiagnosticsService : IDiagnosticsService
         }
     }
 
-    private static DiagnosticResult CheckDiskSpace()
+    private async Task<DiagnosticResult> CheckDiskSpaceAsync(CancellationToken cancellationToken)
     {
         try
         {
-            var root = Path.GetPathRoot(ObsyncPaths.Root);
-            if (string.IsNullOrEmpty(root))
+            // The workspaces root is relocatable in Settings, so the clones may live on a
+            // different drive than the data folder — check every distinct drive involved.
+            var workspacesOverride = await _settings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
+            var workspacesRoot = string.IsNullOrWhiteSpace(workspacesOverride)
+                ? ObsyncPaths.WorkspacesRoot
+                : workspacesOverride;
+
+            var drives = new[] { ObsyncPaths.Root, workspacesRoot }
+                .Select(Path.GetPathRoot)
+                .Where(r => !string.IsNullOrEmpty(r))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (drives.Count == 0)
             {
                 return new DiagnosticResult("Disk space", DiagnosticStatus.Warning, "Could not determine the data drive.");
             }
 
-            var free = new DriveInfo(root).AvailableFreeSpace;
-            var detail = $"{free / 1024d / 1024 / 1024:0.0} GB free on {root}";
-            return free < LowDiskThresholdBytes
+            var low = false;
+            var details = new List<string>();
+            foreach (var drive in drives)
+            {
+                var free = new DriveInfo(drive!).AvailableFreeSpace;
+                low |= free < LowDiskThresholdBytes;
+                details.Add($"{free / 1024d / 1024 / 1024:0.0} GB free on {drive}");
+            }
+
+            var detail = string.Join(" · ", details);
+            return low
                 ? new DiagnosticResult("Disk space", DiagnosticStatus.Warning, $"Low — {detail}")
                 : new DiagnosticResult("Disk space", DiagnosticStatus.Pass, detail);
         }

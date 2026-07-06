@@ -25,19 +25,22 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunRepository _runs;
     private readonly IClock _clock;
+    private readonly IAppSettingsRepository _settings;
 
     public SupportBundleWriter(
         IJobRepository jobs,
         IConnectionProfileRepository servers,
         IRepositoryProfileRepository repositories,
         IRunRepository runs,
-        IClock clock)
+        IClock clock,
+        IAppSettingsRepository settings)
     {
         _jobs = jobs;
         _servers = servers;
         _repositories = repositories;
         _runs = runs;
         _clock = clock;
+        _settings = settings;
     }
 
     public async Task WriteAsync(string zipPath, IReadOnlyList<DiagnosticResult> diagnostics, CancellationToken cancellationToken = default)
@@ -54,10 +57,15 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
             File.Delete(zipPath);
         }
 
+        // The bundle exists for accurate troubleshooting — report the EFFECTIVE workspaces root
+        // (the Settings override when set), not the built-in default.
+        var workspacesOverride = await _settings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
+        var workspacesRoot = string.IsNullOrWhiteSpace(workspacesOverride) ? ObsyncPaths.WorkspacesRoot : workspacesOverride;
+
         await using var stream = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None);
         using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
 
-        await WriteJsonEntryAsync(archive, "system-info.json", BuildSystemInfo(diagnostics), cancellationToken).ConfigureAwait(false);
+        await WriteJsonEntryAsync(archive, "system-info.json", BuildSystemInfo(diagnostics, workspacesRoot), cancellationToken).ConfigureAwait(false);
         await WriteJsonEntryAsync(archive, "diagnostics.json", diagnostics, cancellationToken).ConfigureAwait(false);
         await WriteJsonEntryAsync(archive, "config.json", new { jobs, servers, repositories }, cancellationToken).ConfigureAwait(false);
         await WriteJsonEntryAsync(archive, "recent-runs.json", runs, cancellationToken).ConfigureAwait(false);
@@ -65,7 +73,7 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
         AddRecentLogs(archive);
     }
 
-    private object BuildSystemInfo(IReadOnlyList<DiagnosticResult> diagnostics) => new
+    private object BuildSystemInfo(IReadOnlyList<DiagnosticResult> diagnostics, string workspacesRoot) => new
     {
         GeneratedAtUtc = _clock.UtcNow,
         AppVersion = VersionInfo.Of(typeof(App).Assembly),
@@ -78,7 +86,7 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
         MachineName = Environment.MachineName,
         User = CurrentActor.Name,
         DataRoot = ObsyncPaths.Root,
-        WorkspacesRoot = ObsyncPaths.WorkspacesRoot,
+        WorkspacesRoot = workspacesRoot,
         LogsRoot = ObsyncPaths.LogsRoot,
         FreeDiskBytes = SafeFreeDisk(),
     };
