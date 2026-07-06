@@ -20,16 +20,39 @@ public interface IGitCommandRunner
 /// <inheritdoc cref="IGitCommandRunner" />
 public sealed class GitCommandRunner : IGitCommandRunner
 {
+    private static readonly Lazy<string> ResolvedGitExecutable = new(() => ResolveGitExecutable());
+
     private readonly ILogger<GitCommandRunner> _logger;
 
     public GitCommandRunner(ILogger<GitCommandRunner> logger) => _logger = logger;
+
+    /// <summary>
+    /// The git executable every command runs with, resolved once per process:
+    /// (1) the <c>OBSYNC_GIT</c> environment variable, when set and pointing at an existing file;
+    /// (2) the MinGit bundled by the installer at <c>tools\git\cmd\git.exe</c> next to the app;
+    /// (3) plain <c>"git"</c> from <c>PATH</c> (dev machines and non-MSI installs).
+    /// </summary>
+    public static string GitExecutable => ResolvedGitExecutable.Value;
+
+    /// <summary>Resolution behind <see cref="GitExecutable"/>; separate so tests can exercise each branch.</summary>
+    internal static string ResolveGitExecutable(string? baseDirectory = null)
+    {
+        var overridePath = Environment.GetEnvironmentVariable("OBSYNC_GIT");
+        if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath))
+        {
+            return overridePath;
+        }
+
+        var bundled = Path.Combine(baseDirectory ?? AppContext.BaseDirectory, "tools", "git", "cmd", "git.exe");
+        return File.Exists(bundled) ? bundled : "git";
+    }
 
     public async Task<GitCommandResult> RunAsync(
         string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = "git",
+            FileName = GitExecutable,
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -53,7 +76,8 @@ public sealed class GitCommandRunner : IGitCommandRunner
 
         if (!process.Start())
         {
-            throw new InvalidOperationException("Failed to start the git process. Is git installed and on PATH?");
+            throw new InvalidOperationException(
+                $"Failed to start the git process ({GitExecutable}). Is git installed and on PATH?");
         }
 
         process.BeginOutputReadLine();

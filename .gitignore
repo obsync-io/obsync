@@ -5,9 +5,10 @@
 artifacts/
 publish/
 
-# Installer build outputs (WiX)
+# Installer build outputs (WiX) and downloaded bundle cache (MinGit)
 *.msi
 *.wixpdb
+packaging/cache/
 
 # Visual Studio / Rider / VS Code
 .vs/

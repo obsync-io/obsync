@@ -1,20 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Obsync MSI installer (per-machine, x64, self-contained — no .NET runtime prerequisite).
+  Obsync MSI installer (per-machine, x64, self-contained — no .NET runtime or git prerequisite).
 
-  Installs the desktop app, the CLI (obsync.exe, added to PATH), and the background Windows service
-  ("Obsync"). The service is registered manual-start; its logon account is set from the
-  SERVICE_ACCOUNT / SERVICE_PASSWORD properties. Because Obsync stores secrets in the per-user Windows
-  Credential Manager and data under %LOCALAPPDATA%, the service must run under the SAME account that
-  runs the desktop app — pass that account for scheduled runs to work:
+  Installs the desktop app, the CLI (obsync.exe, added to PATH), a bundled MinGit under tools\git\
+  (harvested from the staging folder), and the background Windows service ("Obsync"). The service is
+  registered manual-start; its logon account is set from the SERVICE_ACCOUNT / SERVICE_PASSWORD
+  properties. Because Obsync stores secrets in the per-user Windows Credential Manager and data under
+  %LOCALAPPDATA%, the service must run under the SAME account that runs the desktop app — pass that
+  account for scheduled runs to work:
 
     msiexec /i Obsync-0.1.0-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
 
+  For a group Managed Service Account pass SERVICE_ACCOUNT="DOMAIN\name$" and no SERVICE_PASSWORD:
+  MSI does not distinguish an empty string from null (empty Formatted values are null), so the
+  ServiceInstall hands CreateService a NULL password, which is what gMSA logons require.
+
+  UI: the stock WixUI_InstallDir dialog set is copied below (the documented WiX customization path —
+  the set cannot be extended in place) with three changes: a Service Account dialog between the
+  install-directory and ready pages, an optional "Launch Obsync" checkbox on the finish page, and
+  ARPNOMODIFY left unset so Repair stays available from Add/Remove Programs.
+
   Built by packaging/build-installer.ps1, which supplies the Version/PublishDir/PackagingDir/RepoRoot
-  preprocessor variables.
+  preprocessor variables and stages MinGit into PublishDir\tools\git.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <Package Name="Obsync"
            Manufacturer="Obsync"
@@ -26,16 +36,23 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Obsync is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <!-- Product icon shown in Add/Remove Programs and on the Start Menu shortcut. -->
-    <Icon Id="ObsyncIcon" SourceFile="$(RepoRoot)\src\Obsync.App\Assets\Obsync.ico" />
-    <Property Id="ARPPRODUCTICON" Value="ObsyncIcon" />
+    <!-- Product icon and Add/Remove Programs metadata. The icon Id must end in ".exe" because the
+         advertised Start Menu shortcut's key file is an exe (ICE50). -->
+    <Icon Id="ObsyncApp.exe" SourceFile="$(RepoRoot)\src\Obsync.App\Assets\Obsync.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ObsyncApp.exe" />
     <Property Id="ARPHELPLINK" Value="https://github.com/obsync/obsync" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/obsync/obsync" />
 
     <!-- Windows Service logon account. Default LocalSystem installs a functional service host but it
          cannot reach the interactive user's Credential Manager / data root, so scheduled runs need a
          real account passed here (Secure so it can be set during a silent, elevated install). -->
     <Property Id="SERVICE_ACCOUNT" Value="LocalSystem" Secure="yes" />
     <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <!-- Interactive-only staging for the Service Account dialog. The dialog copies its answers into
+         SERVICE_ACCOUNT / SERVICE_PASSWORD on Next, so silent installs are untouched. -->
+    <Property Id="SERVICE_ACCOUNT_MODE" Value="system" />
+    <Property Id="SERVICE_ACCOUNT_PWD" Hidden="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Obsync" />
@@ -44,26 +61,59 @@
 
     <Feature Id="Main" Title="Obsync" Level="1">
       <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="AppHost" />
       <ComponentRef Id="ServiceHost" />
-      <ComponentRef Id="AppShortcut" />
       <ComponentRef Id="PathEntry" />
     </Feature>
 
-    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UIRef Id="ObsyncUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(PackagingDir)\License.rtf" />
+
+    <!-- Optional "Launch Obsync" checkbox on the finish page (WixShellExec runs impersonated, so the
+         app starts as the installing user, not elevated). -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch Obsync" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#ObsyncAppExe]" />
+    <CustomAction Id="LaunchObsyncApp"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixShellExec"
+                  Execute="immediate"
+                  Return="check"
+                  Impersonate="yes" />
   </Package>
 
   <Fragment>
-    <!-- Harvest the entire self-contained publish folder EXCEPT the service exe, which needs its own
-         component below so the ServiceInstall can attach to it. -->
+    <!-- Harvest the entire self-contained publish folder (including tools\git\, the bundled MinGit)
+         EXCEPT the two exes that need stable File Ids: the service exe carries the ServiceInstall and
+         the app exe is the WixShellExec launch target. -->
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Files Include="$(PublishDir)\**">
+        <Exclude Files="$(PublishDir)\Obsync.App.exe" />
         <Exclude Files="$(PublishDir)\Obsync.Service.exe" />
       </Files>
     </ComponentGroup>
 
+    <!-- The desktop app host, referenced by the finish-page launch action. The Start Menu shortcut
+         is advertised and lives on this file: the ICE38/43/57-clean shape for a per-machine MSI
+         (a separate registry-keypath component would need per-user HKCU data). -->
+    <Component Id="AppHost" Directory="INSTALLFOLDER" Bitness="always64">
+      <File Id="ObsyncAppExe" Source="$(PublishDir)\Obsync.App.exe" KeyPath="yes">
+        <Shortcut Id="ObsyncStartMenu"
+                  Directory="ProgramMenuFolder"
+                  Name="Obsync"
+                  Description="Script and sync SQL Server objects to GitHub"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="ObsyncApp.exe"
+                  Advertise="yes" />
+      </File>
+    </Component>
+
     <!-- The Windows service host. Registered as "Obsync" (matches AddWindowsService and the app's
-         DiagnosticsService check). Manual start so it never auto-runs under the wrong account. -->
+         DiagnosticsService check). Manual start so it never auto-runs under the wrong account.
+         Recovery: restart 60s after each of the first three failures, counter resets daily. The
+         "Obsync" Application-log event source backs the service's Warning+ EventLog sink and is
+         registered here so the service never needs the (admin-only) right to create it. -->
     <Component Id="ServiceHost" Directory="INSTALLFOLDER" Bitness="always64">
       <File Id="ObsyncServiceExe" Source="$(PublishDir)\Obsync.Service.exe" KeyPath="yes" />
       <ServiceInstall Id="ObsyncServiceInstall"
@@ -76,17 +126,15 @@
                       Account="[SERVICE_ACCOUNT]"
                       Password="[SERVICE_PASSWORD]" />
       <ServiceControl Id="ObsyncServiceControl" Name="Obsync" Stop="both" Remove="uninstall" Wait="yes" />
-    </Component>
-
-    <!-- Start Menu shortcut to the desktop app (non-advertised; targets the installed exe). -->
-    <Component Id="AppShortcut" Directory="ProgramMenuFolder" Bitness="always64">
-      <Shortcut Id="ObsyncStartMenu"
-                Name="Obsync"
-                Description="Script and sync SQL Server objects to GitHub"
-                Target="[INSTALLFOLDER]Obsync.App.exe"
-                WorkingDirectory="INSTALLFOLDER"
-                Icon="ObsyncIcon" />
-      <RegistryValue Root="HKLM" Key="Software\Obsync" Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+      <util:ServiceConfig ServiceName="Obsync"
+                          FirstFailureActionType="restart"
+                          SecondFailureActionType="restart"
+                          ThirdFailureActionType="restart"
+                          RestartServiceDelayInSeconds="60"
+                          ResetPeriodInDays="1" />
+      <util:EventSource Log="Application"
+                        Name="Obsync"
+                        EventMessageFile="[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll" />
     </Component>
 
     <!-- Add the install directory to the machine PATH so `obsync` (the CLI) is callable anywhere. -->
@@ -94,5 +142,131 @@
       <Environment Id="ObsyncPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
       <RegistryValue Root="HKLM" Key="Software\Obsync" Name="pathAdded" Type="integer" Value="1" KeyPath="yes" />
     </Component>
+  </Fragment>
+
+  <!--
+    The WixUI_InstallDir dialog set from WiX 5.0.2, copied verbatim (x64 only) and customized — the
+    stock set publishes cannot be overridden in place and it force-sets ARPNOMODIFY. Changes from
+    stock are marked with "Obsync:" comments. Flow (first install):
+
+      Welcome → License (accept required) → Install Dir → Service Account → Verify Ready → Progress
+      → Finish (optional Launch Obsync)
+
+    Maintenance (Repair/Remove) and patch flows are stock and skip the Service Account dialog.
+  -->
+  <Fragment>
+    <UI Id="ObsyncUI_InstallDir">
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
+
+      <DialogRef Id="BrowseDlg" />
+      <DialogRef Id="DiskCostDlg" />
+      <DialogRef Id="ErrorDlg" />
+      <DialogRef Id="FatalError" />
+      <DialogRef Id="FilesInUse" />
+      <DialogRef Id="MsiRMFilesInUse" />
+      <DialogRef Id="PrepareDlg" />
+      <DialogRef Id="ProgressDlg" />
+      <DialogRef Id="ResumeDlg" />
+      <DialogRef Id="UserExit" />
+
+      <Publish Dialog="LicenseAgreementDlg" Control="Print" Event="DoAction" Value="WixUIPrintEula_X64" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath_X64" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+
+      <!-- Obsync: launch the app when the finish-page checkbox is ticked (before EndDialog at 999). -->
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchObsyncApp" Order="998" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="LicenseAgreementDlg" Condition="NOT Installed" />
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="LicenseAgreementDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="LicenseAccepted = &quot;1&quot;" />
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="LicenseAgreementDlg" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath_X64" Order="2" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+      <!-- Obsync: continue to the Service Account dialog instead of straight to Verify Ready. -->
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ObsyncServiceAccountDlg" Order="4" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
+
+      <!-- Obsync: the Service Account dialog sits between Install Dir and Verify Ready. Next copies
+           the staged answers into the real SERVICE_ACCOUNT / SERVICE_PASSWORD properties; "{}"
+           clears a property, and a cleared SERVICE_PASSWORD reaches CreateService as NULL (gMSA). -->
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_ACCOUNT" Value="[SERVICE_ACCOUNT_NAME]" Order="1" Condition="SERVICE_ACCOUNT_MODE = &quot;custom&quot; AND SERVICE_ACCOUNT_NAME" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_PASSWORD" Value="[SERVICE_ACCOUNT_PWD]" Order="2" Condition="SERVICE_ACCOUNT_MODE = &quot;custom&quot; AND SERVICE_ACCOUNT_PWD" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_PASSWORD" Value="{}" Order="3" Condition="SERVICE_ACCOUNT_MODE = &quot;custom&quot; AND NOT SERVICE_ACCOUNT_PWD" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_ACCOUNT" Value="LocalSystem" Order="4" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot;" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_PASSWORD" Value="{}" Order="5" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot;" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Event="SpawnDialog" Value="ObsyncAccountRequiredDlg" Order="6" Condition="SERVICE_ACCOUNT_MODE = &quot;custom&quot; AND NOT SERVICE_ACCOUNT_NAME" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="7" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot; OR SERVICE_ACCOUNT_NAME" />
+
+      <!-- Obsync: Back from Verify Ready returns to the Service Account dialog on first install. -->
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ObsyncServiceAccountDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
+
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
+
+      <!-- Obsync: ARPNOMODIFY deliberately NOT set (stock set forces it to 1) so "Modify" → Repair
+           stays available in Add/Remove Programs. -->
+
+      <!-- Obsync: chooses the account the "Obsync" Windows service logs on with. -->
+      <Dialog Id="ObsyncServiceAccountDlg" Width="370" Height="270" Title="[ProductName] Setup">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="!(loc.WixUINext)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="!(loc.WixUIBack)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose the Windows account that runs scheduled sync jobs." />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Service Account" />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <Control Id="AccountMode" Type="RadioButtonGroup" Property="SERVICE_ACCOUNT_MODE" X="20" Y="55" Width="330" Height="40">
+          <RadioButtonGroup Property="SERVICE_ACCOUNT_MODE">
+            <RadioButton Value="system" X="0" Y="0" Width="320" Height="16" Text="Local S&amp;ystem — configure later" />
+            <RadioButton Value="custom" X="0" Y="20" Width="320" Height="16" Text="T&amp;his account:" />
+          </RadioButtonGroup>
+        </Control>
+
+        <Control Id="AccountLabel" Type="Text" X="36" Y="100" Width="304" Height="10" NoPrefix="no" Text="&amp;Account (DOMAIN\user or DOMAIN\gmsa$):"
+                 EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
+        <Control Id="AccountEdit" Type="Edit" X="36" Y="112" Width="304" Height="16" Property="SERVICE_ACCOUNT_NAME"
+                 EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
+        <Control Id="PasswordLabel" Type="Text" X="36" Y="134" Width="304" Height="10" NoPrefix="no" Text="&amp;Password:"
+                 EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
+        <Control Id="PasswordEdit" Type="Edit" Password="yes" X="36" Y="146" Width="304" Height="16" Property="SERVICE_ACCOUNT_PWD"
+                 EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
+
+        <Control Id="VaultNote" Type="Text" X="20" Y="174" Width="330" Height="52" NoPrefix="yes"
+                 Text="Scheduled jobs read credentials from the account's Windows Credential Manager vault — use the same account that runs the Obsync app. For a group Managed Service Account, enter DOMAIN\name$ and leave the password blank." />
+      </Dialog>
+
+      <!-- Obsync: shown when "This account" is selected but no account was entered. -->
+      <Dialog Id="ObsyncAccountRequiredDlg" Width="260" Height="85" Title="[ProductName] Setup">
+        <Control Id="OK" Type="PushButton" X="100" Y="57" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
+        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="36" NoPrefix="yes"
+                 Text="Enter the account to run the service as (DOMAIN\user or DOMAIN\gmsa$), or choose Local System." />
+      </Dialog>
+    </UI>
+
+    <UIRef Id="WixUI_Common" />
   </Fragment>
 </Wix>

@@ -290,19 +290,25 @@ persisted folder, so they honor only the job's configured patterns.)
 ## Installing
 
 Obsync ships as a per-machine **MSI** that installs the desktop app, the `obsync` CLI (added to
-`PATH`), and the background **Obsync** Windows Service. It is **self-contained** — the target machine
-needs **no .NET runtime**. Build it with:
+`PATH`), the background **Obsync** Windows Service, and a bundled, SHA256-pinned **MinGit**. It is
+**zero-prerequisite** — the target machine needs **no .NET runtime and no git install**. Build it
+with:
 
 ```powershell
-pwsh packaging\build-installer.ps1
-# → artifacts\Obsync-0.1.0-win-x64.msi
+pwsh packaging\build-installer.ps1          # add -SigningThumbprint <tp> to code-sign
+# → artifacts\Obsync-<version>-win-x64.msi
 ```
 
-Install interactively by double-clicking the MSI, or silently:
+Install interactively by double-clicking the MSI (the wizard includes a **Service Account** step),
+or silently:
 
 ```powershell
-msiexec /i Obsync-0.1.0-win-x64.msi /qn
+msiexec /i Obsync-<version>-win-x64.msi /qn /l*v install.log
 ```
+
+See **[packaging/INSTALL.md](packaging/INSTALL.md)** for the full enterprise deployment guide:
+silent-install properties, gMSA setup, repair/uninstall/upgrade, service recovery defaults, and
+Event Viewer / log locations.
 
 ### Service account (required for scheduled runs)
 
@@ -312,12 +318,12 @@ secrets in the per-user Windows Credential Manager and its data under `%LOCALAPP
 above). Supply that account at install time:
 
 ```powershell
-msiexec /i Obsync-0.1.0-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
+msiexec /i Obsync-<version>-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
 ```
 
-The account needs the "Log on as a service" right (the Service Control Manager grants it when the
-account is assigned). The MSI is authored to be code-signed later (`signtool`) once a certificate is
-available.
+For a group Managed Service Account pass `SERVICE_ACCOUNT="DOMAIN\name$"` and no password. The
+account needs the "Log on as a service" right (the Service Control Manager grants it when the
+account is assigned).
 
 ## Building
 

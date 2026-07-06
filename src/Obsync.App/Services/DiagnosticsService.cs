@@ -90,7 +90,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         {
             var result = await _git.RunAsync(ObsyncPaths.Root, ["--version"], cancellationToken).ConfigureAwait(false);
             return result.Success
-                ? new DiagnosticResult("Git CLI", DiagnosticStatus.Pass, result.StandardOutput.Trim())
+                ? new DiagnosticResult("Git CLI", DiagnosticStatus.Pass, $"{result.StandardOutput.Trim()} — {DescribeGitSource()}")
                 : new DiagnosticResult("Git CLI", DiagnosticStatus.Fail, result.StandardError.Trim());
         }
         catch (Exception ex)
@@ -98,6 +98,20 @@ public sealed class DiagnosticsService : IDiagnosticsService
             // The runner throws when git can't be started (not on PATH).
             return new DiagnosticResult("Git CLI", DiagnosticStatus.Fail, $"git is not available: {ex.Message}");
         }
+    }
+
+    /// <summary>Names which git executable Obsync resolved (see <see cref="GitCommandRunner.GitExecutable"/>).</summary>
+    private static string DescribeGitSource()
+    {
+        var executable = GitCommandRunner.GitExecutable;
+        if (executable == "git")
+        {
+            return "from PATH";
+        }
+
+        return executable.StartsWith(AppContext.BaseDirectory, StringComparison.OrdinalIgnoreCase)
+            ? $"bundled ({executable})"
+            : $"OBSYNC_GIT override ({executable})";
     }
 
     private async Task<DiagnosticResult> CheckDiskSpaceAsync(CancellationToken cancellationToken)
