@@ -19,7 +19,7 @@ public sealed class DesignSystemTests
     [
         "AccentBrush", "CardBrush", "BorderBrush", "PanelBrush", "SuccessSoftBrush", "AccentSoftBrush",
         "DiffAddedEmphasisBrush", "DiffDeletedEmphasisBrush",
-        "AppFontFamily", "IconFontFamily", "MonoFontFamily", "IconDiff", "IconCopy",
+        "AppFontFamily", "IconFontFamily", "MonoFontFamily", "IconDiff", "IconCopy", "IconImport", "IconClose",
         "RadiusCard", "RadiusPill", "CardPadding",
         "PageTitle", "SectionTitle", "MetricValue", "Body", "BodyStrong", "Muted", "Caption", "Icon",
         "Card", "Panel", "Divider", "PrimaryButton", "SecondaryButton", "SubtleButton",
@@ -172,7 +172,7 @@ public sealed class DesignSystemTests
         Assert.True(pixelWidth > 0, "The brand icon resource decoded to zero width.");
     }
 
-    private static Application CreateApp()
+    internal static Application CreateApp()
     {
         var app = new Obsync.App.App();
         app.InitializeComponent();

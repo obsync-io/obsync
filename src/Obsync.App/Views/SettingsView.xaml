@@ -96,8 +96,64 @@
                 </StackPanel>
             </Border>
 
+            <!-- Git commits -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="Git commits" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="The author identity stamped on every sync commit — so git blame and the GitHub history show your team instead of a generic tool. Leave blank for the defaults." />
+
+                    <TextBlock Text="COMMITTER NAME" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding CommitterName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <TextBlock Text="COMMITTER EMAIL (OPTIONAL)" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding CommitterEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                    <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                            Command="{Binding SaveCommitterCommand}"
+                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                    <TextBlock Text="{Binding CommitterStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding CommitterStatus, Converter={StaticResource NullToVisibility}}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Run history retention -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="Run history" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="How long completed runs — with their logs and change lists — are kept in the local database. Older runs are removed automatically; what was committed to GitHub is never touched." />
+
+                    <TextBlock Text="KEEP RUN HISTORY FOR" Style="{StaticResource Caption}" />
+                    <ComboBox ItemsSource="{Binding RetentionOptions}" SelectedItem="{Binding SelectedRetention}"
+                              DisplayMemberPath="Label" Margin="0,4,0,16" />
+
+                    <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                            Command="{Binding SaveRetentionCommand}"
+                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                    <TextBlock Text="{Binding RetentionStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding RetentionStatus, Converter={StaticResource NullToVisibility}}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Notifications -->
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="Notifications" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                               Text="Obsync can tell you, inside the app, when something needs attention." />
+
+                    <CheckBox Content="Notify me when a run fails or completes with warnings"
+                              IsChecked="{Binding NotifyRunFailures}" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0"
+                               Text="Scheduled runs that fail while the app is closed are summarized the next time you open Obsync." />
+                    <TextBlock Text="{Binding NotifyStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                               Visibility="{Binding NotifyStatus, Converter={StaticResource NullToVisibility}}" />
+                </StackPanel>
+            </Border>
+
             <!-- Data locations -->
-            <Border Style="{StaticResource Card}">
+            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
                 <StackPanel>
                     <TextBlock Text="Data locations" Style="{StaticResource SectionTitle}" Margin="0,0,0,16" />
 
@@ -124,8 +180,28 @@
                             <ColumnDefinition Width="170" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Git workspaces" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <TextBlock Grid.Column="1" Text="{Binding WorkspacesRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                        <TextBlock Grid.Column="0" Text="Git workspaces" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,7,0,0" />
+                        <StackPanel Grid.Column="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Text="{Binding WorkspacesRootText, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Grid.Column="2" Content="Browse…" Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding BrowseWorkspacesRootCommand}" />
+                                <Button Grid.Column="4" Content="Save" Style="{StaticResource PrimaryButton}"
+                                        Command="{Binding SaveWorkspacesRootCommand}"
+                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                            </Grid>
+                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                       Text="Where repository clones live. Changing it takes effect on each job's next run; clear the field and save to go back to the default." />
+                            <TextBlock Text="{Binding WorkspacesStatus}" Style="{StaticResource Muted}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                       Visibility="{Binding WorkspacesStatus, Converter={StaticResource NullToVisibility}}" />
+                        </StackPanel>
                     </Grid>
 
                     <Grid>

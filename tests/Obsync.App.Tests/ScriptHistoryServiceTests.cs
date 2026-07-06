@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Obsync.App.Services;
+using Obsync.Data.Repositories;
 using Obsync.Git;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -28,6 +30,14 @@ public sealed class ScriptHistoryServiceTests : IDisposable
         Directory.CreateDirectory(_workspacesRoot);
     }
 
+    // No workspaces-root override configured — the service falls back to the default passed in.
+    private static IAppSettingsRepository NoOverrideSettings()
+    {
+        var settings = Substitute.For<IAppSettingsRepository>();
+        settings.GetWorkspacesRootOverrideAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
+        return settings;
+    }
+
     [Fact]
     public async Task Modified_ReturnsThePreviousAndNewContent()
     {
@@ -37,7 +47,7 @@ public sealed class ScriptHistoryServiceTests : IDisposable
         }
 
         var (repository, _, secondSha) = await InitWorkspaceAsync();
-        var service = new ScriptHistoryService(_runner, _workspacesRoot);
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
 
         var result = await service.GetVersionsAsync(repository, secondSha, RelativePath, ChangeType.Modified);
 
@@ -55,7 +65,7 @@ public sealed class ScriptHistoryServiceTests : IDisposable
         }
 
         var (repository, firstSha, _) = await InitWorkspaceAsync();
-        var service = new ScriptHistoryService(_runner, _workspacesRoot);
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
 
         var result = await service.GetVersionsAsync(repository, firstSha, RelativePath, ChangeType.Added);
 
@@ -73,7 +83,7 @@ public sealed class ScriptHistoryServiceTests : IDisposable
         }
 
         var (repository, firstSha, _) = await InitWorkspaceAsync();
-        var service = new ScriptHistoryService(_runner, _workspacesRoot);
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
 
         // The first commit has no parent; a Modified lookup must not fail, just report no old content.
         var result = await service.GetVersionsAsync(repository, firstSha, RelativePath, ChangeType.Modified);
@@ -92,7 +102,7 @@ public sealed class ScriptHistoryServiceTests : IDisposable
         }
 
         var (repository, _, _) = await InitWorkspaceAsync();
-        var service = new ScriptHistoryService(_runner, _workspacesRoot);
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
 
         var result = await service.GetVersionsAsync(
             repository, new string('0', 40), RelativePath, ChangeType.Modified);
@@ -105,7 +115,7 @@ public sealed class ScriptHistoryServiceTests : IDisposable
     public async Task MissingWorkspace_ReportsUnavailableWithAReason()
     {
         var neverSynced = new GitRepositoryProfile { Name = "r", Owner = "o", RepositoryName = "r" };
-        var service = new ScriptHistoryService(_runner, _workspacesRoot);
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
 
         var result = await service.GetVersionsAsync(
             neverSynced, new string('a', 40), RelativePath, ChangeType.Modified);

@@ -26,6 +26,18 @@ public interface IRunRepository
 
     Task AddChangesAsync(Guid runId, IReadOnlyCollection<ObjectChange> changes, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes runs (with their logs and changes, via cascade) that started before the cutoff.
+    /// In-flight runs are never touched. Returns how many runs were removed.
+    /// </summary>
+    Task<int> DeleteRunsBeforeAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// How many non-manual (scheduled/startup) runs failed or ended with warnings since a timestamp —
+    /// drives the "runs failed while you were away" notification on app startup.
+    /// </summary>
+    Task<int> CountUnattendedFailuresSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IRunRepository" />
@@ -95,6 +107,33 @@ public sealed class RunRepository : IRunRepository
                 completed = completedAt,
                 reason,
                 stale = staleBefore,
+            },
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> DeleteRunsBeforeAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteAsync(new CommandDefinition(
+            "DELETE FROM runs WHERE started_at < $cutoff AND status <> $running;",
+            new { cutoff, running = (int)RunStatus.Running },
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<int> CountUnattendedFailuresSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            """
+            SELECT COUNT(*) FROM runs
+            WHERE started_at > $since AND "trigger" <> $manual AND status IN ($failed, $warning);
+            """,
+            new
+            {
+                since,
+                manual = (int)RunTrigger.Manual,
+                failed = (int)RunStatus.Failed,
+                warning = (int)RunStatus.Warning,
             },
             cancellationToken: cancellationToken)).ConfigureAwait(false);
     }

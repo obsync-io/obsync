@@ -14,13 +14,21 @@
                 <TextBlock Text="Sync Jobs" Style="{StaticResource PageTitle}" />
                 <TextBlock Text="Create, view, and run sync jobs" Style="{StaticResource Muted}" Margin="0,4,0,0" />
             </StackPanel>
-            <Button Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" VerticalAlignment="Center"
-                    Click="OnCreateJob">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconAdd}" Foreground="White" FontSize="14" />
-                    <TextBlock Text="Create Sync Job" Margin="8,0,0,0" VerticalAlignment="Center" />
-                </StackPanel>
-            </Button>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Button Style="{StaticResource SecondaryButton}" Command="{Binding ImportJobCommand}"
+                        Margin="0,0,10,0" ToolTip="Import a job configuration exported from another machine">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconImport}" FontSize="14" />
+                        <TextBlock Text="Import" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button Style="{StaticResource PrimaryButton}" Click="OnCreateJob">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconAdd}" Foreground="White" FontSize="14" />
+                        <TextBlock Text="Create Sync Job" Margin="8,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
         </Grid>
 
         <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0"

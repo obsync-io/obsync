@@ -44,6 +44,9 @@ public interface IJobRunCoordinator
 
     /// <summary>Raised (on the UI thread) when a run starts or finishes, so lists can refresh.</summary>
     event EventHandler<Guid>? RunStateChanged;
+
+    /// <summary>Raised (on the UI thread) with the completed run — powers failure notifications.</summary>
+    event EventHandler<SyncRun>? RunCompleted;
 }
 
 /// <inheritdoc cref="IJobRunCoordinator" />
@@ -64,6 +67,7 @@ public sealed class JobRunCoordinator : IJobRunCoordinator
     }
 
     public event EventHandler<Guid>? RunStateChanged;
+    public event EventHandler<SyncRun>? RunCompleted;
 
     public JobRunState GetState(Guid jobId) => _states.GetOrAdd(jobId, id => new JobRunState(id));
 
@@ -115,8 +119,16 @@ public sealed class JobRunCoordinator : IJobRunCoordinator
             }
 
             var progress = new Progress<SyncProgress>(p => OnUi(() => state.Message = p.Message));
-            return await Task.Run(() => _engine.RunJobAsync(jobId, trigger, progress, cancellationToken), cancellationToken)
+            var run = await Task.Run(() => _engine.RunJobAsync(jobId, trigger, progress, cancellationToken), cancellationToken)
                 .ConfigureAwait(false);
+
+            var completed = RunCompleted;
+            if (completed is not null)
+            {
+                OnUi(() => completed(this, run));
+            }
+
+            return run;
         }
         finally
         {

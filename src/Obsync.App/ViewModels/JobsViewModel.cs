@@ -18,6 +18,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     private readonly IJobRunCoordinator _coordinator;
     private readonly IAuditWriter _audit;
     private readonly IAppSettingsRepository _settings;
+    private readonly IJobConfigPorter _porter;
 
     private bool _reloading;
 
@@ -31,7 +32,8 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         IRepositoryProfileRepository repositories,
         IJobRunCoordinator coordinator,
         IAuditWriter audit,
-        IAppSettingsRepository settings)
+        IAppSettingsRepository settings,
+        IJobConfigPorter porter)
     {
         _jobs = jobs;
         _connections = connections;
@@ -39,7 +41,41 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         _coordinator = coordinator;
         _audit = audit;
         _settings = settings;
+        _porter = porter;
         _coordinator.RunStateChanged += OnRunStateChanged;
+    }
+
+    /// <summary>Imports a job configuration exported from another machine (or a backup).</summary>
+    [RelayCommand]
+    private async Task ImportJobAsync()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Import a job configuration",
+            Filter = "Obsync job export (*.obsync-job.json)|*.obsync-job.json|JSON files (*.json)|*.json|All files (*.*)|*.*",
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = await System.IO.File.ReadAllTextAsync(dialog.FileName);
+            var result = await _porter.ImportAsync(json);
+            if (!result.IsSuccess)
+            {
+                StatusMessage = result.Error;
+                return;
+            }
+
+            StatusMessage = $"Imported \"{result.Job!.Name}\" — review its configuration, then run or enable it.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Import failed — {ex.Message}";
+        }
     }
 
     private async void OnRunStateChanged(object? sender, Guid jobId)

@@ -11,12 +11,16 @@ using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
 
+/// <summary>One choice in the run-history retention dropdown.</summary>
+public sealed record RetentionOption(string Label, int Days);
+
 /// <summary>
 /// Application settings, local data locations, the least-privilege SQL permission tool, diagnostics +
 /// the support bundle, the proxy configuration, and the audit trail.
 /// </summary>
 public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewModel
 {
+    private bool _suppressAutoSave;
     private readonly IAuditWriter _audit;
     private readonly IDiagnosticsService _diagnostics;
     private readonly ISupportBundleWriter _bundle;
@@ -42,7 +46,6 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
 
     public string DataRoot => ObsyncPaths.Root;
     public string DatabasePath => ObsyncPaths.DatabasePath;
-    public string WorkspacesRoot => ObsyncPaths.WorkspacesRoot;
     public string LogsRoot => ObsyncPaths.LogsRoot;
     public string Version => $"Obsync {VersionInfo.Of(typeof(App).Assembly)}";
     public string EngineVersion => $"Engine {VersionInfo.Of(typeof(Engine.ISyncEngine).Assembly)}";
@@ -154,6 +157,36 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
 
     public async Task LoadAsync()
     {
+        _suppressAutoSave = true;
+        try
+        {
+            var retentionDays = await _settings.GetRunRetentionDaysAsync();
+            var retention = RetentionOptions.FirstOrDefault(o => o.Days == retentionDays);
+            if (retention is null)
+            {
+                // A value set elsewhere (or by an older/newer version) still shows faithfully.
+                retention = new RetentionOption($"{retentionDays} days", retentionDays);
+                RetentionOptions.Add(retention);
+            }
+
+            SelectedRetention = retention;
+
+            var committer = await _settings.GetCommitterAsync();
+            CommitterName = committer.Name;
+            CommitterEmail = committer.Email ?? string.Empty;
+
+            var workspacesOverride = await _settings.GetWorkspacesRootOverrideAsync();
+            WorkspacesRootText = string.IsNullOrWhiteSpace(workspacesOverride)
+                ? ObsyncPaths.WorkspacesRoot
+                : workspacesOverride;
+
+            NotifyRunFailures = await _settings.GetNotifyRunFailuresAsync();
+        }
+        finally
+        {
+            _suppressAutoSave = false;
+        }
+
         ProductionTagsText = string.Join(", ", await _settings.GetProductionTagsAsync());
 
         var proxy = await _settings.GetProxyAsync();
@@ -205,6 +238,187 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    // --- Run history retention ------------------------------------------------------------------
+
+    public ObservableCollection<RetentionOption> RetentionOptions { get; } =
+    [
+        new("Keep forever", 0),
+        new("30 days", 30),
+        new("90 days", 90),
+        new("180 days", 180),
+        new("1 year", 365),
+    ];
+
+    [ObservableProperty] private RetentionOption? _selectedRetention;
+    [ObservableProperty] private string? _retentionStatus;
+
+    [RelayCommand]
+    private async Task SaveRetentionAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var days = SelectedRetention?.Days ?? 0;
+            await _settings.SetRunRetentionDaysAsync(days);
+            RetentionStatus = days == 0
+                ? "Saved — run history is kept forever."
+                : $"Saved — runs older than {days} days are removed automatically (checked daily and at startup).";
+        }
+        catch (Exception ex)
+        {
+            RetentionStatus = $"Could not save — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    // --- Git committer identity -----------------------------------------------------------------
+
+    [ObservableProperty] private string _committerName = string.Empty;
+    [ObservableProperty] private string _committerEmail = string.Empty;
+    [ObservableProperty] private string? _committerStatus;
+
+    [RelayCommand]
+    private async Task SaveCommitterAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        var email = CommitterEmail.Trim();
+        if (email.Length > 0 && !email.Contains('@'))
+        {
+            CommitterStatus = "Enter a valid email address (or leave it blank for the default).";
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var name = CommitterName.Trim();
+            var committer = new CommitterIdentity(
+                name.Length == 0 ? CommitterIdentity.Default.Name : name,
+                email.Length == 0 ? null : email);
+            await _settings.SetCommitterAsync(committer);
+            CommitterName = committer.Name;
+            CommitterStatus = $"Saved — sync commits will be authored as {committer.Name}" +
+                (committer.Email is null ? "." : $" <{committer.Email}>.");
+        }
+        catch (Exception ex)
+        {
+            CommitterStatus = $"Could not save — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    // --- Git workspaces location ----------------------------------------------------------------
+
+    [ObservableProperty] private string _workspacesRootText = ObsyncPaths.WorkspacesRoot;
+    [ObservableProperty] private string? _workspacesStatus;
+
+    [RelayCommand]
+    private void BrowseWorkspacesRoot()
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "Choose the git workspaces folder" };
+        if (dialog.ShowDialog() == true)
+        {
+            WorkspacesRootText = dialog.FolderName;
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveWorkspacesRootAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var path = WorkspacesRootText.Trim();
+            if (path.Length == 0 || string.Equals(path, ObsyncPaths.WorkspacesRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                await _settings.SetWorkspacesRootOverrideAsync(null);
+                WorkspacesRootText = ObsyncPaths.WorkspacesRoot;
+                WorkspacesStatus = "Saved — using the default location.";
+                return;
+            }
+
+            if (!System.IO.Path.IsPathRooted(path))
+            {
+                WorkspacesStatus = @"Enter a full path (for example D:\ObsyncWorkspaces).";
+                return;
+            }
+
+            try
+            {
+                System.IO.Directory.CreateDirectory(path);
+            }
+            catch (Exception ex)
+            {
+                WorkspacesStatus = $"Cannot use this folder — {ex.Message}";
+                return;
+            }
+
+            await _settings.SetWorkspacesRootOverrideAsync(path);
+            WorkspacesRootText = path;
+            WorkspacesStatus =
+                "Saved — repositories clone here from their next run. Files at the old location are not moved or deleted.";
+        }
+        catch (Exception ex)
+        {
+            WorkspacesStatus = $"Could not save — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    // --- Notifications ---------------------------------------------------------------------------
+
+    [ObservableProperty] private bool _notifyRunFailures = true;
+    [ObservableProperty] private string? _notifyStatus;
+
+    // Saves immediately on toggle (no Save button for a single checkbox).
+    partial void OnNotifyRunFailuresChanged(bool value)
+    {
+        if (_suppressAutoSave)
+        {
+            return;
+        }
+
+        _ = PersistNotifyAsync(value);
+    }
+
+    private async Task PersistNotifyAsync(bool value)
+    {
+        try
+        {
+            await _settings.SetNotifyRunFailuresAsync(value);
+            NotifyStatus = value
+                ? "On — you'll see an in-app notification when a run fails or ends with warnings."
+                : "Off — failed runs are still recorded in History, but you won't be notified.";
+        }
+        catch (Exception ex)
+        {
+            NotifyStatus = $"Could not save — {ex.Message}";
         }
     }
 

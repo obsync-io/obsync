@@ -35,6 +35,8 @@ try
     builder.Services.AddHostedService<JobSchedulingBootstrapper>();
     // Keeps the live schedule in sync with the database so app changes apply without a restart.
     builder.Services.AddHostedService<JobReconciliationService>();
+    // Prunes run history per the retention setting (startup + daily).
+    builder.Services.AddHostedService<RunRetentionService>();
 
     await builder.Build().RunAsync();
 }

@@ -25,6 +25,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IShellNavigator _navigator;
     private readonly IRunReportWriter _reportWriter;
     private readonly IAppSettingsRepository _settings;
+    private readonly IJobConfigPorter _porter;
 
     private readonly List<SyncRunLog> _allLogs = [];
     private GitRepositoryProfile? _repository;
@@ -86,7 +87,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IJobRunCoordinator coordinator,
         IShellNavigator navigator,
         IRunReportWriter reportWriter,
-        IAppSettingsRepository settings)
+        IAppSettingsRepository settings,
+        IJobConfigPorter porter)
     {
         _jobs = jobs;
         _runs = runs;
@@ -96,6 +98,41 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _navigator = navigator;
         _reportWriter = reportWriter;
         _settings = settings;
+        _porter = porter;
+    }
+
+    /// <summary>Exports this job's configuration as portable, secret-free JSON.</summary>
+    [RelayCommand]
+    private async Task ExportConfigAsync()
+    {
+        if (Job is null)
+        {
+            return;
+        }
+
+        var invalid = System.IO.Path.GetInvalidFileNameChars();
+        var stem = new string([.. Job.Name.Select(ch => invalid.Contains(ch) ? '_' : ch)]);
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"{stem}.obsync-job.json",
+            Filter = "Obsync job export (*.obsync-job.json)|*.obsync-job.json|All files (*.*)|*.*",
+            DefaultExt = ".json",
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = await _porter.ExportAsync(Job);
+            await System.IO.File.WriteAllTextAsync(dialog.FileName, json);
+            StatusMessage = $"Configuration exported to {dialog.FileName}. Passwords and tokens are never included.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Export failed — {ex.Message}";
+        }
     }
 
     /// <summary>The section the user drilled in from (Dashboard vs Jobs); "Back" returns here.</summary>

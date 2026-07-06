@@ -33,6 +33,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
+    private readonly IAppSettingsRepository _appSettings;
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
     private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
@@ -54,6 +55,7 @@ public sealed class SyncEngine : ISyncEngine
         IRepositoryProfileRepository repositories,
         IRunRepository runs,
         IObjectStateRepository objectStates,
+        IAppSettingsRepository appSettings,
         IEnumerable<IObjectScriptProvider> scriptProviders,
         ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
@@ -74,6 +76,7 @@ public sealed class SyncEngine : ISyncEngine
         _repositories = repositories;
         _runs = runs;
         _objectStates = objectStates;
+        _appSettings = appSettings;
         _scriptProviders = [.. scriptProviders];
         _probe = probe;
         _artifactReader = artifactReader;
@@ -267,8 +270,12 @@ public sealed class SyncEngine : ISyncEngine
         // Pull request mode commits to a fresh per-run head branch cut from the base; direct mode
         // commits straight to the base branch.
         var headBranch = isPullRequest ? HeadBranchName(context.Job.Name, run.RunKey) : baseBranch;
-        var localPath = Path.Combine(_options.WorkspacesRoot, context.Repository!.Id.ToString("N"));
+        var localPath = Path.Combine(
+            await ResolveWorkspacesRootAsync(cancellationToken).ConfigureAwait(false),
+            context.Repository!.Id.ToString("N"));
         var proxyUrl = (await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false))?.GitProxyUrl;
+        // Committer identity is configurable in Settings so git blame reflects the owning team.
+        var committer = await _appSettings.GetCommitterAsync(cancellationToken).ConfigureAwait(false);
         var gitContext = new GitWorkspaceContext
         {
             RemoteUrl = context.Repository.EffectiveRemoteUrl,
@@ -276,8 +283,8 @@ public sealed class SyncEngine : ISyncEngine
             BaseBranch = isPullRequest ? baseBranch : null,
             LocalPath = localPath,
             AuthorizationHeader = context.GitToken is null ? null : GitHubService.BuildAuthorizationHeader(context.GitToken),
-            CommitterName = "Obsync",
-            CommitterEmail = _options.CommitterEmail,
+            CommitterName = string.IsNullOrWhiteSpace(committer.Name) ? CommitterIdentity.Default.Name : committer.Name.Trim(),
+            CommitterEmail = string.IsNullOrWhiteSpace(committer.Email) ? _options.CommitterEmail : committer.Email!.Trim(),
             NetworkRetryCount = context.Job.Advanced.GitRetryCount,
             ProxyUrl = proxyUrl,
         };
@@ -300,6 +307,19 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         await FinalizeAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Where repository clones live: the Settings override when set, else the built-in default.
+    /// Resolved per run so a settings change applies without restarting the app or the service
+    /// (changed roots make the next run clone fresh; the old location is left untouched).
+    /// </summary>
+    private async Task<string> ResolveWorkspacesRootAsync(CancellationToken cancellationToken)
+    {
+        var overridePath = await _appSettings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
+        var root = string.IsNullOrWhiteSpace(overridePath) ? _options.WorkspacesRoot : overridePath.Trim();
+        Directory.CreateDirectory(root);
+        return root;
     }
 
     /// <summary>

@@ -37,8 +37,13 @@ public static class AppServices
         services.AddSingleton<IRunReportWriter, RunReportWriter>();
 
         // Reads before/after script content for the diff viewer from the local git workspaces.
-        services.AddSingleton<IScriptHistoryService>(sp =>
-            new ScriptHistoryService(sp.GetRequiredService<IGitCommandRunner>(), workspacesRoot));
+        services.AddSingleton<IScriptHistoryService>(sp => new ScriptHistoryService(
+            sp.GetRequiredService<IGitCommandRunner>(),
+            sp.GetRequiredService<IAppSettingsRepository>(),
+            workspacesRoot));
+
+        // Secret-free job configuration export/import (profiles referenced by name, never embedded).
+        services.AddSingleton<IJobConfigPorter, JobConfigPorter>();
 
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());

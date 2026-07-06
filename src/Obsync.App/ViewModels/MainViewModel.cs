@@ -1,12 +1,23 @@
+using System.Collections.ObjectModel;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.DependencyInjection;
+using Obsync.App.Services;
+using Obsync.Data.Repositories;
+using Obsync.Shared;
+using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
 
-/// <summary>The shell view model: drives left-rail navigation between the section view models.</summary>
+/// <summary>
+/// The shell view model: drives left-rail navigation between the section view models and hosts
+/// the in-app notification toasts.
+/// </summary>
 public sealed partial class MainViewModel : ObservableObject, IShellNavigator
 {
+    private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(12);
+
     private readonly IServiceProvider _services;
 
     [ObservableProperty]
@@ -23,8 +34,124 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
     // construction (see InitializeAsync) for the same reason.
     public MainViewModel(IServiceProvider services) => _services = services;
 
+    /// <summary>In-app notifications, newest last, rendered bottom-right by the shell window.</summary>
+    public ObservableCollection<ToastItem> Toasts { get; } = [];
+
     /// <summary>Shows the initial section. Called once after the shell is constructed and shown.</summary>
-    public Task InitializeAsync() => NavigateAsync("Dashboard");
+    public async Task InitializeAsync()
+    {
+        await NavigateAsync("Dashboard");
+
+        // Resolved lazily (not ctor-injected) to keep this shell view model cycle-free — see the
+        // note on the constructor.
+        _services.GetRequiredService<IJobRunCoordinator>().RunCompleted += OnRunCompleted;
+        await ShowMissedFailuresAsync();
+    }
+
+    // A run the app itself executed just finished: surface failures/warnings as a toast.
+    private async void OnRunCompleted(object? sender, SyncRun run)
+    {
+        try
+        {
+            if (run.Status is not (RunStatus.Failed or RunStatus.Warning)
+                || !await _services.GetRequiredService<IAppSettingsRepository>().GetNotifyRunFailuresAsync())
+            {
+                return;
+            }
+
+            ShowToast(new ToastItem
+            {
+                Title = run.Status == RunStatus.Failed
+                    ? $"Run failed — {run.JobName}"
+                    : $"Run finished with warnings — {run.JobName}",
+                Message = FirstLine(run.ErrorMessage)
+                    ?? (run.Status == RunStatus.Failed
+                        ? "Open the job for the full error."
+                        : "Some items were skipped — open the job for details."),
+                IsError = run.Status == RunStatus.Failed,
+                JobId = run.JobId,
+            });
+        }
+        catch (Exception)
+        {
+            // A notification must never take the shell down.
+        }
+    }
+
+    // Scheduled (service) runs fail without the app open; summarize anything missed since the
+    // last session so unattended failures can't go unnoticed.
+    private async Task ShowMissedFailuresAsync()
+    {
+        try
+        {
+            var settings = _services.GetRequiredService<IAppSettingsRepository>();
+            var now = DateTimeOffset.UtcNow;
+            if (await settings.GetLastFailureCheckAsync() is { } since
+                && await settings.GetNotifyRunFailuresAsync())
+            {
+                var failures = await _services.GetRequiredService<IRunRepository>()
+                    .CountUnattendedFailuresSinceAsync(since);
+                if (failures > 0)
+                {
+                    ShowToast(new ToastItem
+                    {
+                        Title = failures == 1
+                            ? "A scheduled run failed while you were away"
+                            : $"{failures} scheduled runs failed while you were away",
+                        Message = "Open History to see which runs need attention.",
+                        IsError = true,
+                    });
+                }
+            }
+
+            await settings.SetLastFailureCheckAsync(now);
+        }
+        catch (Exception)
+        {
+            // Never block startup over the notification check.
+        }
+    }
+
+    private void ShowToast(ToastItem toast)
+    {
+        Toasts.Add(toast);
+        var timer = new DispatcherTimer { Interval = ToastLifetime };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            Toasts.Remove(toast);
+        };
+        timer.Start();
+    }
+
+    [RelayCommand]
+    private void DismissToast(ToastItem toast) => Toasts.Remove(toast);
+
+    [RelayCommand]
+    private async Task OpenToastAsync(ToastItem toast)
+    {
+        Toasts.Remove(toast);
+        if (toast.JobId is { } jobId)
+        {
+            await ShowJobDetailAsync(jobId, CurrentSection);
+        }
+        else
+        {
+            await NavigateAsync("History");
+        }
+    }
+
+    private static string? FirstLine(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var line = text.AsSpan().Trim();
+        var newline = line.IndexOfAny('\r', '\n');
+        return (newline < 0 ? line : line[..newline]).ToString();
+    }
 
     [RelayCommand]
     private async Task NavigateAsync(string section)

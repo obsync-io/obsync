@@ -139,6 +139,76 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
         Assert.Equal("dbo.usp_GetCustomer", changes[0].QualifiedName);
     }
 
+    [Fact]
+    public async Task RunRetention_DeletesOldRunsWithTheirChildren_AndKeepsRecentOnes()
+    {
+        var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };
+        await _provider.GetRequiredService<IConnectionProfileRepository>().UpsertAsync(connection);
+        var job = new SyncJob { Name = "j", ConnectionProfileId = connection.Id, CommitMode = CommitMode.ExportOnly, ExportPath = "x" };
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(job);
+
+        var runs = _provider.GetRequiredService<IRunRepository>();
+        var now = DateTimeOffset.UtcNow;
+
+        var oldRun = new SyncRun
+        {
+            RunKey = "old", JobId = job.Id, JobName = "j", Status = RunStatus.Succeeded,
+            ServerName = "s", Databases = "d", StartedAt = now.AddDays(-100),
+        };
+        await runs.InsertAsync(oldRun);
+        await runs.AddLogsAsync([new SyncRunLog { RunId = oldRun.Id, Timestamp = now.AddDays(-100), Message = "m" }]);
+
+        var recentRun = new SyncRun
+        {
+            RunKey = "new", JobId = job.Id, JobName = "j", Status = RunStatus.Failed,
+            Trigger = RunTrigger.Scheduled,
+            ServerName = "s", Databases = "d", StartedAt = now.AddDays(-1),
+        };
+        await runs.InsertAsync(recentRun);
+
+        var deleted = await runs.DeleteRunsBeforeAsync(now.AddDays(-90));
+
+        Assert.Equal(1, deleted);
+        Assert.Null(await runs.GetAsync(oldRun.Id));
+        Assert.Empty(await runs.GetLogsAsync(oldRun.Id));      // cascade removed the children
+        Assert.NotNull(await runs.GetAsync(recentRun.Id));
+
+        // The startup notification counts unattended failures only (the recent run is a
+        // scheduled failure; a manual failure must not count).
+        Assert.Equal(1, await runs.CountUnattendedFailuresSinceAsync(now.AddDays(-2)));
+        Assert.Equal(0, await runs.CountUnattendedFailuresSinceAsync(now));
+    }
+
+    [Fact]
+    public async Task AppSettings_DailyDriverOptions_RoundTrip()
+    {
+        var settings = _provider.GetRequiredService<IAppSettingsRepository>();
+
+        // Defaults first.
+        Assert.Equal(0, await settings.GetRunRetentionDaysAsync());
+        Assert.Equal(CommitterIdentity.Default, await settings.GetCommitterAsync());
+        Assert.True(string.IsNullOrEmpty(await settings.GetWorkspacesRootOverrideAsync()));
+        Assert.True(await settings.GetNotifyRunFailuresAsync());
+        Assert.Null(await settings.GetLastFailureCheckAsync());
+
+        await settings.SetRunRetentionDaysAsync(90);
+        await settings.SetCommitterAsync(new CommitterIdentity("DBA Team", "dba@corp.com"));
+        await settings.SetWorkspacesRootOverrideAsync(@"D:\ObsyncWorkspaces");
+        await settings.SetNotifyRunFailuresAsync(false);
+        var checkedAt = new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero);
+        await settings.SetLastFailureCheckAsync(checkedAt);
+
+        Assert.Equal(90, await settings.GetRunRetentionDaysAsync());
+        Assert.Equal(new CommitterIdentity("DBA Team", "dba@corp.com"), await settings.GetCommitterAsync());
+        Assert.Equal(@"D:\ObsyncWorkspaces", await settings.GetWorkspacesRootOverrideAsync());
+        Assert.False(await settings.GetNotifyRunFailuresAsync());
+        Assert.Equal(checkedAt, await settings.GetLastFailureCheckAsync());
+
+        // Clearing the workspaces override returns to the default.
+        await settings.SetWorkspacesRootOverrideAsync(null);
+        Assert.True(string.IsNullOrEmpty(await settings.GetWorkspacesRootOverrideAsync()));
+    }
+
     public void Dispose()
     {
         _provider?.Dispose();

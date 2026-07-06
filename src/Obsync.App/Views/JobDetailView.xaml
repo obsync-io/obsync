@@ -316,13 +316,25 @@
                             <TextBlock Style="{StaticResource Body}" TextWrapping="Wrap"
                                        Text="Edit this job's source connection, selected objects, destination repository, branch, folder, and schedule in the job wizard. Changes take effect on the next run." />
                         </Border>
-                        <Button Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="OnEdit">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconEdit}"
-                                           FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                <TextBlock Text="Edit configuration" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Style="{StaticResource PrimaryButton}" Click="OnEdit" Margin="0,0,10,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconEdit}"
+                                               FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="Edit configuration" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                            <Button Style="{StaticResource SecondaryButton}" Command="{Binding ExportConfigCommand}"
+                                    ToolTip="Save this job's configuration as a file you can import on another machine. Passwords and tokens are never included.">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconExport}"
+                                               FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="Export configuration" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Text="Exports reference the server and repository by name — the importing machine needs those profiles (and their credentials) set up first." />
                     </StackPanel>
                 </Border>
             </TabItem>

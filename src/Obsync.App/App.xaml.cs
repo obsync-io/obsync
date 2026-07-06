@@ -46,8 +46,13 @@ public partial class App : Application
             // Reconcile orphaned runs: any run still "Running" after a restart never completed
             // (runs execute in-process), so clear the zombie rows the History would otherwise show.
             var now = DateTimeOffset.UtcNow;
-            await _host.Services.GetRequiredService<IRunRepository>()
-                .FailStaleRunningAsync(now.AddMinutes(-5), now, "Run interrupted — the app closed before it finished.");
+            var runs = _host.Services.GetRequiredService<IRunRepository>();
+            await runs.FailStaleRunningAsync(now.AddMinutes(-5), now, "Run interrupted — the app closed before it finished.");
+
+            // Apply the run-history retention setting (0 = keep forever). The service also prunes
+            // daily; doing it here keeps app-only installs tidy too.
+            await RunRetention.CleanupAsync(
+                _host.Services.GetRequiredService<IAppSettingsRepository>(), runs, now);
 
             var window = _host.Services.GetRequiredService<MainWindow>();
             mainViewModel = _host.Services.GetRequiredService<MainViewModel>();

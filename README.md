@@ -159,6 +159,24 @@ no network calls and no token needed. If the commit isn't available on this mach
 a different PC than the one that ran the sync), the viewer says so and offers **Open on GitHub**
 instead.
 
+## Everyday options
+
+Settings covers the knobs a real deployment needs:
+
+- **Run history** — keep runs for 30/90/180/365 days or forever (the default). Pruning happens at
+  startup and daily in the service; what was committed to GitHub is never touched.
+- **Git commits** — set the committer name/email so `git blame` and the GitHub history show your
+  team instead of a generic tool identity.
+- **Git workspaces location** — move the local clones to another drive; applies from each job's
+  next run, and the old location is never deleted behind your back.
+- **Notifications** — an in-app toast when a run fails or ends with warnings, plus a summary of
+  scheduled runs that failed while the app was closed. Can be turned off.
+
+Jobs are also portable: **Export configuration** (Job Workspace → Configuration) writes a
+secret-free JSON file that references the server and repository by name; **Import** on the Jobs
+page re-attaches it to the matching profiles on another machine — passwords and tokens never
+leave Windows Credential Manager.
+
 ## Run reports
 
 Any run can be exported as a shareable file for a reviewer, an auditor, or a ticket — on demand,

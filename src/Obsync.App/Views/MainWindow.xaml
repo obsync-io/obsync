@@ -85,5 +85,73 @@
 
         <!-- Content -->
         <ContentControl Grid.Column="1" Content="{Binding CurrentView}" Margin="0" />
+
+        <!-- In-app notifications (bottom-right, above the content) -->
+        <ItemsControl Grid.Column="1" ItemsSource="{Binding Toasts}" Panel.ZIndex="100"
+                      HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,24"
+                      IsTabStop="False">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Width="380" Margin="0,10,0,0" Background="{StaticResource CardBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="{StaticResource RadiusCard}" SnapsToDevicePixels="True">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="4" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Severity bar: red for failures, amber for warnings -->
+                            <Border Grid.Column="0" CornerRadius="10,0,0,10">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="{StaticResource WarningBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsError}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource ErrorBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            </Border>
+
+                            <TextBlock Grid.Column="1" FontFamily="{StaticResource IconFontFamily}" FontSize="18"
+                                       VerticalAlignment="Top" Margin="14,15,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{StaticResource IconWarning}" />
+                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsError}" Value="True">
+                                                <Setter Property="Text" Value="{StaticResource IconError}" />
+                                                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+
+                            <StackPanel Grid.Column="2" Margin="12,12,4,12">
+                                <TextBlock Text="{Binding Title}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding Message}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,0,6" />
+                                <Button Style="{StaticResource LinkButton}" Content="View details" HorizontalAlignment="Left"
+                                        Command="{Binding DataContext.OpenToastCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding}" />
+                            </StackPanel>
+
+                            <Button Grid.Column="3" Style="{StaticResource IconButton}" ToolTip="Dismiss"
+                                    AutomationProperties.Name="Dismiss notification"
+                                    VerticalAlignment="Top" Margin="0,8,8,0"
+                                    Command="{Binding DataContext.DismissToastCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                    CommandParameter="{Binding}">
+                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconClose}" FontSize="12" />
+                            </Button>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
     </Grid>
 </Window>

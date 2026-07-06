@@ -1,4 +1,5 @@
 using System.IO;
+using Obsync.Data.Repositories;
 using Obsync.Git;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -53,20 +54,25 @@ public interface IScriptHistoryService
 public sealed class ScriptHistoryService : IScriptHistoryService
 {
     private readonly IGitCommandRunner _git;
-    private readonly string _workspacesRoot;
+    private readonly IAppSettingsRepository _settings;
+    private readonly string _defaultWorkspacesRoot;
 
-    public ScriptHistoryService(IGitCommandRunner git, string workspacesRoot)
+    public ScriptHistoryService(IGitCommandRunner git, IAppSettingsRepository settings, string defaultWorkspacesRoot)
     {
         _git = git;
-        _workspacesRoot = workspacesRoot;
+        _settings = settings;
+        _defaultWorkspacesRoot = defaultWorkspacesRoot;
     }
 
     public async Task<ScriptVersionsResult> GetVersionsAsync(
         GitRepositoryProfile repository, string commitSha, string relativePath, ChangeType changeType,
         CancellationToken cancellationToken = default)
     {
-        // Same per-profile workspace formula the engine uses when it clones.
-        var workspace = Path.Combine(_workspacesRoot, repository.Id.ToString("N"));
+        // Same per-profile workspace formula the engine uses when it clones — including the
+        // configurable workspaces-root override, so the viewer follows relocated clones.
+        var overridePath = await _settings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
+        var root = string.IsNullOrWhiteSpace(overridePath) ? _defaultWorkspacesRoot : overridePath.Trim();
+        var workspace = Path.Combine(root, repository.Id.ToString("N"));
         if (!Directory.Exists(Path.Combine(workspace, ".git")))
         {
             return ScriptVersionsResult.Unavailable(
