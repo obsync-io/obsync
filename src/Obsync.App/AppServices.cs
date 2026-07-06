@@ -4,6 +4,7 @@ using Obsync.App.ViewModels;
 using Obsync.App.Views;
 using Obsync.Data.Repositories;
 using Obsync.Engine.DependencyInjection;
+using Obsync.Git;
 using Obsync.Security.DependencyInjection;
 using Obsync.Shared.Abstractions;
 
@@ -35,6 +36,10 @@ public static class AppServices
         services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();
         services.AddSingleton<IRunReportWriter, RunReportWriter>();
 
+        // Reads before/after script content for the diff viewer from the local git workspaces.
+        services.AddSingleton<IScriptHistoryService>(sp =>
+            new ScriptHistoryService(sp.GetRequiredService<IGitCommandRunner>(), workspacesRoot));
+
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());
         services.AddSingleton<DashboardViewModel>();
@@ -46,6 +51,7 @@ public static class AppServices
         services.AddTransient<CreateJobViewModel>();
         services.AddTransient<ServerDialogViewModel>();
         services.AddTransient<JobDetailViewModel>();
+        services.AddTransient<ScriptDiffViewModel>();
         services.AddSingleton<MainWindow>();
 
         return services;

@@ -33,6 +33,8 @@
     <sys:String x:Key="IconDatabase">&#xE968;</sys:String>
     <sys:String x:Key="IconBranch">&#xE8C7;</sys:String>
     <sys:String x:Key="IconOpen">&#xE8A7;</sys:String>
+    <sys:String x:Key="IconDiff">&#xE8C4;</sys:String>
+    <sys:String x:Key="IconCopy">&#xE8C8;</sys:String>
 
     <!-- Base style for an inline icon glyph. -->
     <Style x:Key="Icon" TargetType="TextBlock">
