@@ -118,6 +118,47 @@ Any tag in the **production** list (configured in **Settings → Production tags
 `prod, production`) renders red and arms a safeguard: a manual **Run Now** on a production-tagged job
 asks for confirmation first. Scheduled runs are never prompted.
 
+## Syncing every database on a server
+
+A job's **Source** step offers two database scopes:
+
+- **Selected databases** — the fixed list you check in the wizard.
+- **All user databases** — every online user database on the server, resolved fresh at the start of
+  each run, so databases created later are picked up automatically with no job edit. The checklist
+  becomes an optional **exclusion** list, compared case-insensitively. Offline databases are skipped
+  with a warning; system databases are never included.
+
+With the dynamic scope each database gets its own subfolder under the destination folder, so the
+repository layout stays stable as databases come and go.
+
+## Versioning reference data
+
+Schema without its lookup data is half the picture. On the **Objects** step, tick
+**Version reference data** and pick the static/lookup tables to track (the picker shows live row
+counts). Each table's rows are exported as a deterministic T-SQL INSERT script under `data/`
+(e.g. `data/dbo.Currency.sql`) and change-tracked exactly like any object — a data change commits,
+an unchanged table doesn't.
+
+Scripts are stable across runs and machines: rows are ordered by primary key (or by all sortable
+columns when there is no key), literals use invariant formatting, identity columns are wrapped in
+`SET IDENTITY_INSERT`, and computed/rowversion columns are excluded. Tables over the per-table row
+cap (default 5,000 — reference data means lookup tables, not fact tables) are **reported as
+skipped**, never silently truncated; the cap is adjustable on the same step. A table missing from
+one of a multi-database job's databases is reported and skipped, and never causes the run to fail.
+
+## Viewing scripts and diffs in the app
+
+Every change a run commits can be inspected without leaving Obsync. Click **View diff** on a row of
+the Job Workspace **Changes** tab, or select a past run on the **History** page and click
+**View changes**. The viewer lists the run's changed objects on the left (filterable) and shows the
+selected object on the right — side-by-side or unified, with line numbers and word-level change
+highlights. Added objects show the full new script; deleted objects show what was removed.
+
+Content is read from the repository's local git workspace (the same clone the engine commits from) —
+no network calls and no token needed. If the commit isn't available on this machine (for example on
+a different PC than the one that ran the sync), the viewer says so and offers **Open on GitHub**
+instead.
+
 ## Run reports
 
 Any run can be exported as a shareable file for a reviewer, an auditor, or a ticket — on demand,
