@@ -10,7 +10,9 @@ public sealed class VersionInfoTests
     {
         var version = VersionInfo.Of(typeof(VersionInfo).Assembly);
 
-        Assert.StartsWith("0.2.0", version);      // from Directory.Build.props <VersionPrefix>
-        Assert.DoesNotContain("+", version);       // the +<gitsha> suffix is stripped
+        // Deliberately not pinned to the release number (that broke on every version bump):
+        // the contract is "a clean semver prefix, no +<gitsha> build metadata".
+        Assert.Matches(@"^\d+\.\d+\.\d+", version);
+        Assert.DoesNotContain("+", version);
     }
 }
