@@ -11,7 +11,17 @@ public interface IObjectStateRepository
 
     Task UpsertAsync(TrackedObjectState state, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Upserts a batch on ONE connection inside ONE transaction. On a VLDB first run this persists
+    /// hundreds of thousands of states — per-row connections/auto-commits would take longer than
+    /// the scripting itself.
+    /// </summary>
+    Task UpsertManyAsync(IReadOnlyCollection<TrackedObjectState> states, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(long id, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes a batch of state rows in one transaction (mass-drop handling at VLDB scale).</summary>
+    Task DeleteManyAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default);
 
     Task<int> CountAllAsync(CancellationToken cancellationToken = default);
 
@@ -44,40 +54,64 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         return [.. rows.Select(Map)];
     }
 
+    private const string UpsertSql =
+        """
+        INSERT INTO object_states
+            (job_id, database_name, object_type, schema_name, object_name, object_id, file_path, last_hash,
+             last_scripted_at, last_committed_at, last_commit_sha, last_run_id, last_status, error_message)
+        VALUES
+            ($job, $db, $type, $schema, $name, $objectId, $path, $hash, $scripted, $committed, $sha, $run, $status, $error)
+        ON CONFLICT (job_id, database_name, object_type, schema_name, object_name) DO UPDATE SET
+            object_id = excluded.object_id, file_path = excluded.file_path, last_hash = excluded.last_hash,
+            last_scripted_at = excluded.last_scripted_at, last_committed_at = excluded.last_committed_at,
+            last_commit_sha = excluded.last_commit_sha, last_run_id = excluded.last_run_id,
+            last_status = excluded.last_status, error_message = excluded.error_message;
+        """;
+
+    private static object ToParameters(TrackedObjectState state) => new
+    {
+        job = state.JobId.ToString(),
+        db = state.DatabaseName,
+        type = (int)state.ObjectType,
+        schema = state.SchemaName,
+        name = state.ObjectName,
+        objectId = state.ObjectId,
+        path = state.FilePath,
+        hash = state.LastHash,
+        scripted = state.LastScriptedAt,
+        committed = state.LastCommittedAt,
+        sha = state.LastCommitSha,
+        run = state.LastRunId?.ToString(),
+        status = (int)state.LastStatus,
+        error = state.ErrorMessage,
+    };
+
     public async Task UpsertAsync(TrackedObjectState state, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         await connection.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO object_states
-                (job_id, database_name, object_type, schema_name, object_name, object_id, file_path, last_hash,
-                 last_scripted_at, last_committed_at, last_commit_sha, last_run_id, last_status, error_message)
-            VALUES
-                ($job, $db, $type, $schema, $name, $objectId, $path, $hash, $scripted, $committed, $sha, $run, $status, $error)
-            ON CONFLICT (job_id, database_name, object_type, schema_name, object_name) DO UPDATE SET
-                object_id = excluded.object_id, file_path = excluded.file_path, last_hash = excluded.last_hash,
-                last_scripted_at = excluded.last_scripted_at, last_committed_at = excluded.last_committed_at,
-                last_commit_sha = excluded.last_commit_sha, last_run_id = excluded.last_run_id,
-                last_status = excluded.last_status, error_message = excluded.error_message;
-            """,
-            new
-            {
-                job = state.JobId.ToString(),
-                db = state.DatabaseName,
-                type = (int)state.ObjectType,
-                schema = state.SchemaName,
-                name = state.ObjectName,
-                objectId = state.ObjectId,
-                path = state.FilePath,
-                hash = state.LastHash,
-                scripted = state.LastScriptedAt,
-                committed = state.LastCommittedAt,
-                sha = state.LastCommitSha,
-                run = state.LastRunId?.ToString(),
-                status = (int)state.LastStatus,
-                error = state.ErrorMessage,
-            },
-            cancellationToken: cancellationToken)).ConfigureAwait(false);
+            UpsertSql, ToParameters(state), cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task UpsertManyAsync(
+        IReadOnlyCollection<TrackedObjectState> states, CancellationToken cancellationToken = default)
+    {
+        if (states.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        // One transaction for the whole batch: SQLite pays the journal fsync once instead of once
+        // per row, and the prepared statement is reused across the loop.
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var state in states)
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                UpsertSql, ToParameters(state), transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
@@ -86,6 +120,26 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         await connection.ExecuteAsync(new CommandDefinition(
             "DELETE FROM object_states WHERE id = $id;", new { id }, cancellationToken: cancellationToken))
             .ConfigureAwait(false);
+    }
+
+    public async Task DeleteManyAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        // Chunked IN lists keep each statement well under SQLite's parameter limit.
+        foreach (var chunk in ids.Chunk(500))
+        {
+            await connection.ExecuteAsync(new CommandDefinition(
+                "DELETE FROM object_states WHERE id IN @ids;", new { ids = chunk },
+                transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<int> CountAllAsync(CancellationToken cancellationToken = default)

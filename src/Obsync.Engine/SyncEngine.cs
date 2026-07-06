@@ -944,6 +944,7 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
+        var deletedIds = new List<long>();
         foreach (var (key, state) in prior)
         {
             if (seen.ContainsKey(key))
@@ -968,8 +969,11 @@ public sealed class SyncEngine : ISyncEngine
                 PreviousHash = state.LastHash,
             });
 
-            await _objectStates.DeleteAsync(state.Id, cancellationToken).ConfigureAwait(false);
+            deletedIds.Add(state.Id);
         }
+
+        // One transaction for the whole batch — a mass drop on a VLDB removes many rows at once.
+        await _objectStates.DeleteManyAsync(deletedIds, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task FinalizeAsync(SyncRun run, RunContext context, GitWorkspaceContext gitContext, CancellationToken cancellationToken)
@@ -1237,8 +1241,11 @@ public sealed class SyncEngine : ISyncEngine
             state.LastStatus = status;
             state.LastCommitSha = commitSha;
             state.LastCommittedAt = committedAt;
-            await _objectStates.UpsertAsync(state, cancellationToken).ConfigureAwait(false);
         }
+
+        // One transaction for the whole batch — a VLDB first run persists hundreds of thousands
+        // of states, and per-row auto-commits would dominate the run time.
+        await _objectStates.UpsertManyAsync(context.PendingStates, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task WriteFileAsync(

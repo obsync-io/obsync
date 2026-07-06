@@ -209,6 +209,44 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
         Assert.True(string.IsNullOrEmpty(await settings.GetWorkspacesRootOverrideAsync()));
     }
 
+    [Fact]
+    public async Task ObjectStates_BatchUpsertAndDelete_RoundTrip()
+    {
+        var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };
+        await _provider.GetRequiredService<IConnectionProfileRepository>().UpsertAsync(connection);
+        var job = new SyncJob { Name = "j", ConnectionProfileId = connection.Id, CommitMode = CommitMode.ExportOnly, ExportPath = "x" };
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(job);
+
+        var states = _provider.GetRequiredService<IObjectStateRepository>();
+        var batch = Enumerable.Range(0, 1500).Select(i => new TrackedObjectState
+        {
+            JobId = job.Id,
+            DatabaseName = "db",
+            ObjectType = Shared.Objects.SqlObjectType.StoredProcedure,
+            SchemaName = "dbo",
+            ObjectName = $"usp_{i}",
+            FilePath = $"procedures/dbo.usp_{i}.sql",
+            LastHash = $"hash{i}",
+            LastScriptedAt = DateTimeOffset.UtcNow,
+            LastStatus = RunStatus.Succeeded,
+        }).ToList();
+
+        await states.UpsertManyAsync(batch);
+        var loaded = await states.GetForJobDatabaseAsync(job.Id, "db");
+        Assert.Equal(1500, loaded.Count);
+
+        // Upserting again must UPDATE (unique identity), not duplicate.
+        batch[0].LastHash = "changed";
+        await states.UpsertManyAsync(batch);
+        loaded = await states.GetForJobDatabaseAsync(job.Id, "db");
+        Assert.Equal(1500, loaded.Count);
+        Assert.Equal("changed", loaded.Single(s => s.ObjectName == "usp_0").LastHash);
+
+        // Batch delete spans multiple 500-id chunks.
+        await states.DeleteManyAsync([.. loaded.Take(1200).Select(s => s.Id)]);
+        Assert.Equal(300, (await states.GetForJobDatabaseAsync(job.Id, "db")).Count);
+    }
+
     public void Dispose()
     {
         _provider?.Dispose();
