@@ -1,12 +1,13 @@
 using System.IO;
+using Obsync.Data.Repositories;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.Services;
 
 /// <summary>
 /// Shared "Export report…" flow for the Job Workspace and History screens: prompts for a location,
-/// picks the format from the chosen file type, builds the report, and writes it. Kept in one place so
-/// both callers behave identically.
+/// picks the format from the chosen file type, and streams the report to the file. Kept in one place
+/// so both callers behave identically.
 /// </summary>
 internal static class RunReportExport
 {
@@ -17,11 +18,7 @@ internal static class RunReportExport
     /// Shows the save dialog and writes the report. Returns a user-facing status message, or
     /// <c>null</c> if the user cancelled.
     /// </summary>
-    public static async Task<string?> PromptAndWriteAsync(
-        IRunReportWriter writer,
-        SyncRun run,
-        IReadOnlyList<ObjectChange> changes,
-        IReadOnlyList<SyncRunLog> logs)
+    public static async Task<string?> PromptAndWriteAsync(IRunReportWriter writer, IRunRepository runs, SyncRun run)
     {
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
@@ -38,8 +35,22 @@ internal static class RunReportExport
         try
         {
             var format = FormatFor(dialog.FileName, dialog.FilterIndex);
-            var content = writer.Build(format, run, changes, logs, DateTimeOffset.UtcNow);
-            await File.WriteAllTextAsync(dialog.FileName, content).ConfigureAwait(false);
+            var generatedAt = DateTimeOffset.UtcNow;
+
+            // The report always contains the run's complete change and log sets — a VLDB run can
+            // carry hundreds of thousands of changes, so the fetch and the streamed write both stay
+            // off the UI thread.
+            await Task.Run(async () =>
+            {
+                var changes = await runs.GetChangesAsync(run.Id).ConfigureAwait(false);
+                var logs = await runs.GetLogsAsync(run.Id).ConfigureAwait(false);
+                var stream = File.Create(dialog.FileName);
+                await using (stream.ConfigureAwait(false))
+                {
+                    await writer.WriteAsync(format, stream, run, changes, logs, generatedAt).ConfigureAwait(false);
+                }
+            }).ConfigureAwait(false);
+
             return $"Report saved to {dialog.FileName}.";
         }
         catch (Exception ex)

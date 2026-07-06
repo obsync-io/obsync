@@ -140,6 +140,50 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RunChanges_LimitCapsTheResult_AndZeroReturnsAll()
+    {
+        var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };
+        await _provider.GetRequiredService<IConnectionProfileRepository>().UpsertAsync(connection);
+        var job = new SyncJob { Name = "j", ConnectionProfileId = connection.Id, CommitMode = CommitMode.ExportOnly, ExportPath = "x" };
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(job);
+
+        var runs = _provider.GetRequiredService<IRunRepository>();
+        var run = new SyncRun
+        {
+            RunKey = "k", JobId = job.Id, JobName = "j", Status = RunStatus.Succeeded,
+            ServerName = "s", Databases = "d", StartedAt = DateTimeOffset.UtcNow,
+        };
+        await runs.InsertAsync(run);
+
+        // Inserted unsorted so the assertions also prove the (change_type, schema, name) ordering.
+        await runs.AddChangesAsync(run.Id,
+        [
+            Change(ChangeType.Modified, "usp_Zeta"),
+            Change(ChangeType.Added, "usp_Beta"),
+            Change(ChangeType.Deleted, "usp_Alpha"),
+            Change(ChangeType.Added, "usp_Alpha"),
+            Change(ChangeType.Modified, "usp_Alpha"),
+        ]);
+
+        var all = await runs.GetChangesAsync(run.Id);
+        Assert.Equal(5, all.Count);
+        Assert.Equal(
+            [(ChangeType.Added, "usp_Alpha"), (ChangeType.Added, "usp_Beta"), (ChangeType.Modified, "usp_Alpha"),
+             (ChangeType.Modified, "usp_Zeta"), (ChangeType.Deleted, "usp_Alpha")],
+            all.Select(c => (c.ChangeType, c.Name)));
+
+        // A display cap returns the head of the same ordering; 0 (the default) returns everything.
+        var capped = await runs.GetChangesAsync(run.Id, limit: 3);
+        Assert.Equal(all.Take(3).Select(c => (c.ChangeType, c.Name)), capped.Select(c => (c.ChangeType, c.Name)));
+
+        static ObjectChange Change(ChangeType type, string name) => new()
+        {
+            ChangeType = type, ObjectType = SqlObjectType.StoredProcedure,
+            Schema = "dbo", Name = name, RelativePath = $"procedures/dbo.{name}.sql",
+        };
+    }
+
+    [Fact]
     public async Task RunRetention_DeletesOldRunsWithTheirChildren_AndKeepsRecentOnes()
     {
         var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };

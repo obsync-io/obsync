@@ -25,7 +25,12 @@ public interface IRunRepository
     Task<IReadOnlyList<SyncRunLog>> GetLogsAsync(Guid runId, CancellationToken cancellationToken = default);
 
     Task AddChangesAsync(Guid runId, IReadOnlyCollection<ObjectChange> changes, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The run's changes ordered by change type, schema, then name. A VLDB run can record hundreds of
+    /// thousands, so display callers pass a <paramref name="limit"/> (0 = all, e.g. for report export).
+    /// </summary>
+    Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, int limit = 0, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes runs (with their logs and changes, via cascade) that started before the cutoff.
@@ -238,16 +243,16 @@ public sealed class RunRepository : IRunRepository
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, int limit = 0, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<ChangeRow>(new CommandDefinition(
-            """
+            $"""
             SELECT change_type AS ChangeType, object_type AS ObjectType, schema_name AS SchemaName,
                    object_name AS ObjectName, relative_path AS RelativePath, previous_hash AS PreviousHash, new_hash AS NewHash
-            FROM run_changes WHERE run_id = $run ORDER BY change_type, schema_name, object_name;
+            FROM run_changes WHERE run_id = $run ORDER BY change_type, schema_name, object_name{(limit > 0 ? " LIMIT $limit" : string.Empty)};
             """,
-            new { run = runId.ToString() }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+            new { run = runId.ToString(), limit }, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         return [.. rows.Select(r => new ObjectChange
         {

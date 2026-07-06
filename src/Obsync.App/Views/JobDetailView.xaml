@@ -222,63 +222,71 @@
             <!-- Changes (latest run) -->
             <TabItem Header="Changes">
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                    <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" IsReadOnly="True">
-                        <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Change" Width="Auto">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <ContentControl Content="{Binding ChangeType}" ContentTemplate="{StaticResource ChangeBadgeTemplate}"
-                                                        Margin="0,4" />
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Object" Binding="{Binding QualifiedName}" Width="*" MinWidth="140">
-                                <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                        <Setter Property="VerticalAlignment" Value="Center" />
-                                        <Setter Property="ToolTip" Value="{Binding QualifiedName}" />
-                                    </Style>
-                                </DataGridTextColumn.ElementStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Path" Binding="{Binding RelativePath}" Width="2*" MinWidth="160">
-                                <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                        <Setter Property="VerticalAlignment" Value="Center" />
-                                        <Setter Property="ToolTip" Value="{Binding RelativePath}" />
-                                    </Style>
-                                </DataGridTextColumn.ElementStyle>
-                            </DataGridTextColumn>
-                            <DataGridTemplateColumn Header="Actions" Width="88">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Orientation="Horizontal">
-                                            <Button Style="{StaticResource IconButton}" ToolTip="View diff" AutomationProperties.Name="View diff"
-                                                    Command="{Binding DataContext.ViewDiffCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}">
-                                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconDiff}"
-                                                           FontSize="15" />
-                                            </Button>
-                                            <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub" AutomationProperties.Name="Open in GitHub"
-                                                    Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}">
-                                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconOpenExternal}"
-                                                           FontSize="15" />
-                                            </Button>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <DockPanel>
+                        <!-- Shown when the run has more changes than the grid displays -->
+                        <TextBlock DockPanel.Dock="Top" Style="{StaticResource Muted}" Text="{Binding ChangesNotice}"
+                                   Margin="0,0,0,14" TextWrapping="Wrap"
+                                   Visibility="{Binding ChangesNotice, Converter={StaticResource NullToVisibility}}" />
+                        <DataGrid ItemsSource="{Binding Changes}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling">
+                            <DataGrid.Columns>
+                                <DataGridTemplateColumn Header="Change" Width="Auto">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ContentControl Content="{Binding ChangeType}" ContentTemplate="{StaticResource ChangeBadgeTemplate}"
+                                                            Margin="0,4" />
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="Object" Binding="{Binding QualifiedName}" Width="*" MinWidth="140">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                            <Setter Property="VerticalAlignment" Value="Center" />
+                                            <Setter Property="ToolTip" Value="{Binding QualifiedName}" />
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTextColumn Header="Path" Binding="{Binding RelativePath}" Width="2*" MinWidth="160">
+                                    <DataGridTextColumn.ElementStyle>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                            <Setter Property="VerticalAlignment" Value="Center" />
+                                            <Setter Property="ToolTip" Value="{Binding RelativePath}" />
+                                        </Style>
+                                    </DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                                <DataGridTemplateColumn Header="Actions" Width="88">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button Style="{StaticResource IconButton}" ToolTip="View diff" AutomationProperties.Name="View diff"
+                                                        Command="{Binding DataContext.ViewDiffCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}">
+                                                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconDiff}"
+                                                               FontSize="15" />
+                                                </Button>
+                                                <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub" AutomationProperties.Name="Open in GitHub"
+                                                        Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}">
+                                                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconOpenExternal}"
+                                                               FontSize="15" />
+                                                </Button>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
                 </Border>
             </TabItem>
 
             <!-- History -->
             <TabItem Header="History">
                 <Border Style="{StaticResource Card}" Margin="0,12,0,0">
-                    <DataGrid ItemsSource="{Binding Runs}" AutoGenerateColumns="False" IsReadOnly="True">
+                    <DataGrid ItemsSource="{Binding Runs}" AutoGenerateColumns="False" IsReadOnly="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Run time" Binding="{Binding StartedAt, Converter={StaticResource LocalDateTime}}" Width="1.6*" MinWidth="130" />
                             <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" MinWidth="70" />
@@ -345,7 +353,8 @@
                     <DockPanel>
                         <CheckBox DockPanel.Dock="Top" Content="Show technical details" IsChecked="{Binding ShowTechnicalLogs}"
                                   Margin="0,0,0,14" />
-                        <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True">
+                        <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat=HH:mm:ss}" Width="Auto" />
                                 <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="Auto" />

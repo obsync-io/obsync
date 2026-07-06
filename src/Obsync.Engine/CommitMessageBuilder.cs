@@ -25,34 +25,77 @@ internal static class CommitMessageBuilder
         body.Append("Deleted: ").Append(run.ObjectsDeleted).Append('\n');
         body.Append("Duration: ").Append(TimeSpan.FromMilliseconds(run.DurationMs).ToString(@"hh\:mm\:ss")).Append('\n');
 
-        AppendCategory(body, "Modified", changes, ChangeType.Modified);
-        AppendCategory(body, "Added", changes, ChangeType.Added);
-        AppendCategory(body, "Deleted", changes, ChangeType.Deleted);
+        // One pass over the changes (a VLDB run can carry 500k) bucketing per category; each bucket
+        // retains only the paths it will actually print, so nothing near the full set is ever sorted.
+        var modified = new CategoryBucket();
+        var added = new CategoryBucket();
+        var deleted = new CategoryBucket();
+        foreach (var change in changes)
+        {
+            var bucket = change.ChangeType switch
+            {
+                ChangeType.Modified => modified,
+                ChangeType.Added => added,
+                ChangeType.Deleted => deleted,
+                _ => null,
+            };
+            bucket?.Add(change.RelativePath);
+        }
+
+        AppendCategory(body, "Modified", modified);
+        AppendCategory(body, "Added", added);
+        AppendCategory(body, "Deleted", deleted);
 
         return (subject, body.ToString().TrimEnd('\n'));
     }
 
-    private static void AppendCategory(StringBuilder body, string title, IReadOnlyList<ObjectChange> changes, ChangeType type)
+    private static void AppendCategory(StringBuilder body, string title, CategoryBucket bucket)
     {
-        // Sort by path so the body is deterministic regardless of the parallel processing order.
-        var matching = changes
-            .Where(c => c.ChangeType == type)
-            .OrderBy(c => c.RelativePath, StringComparer.Ordinal)
-            .ToList();
-        if (matching.Count == 0)
+        if (bucket.Count == 0)
         {
             return;
         }
 
         body.Append('\n').Append(title).Append(":\n");
-        foreach (var change in matching.Take(MaxListedPerCategory))
+        foreach (var path in bucket.SmallestPaths)
         {
-            body.Append("  - ").Append(change.RelativePath).Append('\n');
+            body.Append("  - ").Append(path).Append('\n');
         }
 
-        if (matching.Count > MaxListedPerCategory)
+        if (bucket.Count > MaxListedPerCategory)
         {
-            body.Append("  … and ").Append(matching.Count - MaxListedPerCategory).Append(" more\n");
+            body.Append("  … and ").Append(bucket.Count - MaxListedPerCategory).Append(" more\n");
+        }
+    }
+
+    /// <summary>
+    /// One category's tally: the total count plus the <see cref="MaxListedPerCategory"/> ordinally
+    /// smallest paths — exactly what "sort by path, list the first 50, then '… and N more'" prints —
+    /// kept via bounded insertion instead of sorting the whole category.
+    /// </summary>
+    private sealed class CategoryBucket
+    {
+        private readonly List<string> _smallest = new(MaxListedPerCategory + 1);
+
+        public int Count { get; private set; }
+
+        public IReadOnlyList<string> SmallestPaths => _smallest;
+
+        public void Add(string path)
+        {
+            Count++;
+            if (_smallest.Count == MaxListedPerCategory
+                && StringComparer.Ordinal.Compare(path, _smallest[^1]) >= 0)
+            {
+                return;
+            }
+
+            var index = _smallest.BinarySearch(path, StringComparer.Ordinal);
+            _smallest.Insert(index < 0 ? ~index : index, path);
+            if (_smallest.Count > MaxListedPerCategory)
+            {
+                _smallest.RemoveAt(MaxListedPerCategory);
+            }
         }
     }
 }

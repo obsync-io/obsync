@@ -17,6 +17,10 @@ namespace Obsync.App.ViewModels;
 /// </summary>
 public sealed partial class JobDetailViewModel : ObservableObject
 {
+    /// <summary>A VLDB run can record hundreds of thousands of changes; the grid shows at most this
+    /// many (the report export always contains the complete list).</summary>
+    private const int MaxDisplayedChanges = 2000;
+
     private readonly IJobRepository _jobs;
     private readonly IRunRepository _runs;
     private readonly IConnectionProfileRepository _connections;
@@ -53,6 +57,10 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
     /// <summary>Inline feedback for the "Export report" action (save path or error).</summary>
     [ObservableProperty] private string? _reportMessage;
+
+    /// <summary>Shown above the Changes grid when the latest run has more changes than the grid
+    /// displays (<see cref="MaxDisplayedChanges"/>); null when the full set is shown.</summary>
+    [ObservableProperty] private string? _changesNotice;
 
     /// <summary>The most recent run, used for the Overview status panel (counts, error, timing).</summary>
     [ObservableProperty] private SyncRun? _latestRun;
@@ -220,13 +228,17 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _allLogs.Clear();
         if (latest is not null)
         {
-            foreach (var change in await _runs.GetChangesAsync(latest.Id))
+            foreach (var change in await _runs.GetChangesAsync(latest.Id, MaxDisplayedChanges))
             {
                 Changes.Add(change);
             }
 
             _allLogs.AddRange(await _runs.GetLogsAsync(latest.Id));
         }
+
+        ChangesNotice = latest is not null && latest.ChangeCount > MaxDisplayedChanges
+            ? $"Showing the first {MaxDisplayedChanges:N0} of {latest.ChangeCount:N0} changes. Use Export report for the complete list."
+            : null;
 
         RefreshLogs();
         AttachRunState();
@@ -315,8 +327,9 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
     private bool CanExportReport() => LatestRun is not null;
 
-    // Exports the latest run — the one whose changes and logs the Overview already shows. Uses the full
-    // log set (not the Debug-filtered view) so the report is faithful regardless of the UI toggle.
+    // Exports the latest run — the one whose changes and logs the Overview already shows. The export
+    // re-fetches the run's complete change and log sets, so it is faithful regardless of the grid's
+    // display cap and the technical-logs toggle.
     [RelayCommand(CanExecute = nameof(CanExportReport))]
     private async Task ExportReportAsync()
     {
@@ -325,7 +338,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
             return;
         }
 
-        var message = await RunReportExport.PromptAndWriteAsync(_reportWriter, LatestRun, Changes, _allLogs);
+        var message = await RunReportExport.PromptAndWriteAsync(_reportWriter, _runs, LatestRun);
         if (message is not null)
         {
             ReportMessage = message;

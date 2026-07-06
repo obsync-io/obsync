@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -19,10 +18,15 @@ namespace Obsync.App.ViewModels;
 /// </summary>
 public sealed partial class ScriptDiffViewModel : ObservableObject
 {
+    /// <summary>Debounce for the filter box, so typing over a large change list re-filters once the
+    /// user pauses instead of scanning the whole list on every keystroke.</summary>
+    private static readonly TimeSpan FilterDebounce = TimeSpan.FromMilliseconds(250);
+
     private readonly IScriptHistoryService _scriptHistory;
     private GitRepositoryProfile? _repository;
     private string? _commitUrl;
     private CancellationTokenSource? _diffCts;
+    private CancellationTokenSource? _filterCts;
 
     /// <summary>The in-flight diff load; awaited by <see cref="LoadAsync"/> so the dialog opens with
     /// the first diff already computed instead of flashing a loading state.</summary>
@@ -42,8 +46,9 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     /// <summary>The single-pane rows: the unified diff, or the full content for added/deleted objects.</summary>
     [ObservableProperty] private IReadOnlyList<DiffRow> _singleRows = [];
 
-    public ObservableCollection<ObjectChange> Changes { get; } = [];
-    public ICollectionView ChangesView { get; }
+    /// <summary>The filterable change list. Rebuilt as one view over the already-populated list on
+    /// each load, so a large change set costs a single notification instead of one per item.</summary>
+    [ObservableProperty] private ICollectionView _changesView;
 
     public string Title { get; private set; } = "Changed scripts";
     public string? FullSha { get; private set; }
@@ -53,8 +58,7 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     public ScriptDiffViewModel(IScriptHistoryService scriptHistory)
     {
         _scriptHistory = scriptHistory;
-        ChangesView = CollectionViewSource.GetDefaultView(Changes);
-        ChangesView.Filter = FilterChange;
+        _changesView = CreateChangesView([]);
     }
 
     public bool HasError => ErrorMessage is not null;
@@ -78,15 +82,14 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         ShortSha = run.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : "—";
         RunTimestampText = run.StartedAt.LocalDateTime.ToString("g");
 
-        Changes.Clear();
-        foreach (var change in changes)
-        {
-            Changes.Add(change);
-        }
+        ChangesView = CreateChangesView([.. changes]);
 
         SelectedChange = preselect is not null && changes.Contains(preselect) ? preselect : changes.FirstOrDefault();
         await _diffLoad;
     }
+
+    private ListCollectionView CreateChangesView(List<ObjectChange> changes) =>
+        new(changes) { Filter = FilterChange };
 
     partial void OnSelectedChangeChanged(ObjectChange? value)
     {
@@ -107,7 +110,28 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         RaiseViewStateChanged();
     }
 
-    partial void OnFilterTextChanged(string value) => ChangesView.Refresh();
+    partial void OnFilterTextChanged(string value)
+    {
+        _filterCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _filterCts = cts;
+        _ = RefreshChangesViewAsync(cts.Token);
+    }
+
+    private async Task RefreshChangesViewAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(FilterDebounce, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by further typing; the newest keystroke owns the refresh.
+            return;
+        }
+
+        ChangesView.Refresh();
+    }
 
     private void RaiseViewStateChanged()
     {
