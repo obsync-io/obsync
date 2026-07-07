@@ -172,6 +172,26 @@ cap (default 5,000 — reference data means lookup tables, not fact tables) are 
 skipped**, never silently truncated; the cap is adjustable on the same step. A table missing from
 one of a multi-database job's databases is reported and skipped, and never causes the run to fail.
 
+## Security review
+
+Every run also writes a versioned security review — `security/security-review.md` per database,
+plus `server/security-review.md` when the job scripts server-level objects. The checks are curated,
+well-known audit heuristics, read from the live catalog with the same read-only guarantees as
+everything else Obsync does:
+
+- **Database**: `TRUSTWORTHY` / cross-database chaining enabled, guest access, permissions granted
+  to `public`, high-risk grants (`CONTROL`, `TAKE OWNERSHIP`, `IMPERSONATE`, `ALTER ANY …`),
+  `db_owner` membership, and orphaned users (skipped honestly when the scanning account cannot see
+  server logins).
+- **Server**: `sysadmin` membership, the built-in `sa` login being enabled (even when renamed),
+  SQL logins with `CHECK_POLICY = OFF`, and high-risk server grants (`CONTROL SERVER`,
+  `IMPERSONATE ANY LOGIN`, …).
+
+Findings are grouped by severity with a one-line "why it matters" each. The file is deterministic,
+so **posture drift shows up as a commit** — a new `sysadmin` member or a fresh grant to `public`
+appears in the repository history with a date and diff. Turn it off per job via the selection's
+`IncludeSecurityReview` option.
+
 ## Generated schema documentation
 
 Every synced database also gets human-readable documentation, generated into the repository at

@@ -41,6 +41,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
     private readonly IDatabaseDocumentationReader _documentationReader;
+    private readonly ISecurityAnalysisReader _securityReader;
     private readonly IReferenceDataReader _referenceDataReader;
     private readonly IModifiedObjectReader _modifiedObjects;
     private readonly IGitWorkspace _gitWorkspace;
@@ -69,6 +70,7 @@ public sealed class SyncEngine : ISyncEngine
         ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
         IDatabaseDocumentationReader documentationReader,
+        ISecurityAnalysisReader securityReader,
         IReferenceDataReader referenceDataReader,
         IModifiedObjectReader modifiedObjects,
         IGitWorkspace gitWorkspace,
@@ -96,6 +98,7 @@ public sealed class SyncEngine : ISyncEngine
         _probe = probe;
         _artifactReader = artifactReader;
         _documentationReader = documentationReader;
+        _securityReader = securityReader;
         _referenceDataReader = referenceDataReader;
         _modifiedObjects = modifiedObjects;
         _gitWorkspace = gitWorkspace;
@@ -907,6 +910,20 @@ public sealed class SyncEngine : ISyncEngine
             ArtifactIdentity("server-configuration"), configuration, RepositoryLayout.ServerConfigurationFile, cancellationToken)
             .ConfigureAwait(false);
 
+        // The server security review rides the server pass the same way: sysadmin membership, the
+        // sa login, password policy, and high-risk server grants, versioned so drift is a commit.
+        if (context.Job.Selection.IncludeSecurityReview)
+        {
+            var findings = await _securityReader.ReadServerFindingsAsync(
+                context.Connection, context.SqlPassword,
+                context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+                cancellationToken).ConfigureAwait(false);
+            var review = SecurityReviewWriter.Build($"server {context.Connection.ServerName}", findings);
+            await ApplyItemAsync(
+                ArtifactIdentity("server-security-review"), review, RepositoryLayout.ServerSecurityReviewFile, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         if (!skipped.IsEmpty)
         {
             var details = skipped.ToList();
@@ -1000,6 +1017,16 @@ public sealed class SyncEngine : ISyncEngine
             var permissions = await _artifactReader.ReadPermissionsAsync(
                 context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
             await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Like the permissions file, the review is read every run: grants and role membership do
+        // not bump any modify_date, so posture drift is only caught by re-reading the catalog.
+        if (selection.IncludeSecurityReview)
+        {
+            var findings = await _securityReader.ReadDatabaseFindingsAsync(
+                context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
+            var review = SecurityReviewWriter.Build(database, findings);
+            await apply(ArtifactIdentity("security-review"), review, RepositoryLayout.SecurityReviewFile, cancellationToken).ConfigureAwait(false);
         }
     }
 

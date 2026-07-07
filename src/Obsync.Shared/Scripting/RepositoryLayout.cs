@@ -30,6 +30,12 @@ public static class RepositoryLayout
     /// <summary>Generated markdown documentation (object index + data dictionary), relative to the database root.</summary>
     public const string DocumentationFile = "docs/README.md";
 
+    /// <summary>Generated database security review (markdown findings), relative to the database root.</summary>
+    public const string SecurityReviewFile = "security/security-review.md";
+
+    /// <summary>Generated server security review, relative to the job's destination folder.</summary>
+    public const string ServerSecurityReviewFile = "server/security-review.md";
+
     /// <summary>Folder holding server-level (instance-scoped) objects, relative to the job's destination folder.</summary>
     public const string ServerFolder = "server";
 

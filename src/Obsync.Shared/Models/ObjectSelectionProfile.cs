@@ -44,6 +44,9 @@ public sealed class ObjectSelectionProfile
     /// <summary>Write <c>docs/README.md</c>: a generated object index + data dictionary (markdown).</summary>
     public bool IncludeDocumentation { get; set; } = true;
 
+    /// <summary>Write <c>security/security-review.md</c>: curated security findings (markdown).</summary>
+    public bool IncludeSecurityReview { get; set; } = true;
+
     /// <summary>Delete files (and commit the deletion) for objects dropped on the source.</summary>
     public bool RemoveDroppedObjects { get; set; } = true;
 
