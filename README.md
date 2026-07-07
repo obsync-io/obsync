@@ -172,6 +172,21 @@ cap (default 5,000 — reference data means lookup tables, not fact tables) are 
 skipped**, never silently truncated; the cap is adjustable on the same step. A table missing from
 one of a multi-database job's databases is reported and skipped, and never causes the run to fail.
 
+## Generated schema documentation
+
+Every synced database also gets human-readable documentation, generated into the repository at
+`docs/README.md` next to the scripts (GitHub renders it automatically when browsing the folder).
+It contains an **object index** (counts by type and by schema) and a **data dictionary** — every
+table's columns with types, nullability, defaults, primary-key membership, and any
+`MS_Description` extended properties your team maintains.
+
+The file is deterministic and timestamp-free, and rides the same change-detection pipeline as the
+scripts: it only regenerates (and only commits) when the database actually changed, so unchanged
+incremental runs stay fast. Very large databases are handled gracefully — the dictionary covers the
+first 2,000 tables alphabetically and notes the total. Turn it off per job via the selection's
+`IncludeDocumentation` option. One caveat: editing only an `MS_Description` does not bump the
+object's `modify_date`, so a description-only change appears with the next schema change.
+
 ## Viewing scripts and diffs in the app
 
 Every change a run commits can be inspected without leaving Obsync. Click **View diff** on a row of

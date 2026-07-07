@@ -27,6 +27,9 @@ public static class RepositoryLayout
     /// <summary>Folder holding versioned reference/static table data, relative to the database root.</summary>
     public const string DataFolder = "data";
 
+    /// <summary>Generated markdown documentation (object index + data dictionary), relative to the database root.</summary>
+    public const string DocumentationFile = "docs/README.md";
+
     /// <summary>Folder holding server-level (instance-scoped) objects, relative to the job's destination folder.</summary>
     public const string ServerFolder = "server";
 

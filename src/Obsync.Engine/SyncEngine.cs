@@ -40,6 +40,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IServerObjectScriptProvider _serverProvider;
     private readonly ISqlServerProbe _probe;
     private readonly IDatabaseArtifactReader _artifactReader;
+    private readonly IDatabaseDocumentationReader _documentationReader;
     private readonly IReferenceDataReader _referenceDataReader;
     private readonly IModifiedObjectReader _modifiedObjects;
     private readonly IGitWorkspace _gitWorkspace;
@@ -67,6 +68,7 @@ public sealed class SyncEngine : ISyncEngine
         IServerObjectScriptProvider serverProvider,
         ISqlServerProbe probe,
         IDatabaseArtifactReader artifactReader,
+        IDatabaseDocumentationReader documentationReader,
         IReferenceDataReader referenceDataReader,
         IModifiedObjectReader modifiedObjects,
         IGitWorkspace gitWorkspace,
@@ -93,6 +95,7 @@ public sealed class SyncEngine : ISyncEngine
         _serverProvider = serverProvider;
         _probe = probe;
         _artifactReader = artifactReader;
+        _documentationReader = documentationReader;
         _referenceDataReader = referenceDataReader;
         _modifiedObjects = modifiedObjects;
         _gitWorkspace = gitWorkspace;
@@ -521,6 +524,10 @@ public sealed class SyncEngine : ISyncEngine
         var skipped = new ConcurrentBag<string>();
         var ignoreRules = await LoadIgnoreRulesAsync(context, localPath, dbFolder, cancellationToken).ConfigureAwait(false);
 
+        // Snapshot the run counters so the docs artifact can tell whether THIS database changed
+        // (databases are processed sequentially, so the delta is unambiguous).
+        var changesBeforeDatabase = context.Added + context.Modified;
+
         // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
         // database artifact). Artifacts ride the same change-detection path so an options- or
         // permissions-only change still produces a commit, while an unchanged run still produces none.
@@ -653,10 +660,14 @@ public sealed class SyncEngine : ISyncEngine
             skipped.Add($"Reference data {DescribeIdentity(identity)} — {reason}");
         }
 
-        // Artifacts, reference data, and deletions run after the parallel phase, so they touch the
-        // accumulators alone.
-        await GenerateDatabaseArtifactsAsync(context, database, [.. inventory], ApplyItemAsync, cancellationToken).ConfigureAwait(false);
+        // Artifacts, reference data, documentation, and deletions run after the parallel phase, so
+        // they touch the accumulators alone.
+        var inventorySnapshot = inventory.ToList();
+        await GenerateDatabaseArtifactsAsync(context, database, inventorySnapshot, ApplyItemAsync, cancellationToken).ConfigureAwait(false);
         await GenerateReferenceDataAsync(context, database, ApplyItemAsync, RecordDataSkip, cancellationToken).ConfigureAwait(false);
+        await GenerateDocumentationAsync(
+            context, database, inventorySnapshot, prior, seen, changesBeforeDatabase, ApplyItemAsync, cancellationToken)
+            .ConfigureAwait(false);
 
         if (!skipped.IsEmpty)
         {
@@ -989,6 +1000,64 @@ public sealed class SyncEngine : ISyncEngine
             var permissions = await _artifactReader.ReadPermissionsAsync(
                 context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
             await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The data dictionary documents at most this many tables (alphabetical); the docs file notes the rest.</summary>
+    private const int MaxDocumentedTables = 2000;
+
+    /// <summary>
+    /// Generates <c>docs/README.md</c> (object index + data dictionary) through the shared
+    /// change-detection path. The dictionary read is a full catalog query, so it only runs when
+    /// this database actually changed this run (or the docs were never generated) — an unchanged
+    /// incremental run stays as fast as before. When generation is skipped or fails, the tracked
+    /// file is marked seen so the deletion pass never removes committed docs on a blip.
+    /// </summary>
+    private async Task GenerateDocumentationAsync(
+        RunContext context, string database, IReadOnlyList<ObjectInventoryEntry> inventory,
+        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen,
+        int changesBeforeDatabase,
+        Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply, CancellationToken cancellationToken)
+    {
+        if (!context.Job.Selection.IncludeDocumentation)
+        {
+            // Not marked seen: turning the option off lets the deletion pass clean the file up,
+            // exactly like the other database artifacts.
+            return;
+        }
+
+        var identity = ArtifactIdentity("documentation");
+        var key = StateKey(identity);
+
+        // "Changed" means: objects were added/modified in this database, something tracked was not
+        // seen again (a pending deletion), or the docs were never generated. Extended-property-only
+        // edits do not bump modify_date, so a description-only change surfaces with the next real
+        // schema change — the same caveat incremental scripting already documents.
+        var hasPendingDeletion = prior.Keys.Any(k =>
+            !string.Equals(k, key, StringComparison.OrdinalIgnoreCase) && !seen.ContainsKey(k));
+        var changed = context.Added + context.Modified > changesBeforeDatabase
+            || hasPendingDeletion
+            || !prior.ContainsKey(key);
+        if (!changed)
+        {
+            seen.TryAdd(key, 0);
+            return;
+        }
+
+        try
+        {
+            var data = await _documentationReader.ReadAsync(
+                context.Connection, context.SqlPassword, database, MaxDocumentedTables,
+                context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+                cancellationToken).ConfigureAwait(false);
+            var markdown = DatabaseDocumentationWriter.Build(context.Connection.ServerName, database, inventory, data);
+            await apply(identity, markdown, RepositoryLayout.DocumentationFile, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            seen.TryAdd(key, 0);
+            context.IncrementFailed();
+            context.Log(SyncLogLevel.Warning, $"Could not generate documentation for {database}.", ex.Message);
         }
     }
 

@@ -12,6 +12,7 @@ public static class MetadataServiceCollectionExtensions
         services.TryAddSingleton<ISqlConnectionStringFactory, SqlConnectionStringFactory>();
         services.TryAddSingleton<ISqlServerProbe, SqlServerProbe>();
         services.TryAddSingleton<IDatabaseArtifactReader, DatabaseArtifactReader>();
+        services.TryAddSingleton<IDatabaseDocumentationReader, DatabaseDocumentationReader>();
         services.TryAddSingleton<IReferenceDataReader, ReferenceDataReader>();
         services.TryAddSingleton<IModifiedObjectReader, ModifiedObjectReader>();
         services.AddSingleton<IObjectScriptProvider, MetadataScriptProvider>();

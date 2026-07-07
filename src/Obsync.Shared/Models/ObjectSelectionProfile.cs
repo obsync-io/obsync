@@ -41,6 +41,9 @@ public sealed class ObjectSelectionProfile
     /// <summary>Write <c>security/permissions/permissions.sql</c>: consolidated database-scoped GRANT/DENY statements.</summary>
     public bool IncludeDatabasePermissionsFile { get; set; } = true;
 
+    /// <summary>Write <c>docs/README.md</c>: a generated object index + data dictionary (markdown).</summary>
+    public bool IncludeDocumentation { get; set; } = true;
+
     /// <summary>Delete files (and commit the deletion) for objects dropped on the source.</summary>
     public bool RemoveDroppedObjects { get; set; } = true;
 
