@@ -103,7 +103,7 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <!-- Severity bar: red for failures, amber for warnings -->
+                            <!-- Severity bar: red for failures, amber for warnings, accent for info -->
                             <Border Grid.Column="0" CornerRadius="10,0,0,10">
                                 <Border.Style>
                                     <Style TargetType="Border">
@@ -111,6 +111,9 @@
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsError}" Value="True">
                                                 <Setter Property="Background" Value="{StaticResource ErrorBrush}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsInfo}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource AccentBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -128,6 +131,10 @@
                                                 <Setter Property="Text" Value="{StaticResource IconError}" />
                                                 <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
                                             </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsInfo}" Value="True">
+                                                <Setter Property="Text" Value="{StaticResource IconUpdate}" />
+                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                            </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </TextBlock.Style>
@@ -136,7 +143,7 @@
                             <StackPanel Grid.Column="2" Margin="12,12,4,12">
                                 <TextBlock Text="{Binding Title}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
                                 <TextBlock Text="{Binding Message}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,2,0,6" />
-                                <Button Style="{StaticResource LinkButton}" Content="View details" HorizontalAlignment="Left"
+                                <Button Style="{StaticResource LinkButton}" Content="{Binding ActionText}" HorizontalAlignment="Left"
                                         Command="{Binding DataContext.OpenToastCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding}" />
                             </StackPanel>

@@ -45,6 +45,9 @@ public static class AppServices
         // Secret-free job configuration export/import (profiles referenced by name, never embedded).
         services.AddSingleton<IJobConfigPorter, JobConfigPorter>();
 
+        // Notify-only release check against GitHub (startup toast + Settings → About button).
+        services.AddSingleton<IUpdateChecker, UpdateChecker>();
+
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<IShellNavigator>(sp => sp.GetRequiredService<MainViewModel>());
         services.AddSingleton<DashboardViewModel>();

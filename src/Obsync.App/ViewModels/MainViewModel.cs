@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -46,6 +47,7 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         // note on the constructor.
         _services.GetRequiredService<IJobRunCoordinator>().RunCompleted += OnRunCompleted;
         await ShowMissedFailuresAsync();
+        await ShowAvailableUpdateAsync();
     }
 
     // A run the app itself executed just finished: surface failures/warnings as a toast.
@@ -112,6 +114,44 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         }
     }
 
+    // A newer GitHub release gets one calm accent toast, at most once per version; the check runs
+    // at most once per 24h and any failure (offline, private repo, rate limit) shows nothing.
+    private async Task ShowAvailableUpdateAsync()
+    {
+        try
+        {
+            var settings = _services.GetRequiredService<IAppSettingsRepository>();
+            var now = DateTimeOffset.UtcNow;
+            if (await settings.GetLastUpdateCheckAsync() is { } last && now - last < TimeSpan.FromHours(24))
+            {
+                return;
+            }
+
+            await settings.SetLastUpdateCheckAsync(now);
+            var result = await _services.GetRequiredService<IUpdateChecker>().CheckAsync();
+            if (!result.IsUpdateAvailable
+                || result.LatestVersion is not { } version
+                || version == await settings.GetLastNotifiedUpdateVersionAsync())
+            {
+                return;
+            }
+
+            await settings.SetLastNotifiedUpdateVersionAsync(version);
+            ShowToast(new ToastItem
+            {
+                Title = $"Obsync {version} is available",
+                Message = $"You're on {VersionInfo.Of(typeof(App).Assembly)}. Open the release notes to download the update.",
+                IsInfo = true,
+                Url = result.ReleaseUrl,
+                ActionText = "View release",
+            });
+        }
+        catch (Exception)
+        {
+            // The update check is best-effort; startup never depends on github.com being reachable.
+        }
+    }
+
     private void ShowToast(ToastItem toast)
     {
         Toasts.Add(toast);
@@ -131,7 +171,11 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
     private async Task OpenToastAsync(ToastItem toast)
     {
         Toasts.Remove(toast);
-        if (toast.JobId is { } jobId)
+        if (toast.Url is { } url)
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        else if (toast.JobId is { } jobId)
         {
             await ShowJobDetailAsync(jobId, CurrentSection);
         }

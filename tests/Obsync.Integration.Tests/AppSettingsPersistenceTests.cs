@@ -7,7 +7,8 @@ using Obsync.Shared.Models;
 
 namespace Obsync.Integration.Tests;
 
-/// <summary>Exercises the V006 app_settings table: the proxy and alert configurations round-trip as JSON.</summary>
+/// <summary>Exercises the V006 app_settings table: the proxy and alert configurations round-trip
+/// as JSON, and the update-check bookkeeping keys persist.</summary>
 public sealed class AppSettingsPersistenceTests : IAsyncLifetime, IDisposable
 {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"obsync-settings-test-{Guid.NewGuid():N}.db");
@@ -115,6 +116,43 @@ public sealed class AppSettingsPersistenceTests : IAsyncLifetime, IDisposable
         Assert.False(loaded.OnWarning);
         Assert.True(loaded.OnChanges);
         Assert.False(loaded.ScheduledRunsOnly);
+    }
+
+    [Fact]
+    public async Task LastUpdateCheck_DefaultsToNull_WhenUnset()
+    {
+        var repo = _provider.GetRequiredService<IAppSettingsRepository>();
+        Assert.Null(await repo.GetLastUpdateCheckAsync());
+    }
+
+    [Fact]
+    public async Task LastUpdateCheck_RoundTrips()
+    {
+        var repo = _provider.GetRequiredService<IAppSettingsRepository>();
+        var timestamp = new DateTimeOffset(2026, 7, 5, 8, 30, 15, TimeSpan.Zero);
+
+        await repo.SetLastUpdateCheckAsync(timestamp);
+
+        Assert.Equal(timestamp, await repo.GetLastUpdateCheckAsync());
+    }
+
+    [Fact]
+    public async Task LastNotifiedUpdateVersion_DefaultsToNull_WhenUnset()
+    {
+        var repo = _provider.GetRequiredService<IAppSettingsRepository>();
+        Assert.Null(await repo.GetLastNotifiedUpdateVersionAsync());
+    }
+
+    [Fact]
+    public async Task LastNotifiedUpdateVersion_RoundTrips_AndOverwrites()
+    {
+        var repo = _provider.GetRequiredService<IAppSettingsRepository>();
+
+        await repo.SetLastNotifiedUpdateVersionAsync("0.5.0");
+        Assert.Equal("0.5.0", await repo.GetLastNotifiedUpdateVersionAsync());
+
+        await repo.SetLastNotifiedUpdateVersionAsync("0.6.0");
+        Assert.Equal("0.6.0", await repo.GetLastNotifiedUpdateVersionAsync());
     }
 
     public void Dispose()

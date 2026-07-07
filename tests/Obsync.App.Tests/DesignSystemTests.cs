@@ -19,7 +19,7 @@ public sealed class DesignSystemTests
     [
         "AccentBrush", "CardBrush", "BorderBrush", "PanelBrush", "SuccessSoftBrush", "AccentSoftBrush",
         "DiffAddedEmphasisBrush", "DiffDeletedEmphasisBrush",
-        "AppFontFamily", "IconFontFamily", "MonoFontFamily", "IconDiff", "IconCopy", "IconImport", "IconClose",
+        "AppFontFamily", "IconFontFamily", "MonoFontFamily", "IconDiff", "IconCopy", "IconImport", "IconClose", "IconUpdate",
         "RadiusCard", "RadiusPill", "CardPadding",
         "PageTitle", "SectionTitle", "MetricValue", "Body", "BodyStrong", "Muted", "Caption", "Icon",
         "Card", "Panel", "Divider", "PrimaryButton", "SecondaryButton", "SubtleButton",

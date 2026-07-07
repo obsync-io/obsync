@@ -22,6 +22,14 @@ public sealed class ToastRenderTests
         [
             new ToastItem { Title = "Run failed — Scripts", Message = "Login failed for user 'obsync'.", IsError = true, JobId = Guid.NewGuid() },
             new ToastItem { Title = "Run finished with warnings — Scripts", Message = "2 items were skipped.", IsError = false },
+            new ToastItem
+            {
+                Title = "Obsync 9.9.9 is available",
+                Message = "You're on 0.4.0. Open the release notes to download the update.",
+                IsInfo = true,
+                Url = "https://github.com/obsync/obsync/releases/latest",
+                ActionText = "View release",
+            },
         ];
     }
 
@@ -59,6 +67,9 @@ public sealed class ToastRenderTests
         Assert.Contains("Run failed — Scripts", texts);
         Assert.Contains("Run finished with warnings — Scripts", texts);
         Assert.Contains("View details", texts);
+        // The info template path (accent styling + custom action text) must build too.
+        Assert.Contains("Obsync 9.9.9 is available", texts);
+        Assert.Contains("View release", texts);
     }
 
     private static void CollectText(DependencyObject root, List<string> texts)

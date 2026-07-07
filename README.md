@@ -197,6 +197,9 @@ Settings covers the knobs a real deployment needs:
   next run, and the old location is never deleted behind your back.
 - **Notifications** — an in-app toast when a run fails or ends with warnings, plus a summary of
   scheduled runs that failed while the app was closed. Can be turned off.
+- **Update checks** — on startup (at most once per day) and via Settings → About → Check for
+  updates, Obsync asks github.com's releases endpoint whether a newer version exists and only
+  notifies; it never auto-installs, and nothing else is transmitted — no telemetry.
 
 Jobs are also portable: **Export configuration** (Job Workspace → Configuration) writes a
 secret-free JSON file that references the server and repository by name; **Import** on the Jobs

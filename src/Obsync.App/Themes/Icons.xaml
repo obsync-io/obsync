@@ -24,6 +24,7 @@
     <sys:String x:Key="IconDelete">&#xE74D;</sys:String>
     <sys:String x:Key="IconBack">&#xE72B;</sys:String>
     <sys:String x:Key="IconRefresh">&#xE72C;</sys:String>
+    <sys:String x:Key="IconUpdate">&#xE777;</sys:String>
     <sys:String x:Key="IconOpenExternal">&#xE8A7;</sys:String>
     <sys:String x:Key="IconExport">&#xE896;</sys:String>
     <sys:String x:Key="IconImport">&#xE8B5;</sys:String>

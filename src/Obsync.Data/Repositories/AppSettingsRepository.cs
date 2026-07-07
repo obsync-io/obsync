@@ -40,6 +40,14 @@ public interface IAppSettingsRepository
     /// <summary>When the app last checked for scheduled-run failures (drives the startup summary toast).</summary>
     Task<DateTimeOffset?> GetLastFailureCheckAsync(CancellationToken cancellationToken = default);
     Task SetLastFailureCheckAsync(DateTimeOffset timestamp, CancellationToken cancellationToken = default);
+
+    /// <summary>When the app last checked GitHub for a newer release (throttles the startup check to once per 24h).</summary>
+    Task<DateTimeOffset?> GetLastUpdateCheckAsync(CancellationToken cancellationToken = default);
+    Task SetLastUpdateCheckAsync(DateTimeOffset timestamp, CancellationToken cancellationToken = default);
+
+    /// <summary>The newest release version already announced by a startup toast, so a given version is announced at most once.</summary>
+    Task<string?> GetLastNotifiedUpdateVersionAsync(CancellationToken cancellationToken = default);
+    Task SetLastNotifiedUpdateVersionAsync(string version, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IAppSettingsRepository" />
@@ -53,6 +61,8 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     private const string WorkspacesRootKey = "workspacesRoot";
     private const string NotifyRunFailuresKey = "notifyRunFailures";
     private const string LastFailureCheckKey = "lastFailureCheck";
+    private const string LastUpdateCheckKey = "lastUpdateCheck";
+    private const string LastNotifiedUpdateVersionKey = "lastNotifiedUpdateVersion";
 
     private static readonly IReadOnlyList<string> DefaultProductionTags = ["prod", "production"];
 
@@ -128,6 +138,24 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
 
     public Task SetLastFailureCheckAsync(DateTimeOffset timestamp, CancellationToken cancellationToken = default) =>
         SetValueAsync(LastFailureCheckKey, timestamp.ToString("O"), cancellationToken);
+
+    public async Task<DateTimeOffset?> GetLastUpdateCheckAsync(CancellationToken cancellationToken = default)
+    {
+        var value = await GetValueAsync(LastUpdateCheckKey, cancellationToken).ConfigureAwait(false);
+        return DateTimeOffset.TryParse(value, out var timestamp) ? timestamp : null;
+    }
+
+    public Task SetLastUpdateCheckAsync(DateTimeOffset timestamp, CancellationToken cancellationToken = default) =>
+        SetValueAsync(LastUpdateCheckKey, timestamp.ToString("O"), cancellationToken);
+
+    public async Task<string?> GetLastNotifiedUpdateVersionAsync(CancellationToken cancellationToken = default)
+    {
+        var value = await GetValueAsync(LastNotifiedUpdateVersionKey, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
+
+    public Task SetLastNotifiedUpdateVersionAsync(string version, CancellationToken cancellationToken = default) =>
+        SetValueAsync(LastNotifiedUpdateVersionKey, version, cancellationToken);
 
     private async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken)
     {

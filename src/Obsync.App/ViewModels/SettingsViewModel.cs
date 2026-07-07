@@ -29,6 +29,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     private readonly ICredentialStore _credentials;
     private readonly IProxyProvider _proxy;
     private readonly IRunAlertService _alerts;
+    private readonly IUpdateChecker _updates;
 
     public SettingsViewModel(
         IAuditWriter audit,
@@ -37,7 +38,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         IAppSettingsRepository settings,
         ICredentialStore credentials,
         IProxyProvider proxy,
-        IRunAlertService alerts)
+        IRunAlertService alerts,
+        IUpdateChecker updates)
     {
         _audit = audit;
         _diagnostics = diagnostics;
@@ -46,6 +48,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         _credentials = credentials;
         _proxy = proxy;
         _alerts = alerts;
+        _updates = updates;
     }
 
     public string DataRoot => ObsyncPaths.Root;
@@ -56,6 +59,60 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
 
     /// <summary>The most recent audit-trail entries, newest first.</summary>
     public ObservableCollection<AuditEvent> RecentActivity { get; } = [];
+
+    // --- Check for updates ------------------------------------------------------------------------
+
+    [ObservableProperty] private string? _updateStatus;
+
+    /// <summary>The latest release's page when a manual check found an update; drives the "View release" link.</summary>
+    [ObservableProperty] private string? _updateReleaseUrl;
+
+    [RelayCommand]
+    private async Task CheckForUpdatesAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        UpdateReleaseUrl = null;
+        UpdateStatus = "Checking for updates…";
+        try
+        {
+            var result = await _updates.CheckAsync();
+            if (result.Error is { } error)
+            {
+                UpdateStatus = $"Could not check for updates — {error}";
+            }
+            else if (result.IsUpdateAvailable)
+            {
+                UpdateStatus = $"Obsync {result.LatestVersion} is available.";
+                UpdateReleaseUrl = result.ReleaseUrl;
+            }
+            else
+            {
+                UpdateStatus = $"You're on the latest version ({VersionInfo.Of(typeof(App).Assembly)}).";
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus = $"Could not check for updates — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private void OpenReleasePage()
+    {
+        if (UpdateReleaseUrl is { } url)
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+    }
 
     // --- Diagnostics + support bundle -----------------------------------------------------------
 
