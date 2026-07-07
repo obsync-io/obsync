@@ -1,6 +1,56 @@
 <UserControl x:Class="Obsync.App.Views.JobDetailView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <!-- A full-width clickable row in the Dependencies tab's result lists. -->
+        <Style x:Key="DependencyRow" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}" />
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True" />
+                                    <Condition Property="IsEnabled" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelBrush}" />
+                                <Setter Property="Cursor" Value="Hand" />
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- One direction of the dependency results (Used by / Uses). -->
+        <DataTemplate x:Key="DependencyListTemplate">
+            <Button Style="{StaticResource DependencyRow}" IsEnabled="{Binding IsDrillable}"
+                    ToolTip="Explore this object's dependencies"
+                    Command="{Binding DataContext.Dependencies.DrillIntoCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    CommandParameter="{Binding}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding QualifiedName}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" ToolTip="{Binding QualifiedName}" />
+                    <TextBlock Grid.Column="1" Text="{Binding TypeLabel}" Style="{StaticResource Muted}"
+                               VerticalAlignment="Center" Margin="10,0,0,0" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+    </UserControl.Resources>
     <Grid Margin="{StaticResource PagePadding}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -279,6 +329,139 @@
                             </DataGrid.Columns>
                         </DataGrid>
                     </DockPanel>
+                </Border>
+            </TabItem>
+
+            <!-- Dependencies -->
+            <TabItem Header="Dependencies" DataContext="{Binding Dependencies}">
+                <Border Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Pickers -->
+                        <Grid Grid.Row="0" Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox Grid.Column="0" ItemsSource="{Binding Databases}" SelectedItem="{Binding SelectedDatabase}"
+                                      ToolTip="Database (from the job's last sync)" Margin="0,0,10,0" />
+                            <TextBox Grid.Column="1" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Search the job's indexed objects by name or schema.name">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                        <Style.Resources>
+                                            <VisualBrush x:Key="SearchHint" AlignmentX="Left" AlignmentY="Center" Stretch="None">
+                                                <VisualBrush.Visual>
+                                                    <TextBlock Text="Search objects…" Foreground="{StaticResource TextMutedBrush}"
+                                                               FontFamily="{StaticResource AppFontFamily}" FontSize="13" Margin="10,0,0,0" />
+                                                </VisualBrush.Visual>
+                                            </VisualBrush>
+                                        </Style.Resources>
+                                        <Style.Triggers>
+                                            <Trigger Property="Text" Value="">
+                                                <Setter Property="Background" Value="{StaticResource SearchHint}" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+                        </Grid>
+
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="300" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Object picker (top matches from the local index) -->
+                            <Border Grid.Column="0" Background="{StaticResource PanelBrush}" CornerRadius="8" Padding="4" Margin="0,0,14,0">
+                                <ListBox ItemsSource="{Binding SearchResults}" SelectedItem="{Binding SelectedObject}"
+                                         Background="Transparent" BorderThickness="0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         VirtualizingPanel.VirtualizationMode="Recycling">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="6,3">
+                                                <TextBlock TextTrimming="CharacterEllipsis">
+                                                    <Run Text="{Binding SchemaName, Mode=OneWay}" Foreground="{StaticResource TextMutedBrush}" /><Run Text="." Foreground="{StaticResource TextMutedBrush}" /><Run Text="{Binding ObjectName, Mode=OneWay}" />
+                                                </TextBlock>
+                                                <TextBlock Text="{Binding ObjectType, Converter={StaticResource EnumDisplay}}" Style="{StaticResource Caption}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Border>
+
+                            <!-- Results -->
+                            <Grid Grid.Column="1">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="380">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasResults}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="Pick an object to explore" Style="{StaticResource SectionTitle}"
+                                               HorizontalAlignment="Center" TextAlignment="Center" />
+                                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" TextAlignment="Center" Margin="0,6,0,0"
+                                               Text="See what depends on it before you change it — and what it uses. Read directly from the server's catalog, read-only." />
+                                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" TextWrapping="Wrap"
+                                               TextAlignment="Center" Margin="0,10,0,0"
+                                               Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+                                    <TextBlock Text="Loading…" Style="{StaticResource Muted}" HorizontalAlignment="Center" Margin="0,10,0,0"
+                                               Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibility}}" />
+                                </StackPanel>
+
+                                <Grid Visibility="{Binding HasResults, Converter={StaticResource BoolToVisibility}}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Grid.Row="0" Margin="2,0,0,12">
+                                        <TextBlock Text="{Binding CurrentObjectLabel}" Style="{StaticResource SectionTitle}" />
+                                        <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                                   Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+                                    </StackPanel>
+
+                                    <Grid Grid.Row="1">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="14" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <DockPanel Grid.Column="0">
+                                            <StackPanel DockPanel.Dock="Top" Margin="2,0,0,8">
+                                                <TextBlock Text="Used by" Style="{StaticResource BodyStrong}" />
+                                                <TextBlock Text="{Binding UsedBySummary}" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                                <ItemsControl ItemsSource="{Binding UsedBy}" ItemTemplate="{StaticResource DependencyListTemplate}" />
+                                            </ScrollViewer>
+                                        </DockPanel>
+
+                                        <DockPanel Grid.Column="2">
+                                            <StackPanel DockPanel.Dock="Top" Margin="2,0,0,8">
+                                                <TextBlock Text="Uses" Style="{StaticResource BodyStrong}" />
+                                                <TextBlock Text="{Binding UsesSummary}" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                                <ItemsControl ItemsSource="{Binding Uses}" ItemTemplate="{StaticResource DependencyListTemplate}" />
+                                            </ScrollViewer>
+                                        </DockPanel>
+                                    </Grid>
+                                </Grid>
+                            </Grid>
+                        </Grid>
+                    </Grid>
                 </Border>
             </TabItem>
 

@@ -31,6 +31,9 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IAppSettingsRepository _settings;
     private readonly IJobConfigPorter _porter;
 
+    /// <summary>The Dependencies tab's own state (object picker + live dependency lookups).</summary>
+    public DependencyExplorerViewModel Dependencies { get; }
+
     private readonly List<SyncRunLog> _allLogs = [];
     private GitRepositoryProfile? _repository;
     private JobRunState? _runState;
@@ -96,7 +99,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IShellNavigator navigator,
         IRunReportWriter reportWriter,
         IAppSettingsRepository settings,
-        IJobConfigPorter porter)
+        IJobConfigPorter porter,
+        DependencyExplorerViewModel dependencies)
     {
         _jobs = jobs;
         _runs = runs;
@@ -107,6 +111,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _reportWriter = reportWriter;
         _settings = settings;
         _porter = porter;
+        Dependencies = dependencies;
     }
 
     /// <summary>Exports this job's configuration as portable, secret-free JSON.</summary>
@@ -197,6 +202,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
         var connection = await _connections.GetAsync(job.ConnectionProfileId);
         _repository = job.RepositoryProfileId is { } repoId ? await _repositories.GetAsync(repoId) : null;
+        await Dependencies.InitializeAsync(job, connection);
 
         ConnectionName = connection?.Name ?? "—";
         ServerName = connection?.ServerName ?? "—";

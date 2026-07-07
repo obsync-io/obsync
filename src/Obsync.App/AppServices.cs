@@ -56,6 +56,7 @@ public static class AppServices
         services.AddTransient<ServerDialogViewModel>();
         services.AddTransient<RepositoryDialogViewModel>();
         services.AddTransient<JobDetailViewModel>();
+        services.AddTransient<DependencyExplorerViewModel>();
         services.AddTransient<ScriptDiffViewModel>();
         services.AddSingleton<MainWindow>();
 

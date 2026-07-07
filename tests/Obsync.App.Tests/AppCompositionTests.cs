@@ -36,6 +36,7 @@ public sealed class AppCompositionTests
     [InlineData(typeof(SettingsViewModel))]
     [InlineData(typeof(CreateJobViewModel))]
     [InlineData(typeof(JobDetailViewModel))]
+    [InlineData(typeof(DependencyExplorerViewModel))]
     [InlineData(typeof(ScriptDiffViewModel))]
     public void EveryViewModel_ResolvesFromTheContainer(Type viewModelType)
     {

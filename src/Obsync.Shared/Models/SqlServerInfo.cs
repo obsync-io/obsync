@@ -29,3 +29,28 @@ public sealed class SqlTableInfo
     /// <summary>The <c>schema.table</c> form used in the job's reference-table list.</summary>
     public string QualifiedName => $"{Schema}.{Name}";
 }
+
+/// <summary>One related object in a dependency lookup (a dependent or a referenced entity).</summary>
+public sealed class SqlDependencyItem
+{
+    public string Schema { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Friendly kind, e.g. "View", "Stored procedure", "Table (foreign key)".</summary>
+    public string TypeLabel { get; init; } = string.Empty;
+
+    /// <summary>False for cross-database or unresolved references, which cannot be drilled into.</summary>
+    public bool IsDrillable { get; init; } = true;
+
+    public string QualifiedName => string.IsNullOrEmpty(Schema) ? Name : $"{Schema}.{Name}";
+}
+
+/// <summary>Both directions of an object's dependency graph, one level deep.</summary>
+public sealed class SqlObjectDependencies
+{
+    /// <summary>Objects affected by a change to this one: referencing modules, foreign-key tables, triggers.</summary>
+    public IReadOnlyList<SqlDependencyItem> UsedBy { get; init; } = [];
+
+    /// <summary>Entities this object's definition references.</summary>
+    public IReadOnlyList<SqlDependencyItem> Uses { get; init; } = [];
+}

@@ -143,7 +143,10 @@ public sealed class ScriptDiffViewModelTests
             Substitute.For<IConnectionProfileRepository>(), Substitute.For<IRepositoryProfileRepository>(),
             Substitute.For<IJobRunCoordinator>(), Substitute.For<IShellNavigator>(),
             Substitute.For<IRunReportWriter>(), Substitute.For<IAppSettingsRepository>(),
-            Substitute.For<IJobConfigPorter>());
+            Substitute.For<IJobConfigPorter>(),
+            new DependencyExplorerViewModel(
+                Substitute.For<IObjectStateRepository>(), Substitute.For<Obsync.Metadata.ISqlServerProbe>(),
+                Substitute.For<Obsync.Shared.Abstractions.ICredentialStore>()));
         var change = NewChange(ChangeType.Modified);
 
         Assert.False(vm.ViewDiffCommand.CanExecute(change));

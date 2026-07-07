@@ -9,6 +9,17 @@ public interface IObjectStateRepository
     Task<IReadOnlyList<TrackedObjectState>> GetForJobDatabaseAsync(
         Guid jobId, string database, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Searches a job database's indexed objects by name (or <c>schema.name</c>), capped for display.
+    /// An empty query returns the first objects alphabetically. Synthetic engine artifacts are
+    /// excluded — only real catalog objects can have dependencies.
+    /// </summary>
+    Task<IReadOnlyList<TrackedObjectState>> SearchAsync(
+        Guid jobId, string database, string query, int limit, CancellationToken cancellationToken = default);
+
+    /// <summary>The distinct database names a job has indexed objects for.</summary>
+    Task<IReadOnlyList<string>> GetDatabasesForJobAsync(Guid jobId, CancellationToken cancellationToken = default);
+
     Task UpsertAsync(TrackedObjectState state, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -52,6 +63,41 @@ public sealed class ObjectStateRepository : IObjectStateRepository
             $"{SelectColumns} WHERE job_id = $job AND database_name = $db;",
             new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
         return [.. rows.Select(Map)];
+    }
+
+    public async Task<IReadOnlyList<TrackedObjectState>> SearchAsync(
+        Guid jobId, string database, string query, int limit, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        // Escape LIKE wildcards typed by the user, then match name or schema.name. Types >= 60 are
+        // Obsync's synthetic artifacts (inventory/reference data/server objects), not catalog objects.
+        var escaped = query.Trim()
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+        var rows = await connection.QueryAsync<StateRow>(new CommandDefinition(
+            $"""
+            {SelectColumns}
+            WHERE job_id = $job AND database_name = $db AND object_type < 60
+              AND (object_name LIKE $pattern ESCAPE '\' OR (schema_name || '.' || object_name) LIKE $pattern ESCAPE '\')
+            ORDER BY schema_name, object_name LIMIT $limit;
+            """,
+            new { job = jobId.ToString(), db = database, pattern = $"%{escaped}%", limit },
+            cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return [.. rows.Select(Map)];
+    }
+
+    public async Task<IReadOnlyList<string>> GetDatabasesForJobAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var names = await connection.QueryAsync<string>(new CommandDefinition(
+            """
+            SELECT DISTINCT database_name FROM object_states
+            WHERE job_id = $job AND object_type < 60 ORDER BY database_name;
+            """,
+            new { job = jobId.ToString() }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return [.. names];
     }
 
     private const string UpsertSql =
