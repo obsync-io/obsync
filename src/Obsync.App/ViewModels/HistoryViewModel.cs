@@ -6,6 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 using Obsync.App.Services;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
@@ -23,11 +24,16 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
     /// at most this many (the report export always contains the complete list).</summary>
     private const int MaxDiffViewerChanges = 2000;
 
+    /// <summary>How many changed objects a timeline entry shows inline when expanded; the diff
+    /// viewer and report export carry the rest.</summary>
+    private const int MaxInlineChanges = 100;
+
     private readonly IRunRepository _runs;
     private readonly IJobRepository _jobs;
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IRunReportWriter _reportWriter;
     private readonly IAppSettingsRepository _settings;
+    private readonly IClock _clock;
 
     [ObservableProperty] private string _selectedJob = AllJobs;
     [ObservableProperty] private StatusFilterOption _selectedStatus;
@@ -60,18 +66,23 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     public ICollectionView RunsView { get; }
 
+    /// <summary>The timeline projection of the filtered runs, grouped by local day (newest first).</summary>
+    public ObservableCollection<TimelineDay> TimelineDays { get; } = [];
+
     public HistoryViewModel(
         IRunRepository runs,
         IJobRepository jobs,
         IRepositoryProfileRepository repositories,
         IRunReportWriter reportWriter,
-        IAppSettingsRepository settings)
+        IAppSettingsRepository settings,
+        IClock clock)
     {
         _runs = runs;
         _jobs = jobs;
         _repositories = repositories;
         _reportWriter = reportWriter;
         _settings = settings;
+        _clock = clock;
         _selectedStatus = StatusOptions[0];
         RunsView = CollectionViewSource.GetDefaultView(Runs);
         RunsView.Filter = FilterRun;
@@ -102,20 +113,110 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         }
 
         SelectedJob = JobNames.Contains(previous) ? previous : AllJobs;
-        RunsView.Refresh();
+        RefreshViews();
     }
 
-    partial void OnSelectedJobChanged(string value) => RunsView.Refresh();
+    partial void OnSelectedJobChanged(string value) => RefreshViews();
 
-    partial void OnSelectedStatusChanged(StatusFilterOption value) => RunsView.Refresh();
+    partial void OnSelectedStatusChanged(StatusFilterOption value) => RefreshViews();
 
-    partial void OnSearchTextChanged(string value) => RunsView.Refresh();
+    partial void OnSearchTextChanged(string value) => RefreshViews();
 
     partial void OnSelectedRunChanged(SyncRun? value)
     {
         ExportReportCommand.NotifyCanExecuteChanged();
         ViewChangesCommand.NotifyCanExecuteChanged();
+
+        // Keep the timeline highlight in step with the grid (both bind to the same run instances).
+        foreach (var day in TimelineDays)
+        {
+            foreach (var entry in day.Entries)
+            {
+                entry.IsSelected = ReferenceEquals(entry.Run, value);
+            }
+        }
     }
+
+    // The grid filters live via ICollectionView; the timeline is a projection, so rebuild it from
+    // the same filter whenever the inputs change. Expansion state resets by design — the filter
+    // changed, so the reader is looking at a different story.
+    private void RefreshViews()
+    {
+        RunsView.Refresh();
+        var days = TimelineBuilder.Build(Runs.Where(FilterRun), _clock.UtcNow.ToLocalTime().Date);
+        TimelineDays.Clear();
+        foreach (var day in days)
+        {
+            foreach (var entry in day.Entries)
+            {
+                entry.IsSelected = ReferenceEquals(entry.Run, SelectedRun);
+            }
+
+            TimelineDays.Add(day);
+        }
+    }
+
+    /// <summary>Highlights a timeline entry and makes it the target of the header actions.</summary>
+    [RelayCommand]
+    private void SelectEntry(TimelineEntry? entry)
+    {
+        if (entry is not null)
+        {
+            SelectedRun = entry.Run;
+        }
+    }
+
+    /// <summary>Expands/collapses a timeline entry, loading its capped change list on first expand.</summary>
+    [RelayCommand]
+    private async Task ToggleEntryAsync(TimelineEntry? entry)
+    {
+        if (entry is null)
+        {
+            return;
+        }
+
+        SelectedRun = entry.Run;
+        if (entry.IsExpanded)
+        {
+            entry.IsExpanded = false;
+            return;
+        }
+
+        if (!entry.ChangesLoaded)
+        {
+            entry.IsLoadingChanges = true;
+            try
+            {
+                var changes = await _runs.GetChangesAsync(entry.Run.Id, MaxInlineChanges);
+                entry.Changes.Clear();
+                foreach (var change in changes)
+                {
+                    entry.Changes.Add(new TimelineChange(entry, change));
+                }
+
+                entry.TruncationNotice = entry.Run.ChangeCount > changes.Count
+                    ? $"Showing the first {changes.Count:N0} of {entry.Run.ChangeCount:N0} changes — open the diff viewer for the rest."
+                    : null;
+                entry.ChangesLoaded = true;
+            }
+            finally
+            {
+                entry.IsLoadingChanges = false;
+            }
+        }
+
+        entry.IsExpanded = true;
+    }
+
+    /// <summary>Opens the diff viewer for a timeline entry's run (first change preselected).</summary>
+    [RelayCommand]
+    private Task ViewEntryChangesAsync(TimelineEntry? entry) =>
+        entry is { CanDiff: true } ? OpenDiffAsync(entry.Run, preselect: null) : Task.CompletedTask;
+
+    /// <summary>Opens the diff viewer preselected at the clicked object change.</summary>
+    [RelayCommand]
+    private Task OpenTimelineChangeAsync(TimelineChange? change) =>
+        change is { Entry.CanDiff: true } ? OpenDiffAsync(change.Entry.Run, change.Change) : Task.CompletedTask;
 
     private bool CanExportReport() => SelectedRun is not null;
 
@@ -136,22 +237,25 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 
     private bool CanViewChanges() => SelectedRun?.CommitSha is not null;
 
-    // History does not preload a run's changes, so fetch them (and the job's repository, for the
-    // GitHub links) on demand before opening the diff viewer.
     [RelayCommand(CanExecute = nameof(CanViewChanges))]
-    private async Task ViewChangesAsync()
-    {
-        if (SelectedRun is not { CommitSha: not null } run)
-        {
-            return;
-        }
+    private Task ViewChangesAsync() =>
+        SelectedRun is { CommitSha: not null } run ? OpenDiffAsync(run, preselect: null) : Task.CompletedTask;
 
+    // History does not preload a run's changes, so fetch them (and the job's repository, for the
+    // GitHub links) on demand before opening the diff viewer. The preselect is re-found in the
+    // fresh list because the viewer matches by instance.
+    private async Task OpenDiffAsync(SyncRun run, ObjectChange? preselect)
+    {
         var changes = await _runs.GetChangesAsync(run.Id, MaxDiffViewerChanges);
         var job = await _jobs.GetAsync(run.JobId);
         var repository = job?.RepositoryProfileId is { } repositoryId ? await _repositories.GetAsync(repositoryId) : null;
+        var match = preselect is null
+            ? null
+            : changes.FirstOrDefault(c => c.ChangeType == preselect.ChangeType
+                && string.Equals(c.RelativePath, preselect.RelativePath, StringComparison.OrdinalIgnoreCase));
 
         await Views.ScriptDiffWindow.ShowDialogAsync(
-            System.Windows.Application.Current?.MainWindow, run, changes, repository);
+            System.Windows.Application.Current?.MainWindow, run, changes, repository, match);
     }
 
     private bool FilterRun(object item)
@@ -177,7 +281,9 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         {
             var inJob = run.JobName?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
             var inCommit = run.CommitSha?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
-            if (!inJob && !inCommit)
+            var inDatabases = run.Databases?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
+            var inActor = run.TriggeredBy?.Contains(query, StringComparison.OrdinalIgnoreCase) == true;
+            if (!inJob && !inCommit && !inDatabases && !inActor)
             {
                 return false;
             }

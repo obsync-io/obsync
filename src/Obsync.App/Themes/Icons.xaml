@@ -38,6 +38,8 @@
     <sys:String x:Key="IconOpen">&#xE8A7;</sys:String>
     <sys:String x:Key="IconDiff">&#xE8C4;</sys:String>
     <sys:String x:Key="IconCopy">&#xE8C8;</sys:String>
+    <sys:String x:Key="IconChevronDown">&#xE70D;</sys:String>
+    <sys:String x:Key="IconChevronUp">&#xE70E;</sys:String>
 
     <!-- Base style for an inline icon glyph. -->
     <Style x:Key="Icon" TargetType="TextBlock">
