@@ -1,0 +1,86 @@
+<Window x:Class="Obsync.App.Views.AddRepositoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding Title}" Width="560" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Icon="pack://application:,,,/Obsync.App;component/Assets/Obsync_Icon.png"
+        Background="{StaticResource AppBackgroundBrush}"
+        Foreground="{StaticResource TextPrimaryBrush}"
+        FontFamily="{StaticResource AppFontFamily}"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
+    <Grid Margin="28">
+        <StackPanel>
+            <TextBlock Text="{Binding Title}" Style="{StaticResource PageTitle}" />
+            <TextBlock Text="A GitHub repository your sync jobs commit to." Style="{StaticResource Muted}" Margin="0,4,0,20" />
+
+            <TextBlock Text="DISPLAY NAME" Style="{StaticResource Caption}" />
+            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+            <Grid Margin="0,0,0,3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="OWNER" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding Owner, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="REPOSITORY NAME" Style="{StaticResource Caption}" />
+                    <TextBox Text="{Binding RepositoryName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0" />
+                </StackPanel>
+            </Grid>
+            <TextBlock Text="as in github.com/OWNER/REPOSITORY-NAME" Style="{StaticResource Caption}" Margin="0,0,0,16" />
+
+            <TextBlock Text="DEFAULT BRANCH" Style="{StaticResource Caption}" />
+            <TextBox Text="{Binding DefaultBranch, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+            <TextBlock Text="{Binding TokenHint}" Style="{StaticResource Caption}" />
+            <PasswordBox x:Name="TokenBox" PasswordChanged="OnTokenChanged" Margin="0,4,0,3" />
+            <TextBlock Text="Needs Contents: read and write on this repository. Stored in Windows Credential Manager."
+                       Style="{StaticResource Caption}" Margin="0,0,0,16" />
+
+            <!-- Token permission checklist (populated by Validate) -->
+            <Border Style="{StaticResource Panel}" Margin="0,0,0,14"
+                    Visibility="{Binding PermissionChecks.Count, Converter={StaticResource CountToVisibility}}">
+                <ItemsControl ItemsSource="{Binding PermissionChecks}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <TextBlock Width="20" FontWeight="Bold" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="&#x2715;" />
+                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Ok}" Value="True">
+                                                    <Setter Property="Text" Value="&#x2713;" />
+                                                    <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+            <TextBlock Text="{Binding ValidationResult}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,14"
+                       Visibility="{Binding ValidationResult, Converter={StaticResource NullToVisibility}}" />
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Cancel" Style="{StaticResource SubtleButton}" Click="OnCancel" Margin="0,0,8,0" />
+                <Button Content="Validate" Style="{StaticResource SecondaryButton}" Command="{Binding ValidateCommand}" Margin="0,0,8,0"
+                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"
+                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Window>

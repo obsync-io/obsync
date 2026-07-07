@@ -4,55 +4,76 @@
     <Grid Margin="28,24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0">
-            <TextBlock Text="Repositories" Style="{StaticResource PageTitle}" />
-            <TextBlock Text="GitHub repositories your jobs commit to" Style="{StaticResource Muted}" Margin="0,4,0,18" />
-        </StackPanel>
+        <!-- Header -->
+        <Grid Grid.Row="0">
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Repositories" Style="{StaticResource PageTitle}" />
+                <TextBlock Text="The GitHub repositories your sync jobs commit to" Style="{StaticResource Muted}" Margin="0,4,0,0" />
+            </StackPanel>
+            <Button Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="OnAddRepository">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconAdd}" Foreground="White" FontSize="14" />
+                    <TextBlock Text="Add repository" Margin="8,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </Grid>
 
-        <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="400" />
-            </Grid.ColumnDefinitions>
+        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0" TextWrapping="Wrap"
+                   Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
 
-            <!-- Existing repositories -->
-            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,18,0" Padding="0">
-                <Grid>
-                <DataGrid ItemsSource="{Binding Repositories}"
+        <!-- Repositories table -->
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0" Padding="0">
+            <Grid>
+                <DataGrid ItemsSource="{Binding Repositories}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                           Visibility="{Binding Repositories.Count, Converter={StaticResource CountToVisibility}}">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" MinWidth="90">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="VerticalAlignment" Value="Center" />
-                                    <Setter Property="ToolTip" Value="{Binding Name}" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
-                        <DataGridTextColumn Header="Repository" Binding="{Binding FullName}" Width="*" MinWidth="110">
-                            <DataGridTextColumn.ElementStyle>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="TextTrimming" Value="CharacterEllipsis" />
-                                    <Setter Property="VerticalAlignment" Value="Center" />
-                                    <Setter Property="ToolTip" Value="{Binding FullName}" />
-                                </Style>
-                            </DataGridTextColumn.ElementStyle>
-                        </DataGridTextColumn>
-                        <DataGridTextColumn Header="Branch" Binding="{Binding DefaultBranch}" Width="Auto" />
-                        <DataGridTemplateColumn Header="" Width="88">
+                        <DataGridTemplateColumn Header="Name" Width="1.3*" MinWidth="90">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit" AutomationProperties.Name="Edit"
-                                                Command="{Binding DataContext.EditCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                    <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Repository" Width="2*" MinWidth="130">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" FontSize="13" Margin="0,0,8,0" />
+                                        <TextBlock Text="{Binding FullName}" Style="{StaticResource Body}" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding FullName}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Default branch" Width="1*" MinWidth="100">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconBranch}" FontSize="13" Margin="0,0,6,0" />
+                                        <TextBlock Text="{Binding DefaultBranch}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Actions" Width="128">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Check token" AutomationProperties.Name="Check token"
+                                                IsEnabled="{Binding DataContext.IsBusy, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource InverseBool}}"
+                                                Command="{Binding DataContext.CheckTokenCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRefresh}" />
+                                        </Button>
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Edit" AutomationProperties.Name="Edit" Margin="2,0,0,0" Click="OnEditRepository">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconEdit}" />
                                         </Button>
-                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" AutomationProperties.Name="Delete" Click="OnDeleteRepo">
+                                        <Button Style="{StaticResource IconButton}" ToolTip="Delete" AutomationProperties.Name="Delete" Margin="2,0,0,0" Click="OnDeleteRepository">
                                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDelete}" />
                                         </Button>
                                     </StackPanel>
@@ -63,7 +84,7 @@
                 </DataGrid>
 
                 <!-- Empty state -->
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360" Margin="24">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="380" Margin="24">
                     <StackPanel.Style>
                         <Style TargetType="StackPanel">
                             <Setter Property="Visibility" Value="Collapsed" />
@@ -78,68 +99,10 @@
                         <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" FontSize="24" Foreground="{StaticResource TextMutedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <TextBlock Text="No repositories yet" Style="{StaticResource SectionTitle}" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,16,0,0" />
-                    <TextBlock Text="Add your first GitHub repository using the form on the right." Style="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <TextBlock Text="Add a GitHub repository for your sync jobs to commit database scripts to." Style="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    <Button Content="Add repository" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Margin="0,18,0,0" Click="OnAddRepository" />
                 </StackPanel>
-                </Grid>
-            </Border>
-
-            <!-- Add / edit -->
-            <Border Grid.Column="1" Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="{Binding EditorTitle}" Style="{StaticResource SectionTitle}" Margin="0,0,0,18" />
-
-                    <TextBlock Text="NAME" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <TextBlock Text="OWNER" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding Owner, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <TextBlock Text="REPOSITORY NAME" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding RepositoryName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <TextBlock Text="DEFAULT BRANCH" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding DefaultBranch, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <TextBlock Text="{Binding TokenHint}" Style="{StaticResource Caption}" />
-                    <PasswordBox x:Name="TokenBox" PasswordChanged="OnTokenChanged" Margin="0,4,0,18" />
-
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="Validate" Style="{StaticResource SecondaryButton}" Command="{Binding ValidateCommand}" Margin="0,0,8,0"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                        <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                        <Button Content="Cancel" Style="{StaticResource SubtleButton}" Command="{Binding CancelEditCommand}"
-                                Margin="8,0,0,0" Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}" />
-                    </StackPanel>
-
-                    <ItemsControl ItemsSource="{Binding PermissionChecks}" Margin="0,16,0,0"
-                                  Visibility="{Binding PermissionChecks.Count, Converter={StaticResource CountToVisibility}}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                                    <TextBlock Width="20" FontWeight="Bold" VerticalAlignment="Center">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Text" Value="&#x2715;" />
-                                                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Ok}" Value="True">
-                                                        <Setter Property="Text" Value="&#x2713;" />
-                                                        <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <TextBlock Text="{Binding ValidationResult}" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,16,0,0" />
-                </StackPanel>
-            </Border>
-        </Grid>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

@@ -7,43 +7,24 @@ namespace Obsync.App.Views;
 
 public partial class RepositoriesView : UserControl
 {
-    private RepositoriesViewModel? _subscribed;
+    public RepositoriesView() => InitializeComponent();
 
-    public RepositoriesView()
+    private async void OnAddRepository(object sender, RoutedEventArgs e)
     {
-        InitializeComponent();
-
-        // Subscribe on Loaded / unsubscribe on Unloaded so the (singleton) view model does not
-        // retain this recreated-per-navigation view — and its secret-bearing PasswordBox — after
-        // the user navigates away.
-        Loaded += OnLoaded;
-        Unloaded += OnUnloaded;
+        await AddRepositoryWindow.ShowDialogAsync(Window.GetWindow(this));
+        await ReloadAsync();
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private async void OnEditRepository(object sender, RoutedEventArgs e)
     {
-        Unsubscribe();
-        if (DataContext is RepositoriesViewModel viewModel)
+        if (((FrameworkElement)sender).DataContext is GitRepositoryProfile repository)
         {
-            _subscribed = viewModel;
-            viewModel.SecretInputShouldClear += OnSecretInputShouldClear;
+            await AddRepositoryWindow.ShowDialogAsync(Window.GetWindow(this), repository);
+            await ReloadAsync();
         }
     }
 
-    private void OnUnloaded(object sender, RoutedEventArgs e) => Unsubscribe();
-
-    private void Unsubscribe()
-    {
-        if (_subscribed is not null)
-        {
-            _subscribed.SecretInputShouldClear -= OnSecretInputShouldClear;
-            _subscribed = null;
-        }
-    }
-
-    private void OnSecretInputShouldClear(object? sender, EventArgs e) => TokenBox.Clear();
-
-    private void OnDeleteRepo(object sender, RoutedEventArgs e)
+    private void OnDeleteRepository(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is GitRepositoryProfile repository && DataContext is RepositoriesViewModel viewModel)
         {
@@ -56,11 +37,11 @@ public partial class RepositoriesView : UserControl
         }
     }
 
-    private void OnTokenChanged(object sender, RoutedEventArgs e)
+    private async Task ReloadAsync()
     {
-        if (DataContext is RepositoriesViewModel viewModel && sender is PasswordBox box)
+        if (DataContext is RepositoriesViewModel viewModel)
         {
-            viewModel.Token = box.Password;
+            await viewModel.LoadAsync();
         }
     }
 }

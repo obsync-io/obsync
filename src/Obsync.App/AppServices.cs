@@ -54,6 +54,7 @@ public static class AppServices
         services.AddSingleton<SettingsViewModel>();
         services.AddTransient<CreateJobViewModel>();
         services.AddTransient<ServerDialogViewModel>();
+        services.AddTransient<RepositoryDialogViewModel>();
         services.AddTransient<JobDetailViewModel>();
         services.AddTransient<ScriptDiffViewModel>();
         services.AddSingleton<MainWindow>();

@@ -31,6 +31,7 @@ public sealed class AppCompositionTests
     [InlineData(typeof(ServersViewModel))]
     [InlineData(typeof(ServerDialogViewModel))]
     [InlineData(typeof(RepositoriesViewModel))]
+    [InlineData(typeof(RepositoryDialogViewModel))]
     [InlineData(typeof(HistoryViewModel))]
     [InlineData(typeof(SettingsViewModel))]
     [InlineData(typeof(CreateJobViewModel))]

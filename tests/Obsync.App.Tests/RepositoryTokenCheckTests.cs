@@ -16,7 +16,7 @@ namespace Obsync.App.Tests;
 /// </summary>
 public sealed class RepositoryTokenCheckTests
 {
-    private static RepositoriesViewModel CreateVm(IGitHubService gitHub) => new(
+    private static RepositoryDialogViewModel CreateVm(IGitHubService gitHub) => new(
         Substitute.For<IRepositoryProfileRepository>(), gitHub,
         Substitute.For<ICredentialStore>(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
 
