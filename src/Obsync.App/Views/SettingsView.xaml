@@ -388,7 +388,15 @@
                 <StackPanel>
                     <TextBlock Text="Recent activity" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
                     <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="Who did what, attributed to the Windows identity that performed the action." />
+                               Text="Who did what, attributed to the Windows identity that performed the action. The export writes the complete audit history as CSV or JSON." />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button Content="Export audit log" Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ExportAuditLogCommand}"
+                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding AuditExportStatus}" Style="{StaticResource Muted}" Margin="0,0,0,12" TextWrapping="Wrap"
+                               Visibility="{Binding AuditExportStatus, Converter={StaticResource NullToVisibility}}" />
 
                     <ItemsControl ItemsSource="{Binding RecentActivity}"
                                   Visibility="{Binding RecentActivity.Count, Converter={StaticResource CountToVisibility}}">

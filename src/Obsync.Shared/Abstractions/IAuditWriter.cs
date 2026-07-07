@@ -20,4 +20,7 @@ public interface IAuditWriter
 
     /// <summary>The most recent audit events, newest first.</summary>
     Task<IReadOnlyList<AuditEvent>> GetRecentAsync(int limit = 100, CancellationToken cancellationToken = default);
+
+    /// <summary>The complete audit trail, newest first — for compliance export.</summary>
+    Task<IReadOnlyList<AuditEvent>> GetAllAsync(CancellationToken cancellationToken = default);
 }

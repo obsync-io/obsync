@@ -60,6 +60,32 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     /// <summary>The most recent audit-trail entries, newest first.</summary>
     public ObservableCollection<AuditEvent> RecentActivity { get; } = [];
 
+    [ObservableProperty] private string? _auditExportStatus;
+
+    /// <summary>Exports the complete audit trail as CSV or JSON for compliance review.</summary>
+    [RelayCommand]
+    private async Task ExportAuditLogAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var status = await AuditLogExport.PromptAndWriteAsync(_audit);
+            if (status is not null)
+            {
+                AuditExportStatus = status;
+            }
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     // --- Check for updates ------------------------------------------------------------------------
 
     [ObservableProperty] private string? _updateStatus;

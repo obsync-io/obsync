@@ -70,6 +70,22 @@ public sealed class AuditLogTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task GetAll_ReturnsTheCompleteTrail_NewestFirst()
+    {
+        var writer = CreateWriter();
+        for (var i = 0; i < 5; i++)
+        {
+            await writer.WriteAsync(AuditAction.RunCompleted, "Job", Guid.NewGuid().ToString(), $"Job {i}");
+        }
+
+        var events = await writer.GetAllAsync();
+
+        Assert.Equal(5, events.Count);
+        Assert.Equal("Job 4", events[0].EntityName); // written last → first
+        Assert.Equal("Job 0", events[4].EntityName);
+    }
+
+    [Fact]
     public async Task Run_TriggeredBy_RoundTrips()
     {
         var connection = new SqlConnectionProfile { Name = "c", ServerName = "s" };

@@ -50,6 +50,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IObjectHasher _hasher;
     private readonly IObjectFilePathMapper _pathMapper;
     private readonly IRunAlertService _alerts;
+    private readonly IAuditWriter _audit;
     private readonly IClock _clock;
     private readonly ObsyncEngineOptions _options;
     private readonly ILogger<SyncEngine> _logger;
@@ -76,6 +77,7 @@ public sealed class SyncEngine : ISyncEngine
         IObjectHasher hasher,
         IObjectFilePathMapper pathMapper,
         IRunAlertService alerts,
+        IAuditWriter audit,
         IClock clock,
         IOptions<ObsyncEngineOptions> options,
         ILogger<SyncEngine> logger)
@@ -101,6 +103,7 @@ public sealed class SyncEngine : ISyncEngine
         _hasher = hasher;
         _pathMapper = pathMapper;
         _alerts = alerts;
+        _audit = audit;
         _clock = clock;
         _options = options.Value;
         _logger = logger;
@@ -224,6 +227,16 @@ public sealed class SyncEngine : ISyncEngine
                 // Standard cadences compute a preview here; the scheduler refines cron next-runs.
                 NextRunAt = job.Schedule.GetNextRun(completed) ?? job.RunSummary.NextRunAt,
             }, persistToken).ConfigureAwait(false);
+
+            // One audit event per run outcome, written here so scheduled/service runs are covered
+            // too (they never pass through the app's coordinator). The actor is the account that
+            // executed the run — the interactive user for Run Now, the service account otherwise;
+            // the detail carries the trigger, change count, commit, and error so the trail answers
+            // "what ran, what changed, and did the push succeed" on its own.
+            await _audit.WriteAsync(
+                run.Status == RunStatus.Failed ? AuditAction.RunFailed : AuditAction.RunCompleted,
+                "Job", job.Id.ToString(), job.Name,
+                $"{run.Trigger} run {run.RunKey} {OutcomeSummary(run)}", persistToken).ConfigureAwait(false);
         }
 
         // Best-effort alerting (email/webhook) after the run is fully persisted, with a
@@ -239,6 +252,23 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         return run;
+    }
+
+    // The human-readable outcome for the run's audit event.
+    private static string OutcomeSummary(SyncRun run)
+    {
+        var summary = run.Status switch
+        {
+            RunStatus.Succeeded => $"succeeded — {run.ChangeCount} changes",
+            RunStatus.NoChanges => "completed — no changes",
+            RunStatus.Warning => $"completed with warnings — {run.ChangeCount} changes, {run.ObjectsFailed} objects failed",
+            RunStatus.Cancelled => "was cancelled",
+            RunStatus.Failed => $"failed — {run.ErrorMessage}",
+            _ => run.Status.ToString(),
+        };
+        return run.CommitSha is { Length: > 0 } sha
+            ? $"{summary}, commit {sha[..Math.Min(7, sha.Length)]}"
+            : summary;
     }
 
     private async Task ExecuteAsync(SyncRun run, RunContext context, CancellationToken cancellationToken)

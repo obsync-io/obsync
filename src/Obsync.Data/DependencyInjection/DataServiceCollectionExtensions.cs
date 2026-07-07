@@ -27,6 +27,10 @@ public static class DataServiceCollectionExtensions
         services.TryAddSingleton<IScriptingWatermarkRepository, ScriptingWatermarkRepository>();
         services.TryAddSingleton<IAppSettingsRepository, AppSettingsRepository>();
 
+        // Enterprise audit trail — shared by both hosts: the app audits profile/job changes and
+        // manual runs, the engine audits every run outcome (so scheduled/service runs appear too).
+        services.TryAddSingleton<Obsync.Shared.Abstractions.IAuditWriter, AuditWriter>();
+
         // Resolves the configured proxy for outbound GitHub calls; used by GitHubService + the engine.
         // (Depends on ICredentialStore from AddObsyncSecurity, which both composition roots register.)
         services.TryAddSingleton<Obsync.Shared.Abstractions.IProxyProvider, ProxyProvider>();

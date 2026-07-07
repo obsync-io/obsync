@@ -44,30 +44,41 @@ public sealed class AuditWriter : IAuditWriter
             cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
+    private const string Select =
+        """
+        SELECT id AS Id, occurred_at AS OccurredAt, actor AS Actor, action AS Action,
+               entity_type AS EntityType, entity_id AS EntityId, entity_name AS EntityName, detail AS Detail
+        FROM audit_log ORDER BY id DESC
+        """;
+
     public async Task<IReadOnlyList<AuditEvent>> GetRecentAsync(int limit = 100, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<AuditRow>(new CommandDefinition(
-            """
-            SELECT id AS Id, occurred_at AS OccurredAt, actor AS Actor, action AS Action,
-                   entity_type AS EntityType, entity_id AS EntityId, entity_name AS EntityName, detail AS Detail
-            FROM audit_log ORDER BY id DESC LIMIT $limit;
-            """,
-            new { limit }, cancellationToken: cancellationToken)).ConfigureAwait(false);
-
-        return [.. rows.Select(r => new AuditEvent
-        {
-            Id = r.Id,
-            OccurredAt = r.OccurredAt,
-            Actor = r.Actor,
-            // Stored as the enum name; tolerate an unknown value rather than throwing on read.
-            Action = Enum.TryParse<AuditAction>(r.Action, out var a) ? a : default,
-            EntityType = r.EntityType,
-            EntityId = r.EntityId,
-            EntityName = r.EntityName,
-            Detail = r.Detail,
-        })];
+            $"{Select} LIMIT $limit;", new { limit }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return [.. rows.Select(Map)];
     }
+
+    public async Task<IReadOnlyList<AuditEvent>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<AuditRow>(new CommandDefinition(
+            $"{Select};", cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return [.. rows.Select(Map)];
+    }
+
+    private static AuditEvent Map(AuditRow r) => new()
+    {
+        Id = r.Id,
+        OccurredAt = r.OccurredAt,
+        Actor = r.Actor,
+        // Stored as the enum name; tolerate an unknown value rather than throwing on read.
+        Action = Enum.TryParse<AuditAction>(r.Action, out var a) ? a : default,
+        EntityType = r.EntityType,
+        EntityId = r.EntityId,
+        EntityName = r.EntityName,
+        Detail = r.Detail,
+    };
 
     private sealed class AuditRow
     {

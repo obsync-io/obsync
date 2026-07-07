@@ -110,8 +110,9 @@ public sealed class JobRunCoordinator : IJobRunCoordinator
 
         try
         {
-            // Record who started a manual run. Scheduled runs are attributed via runs.triggered_by,
-            // written by the engine — the coordinator only handles app-initiated (manual) runs.
+            // Record who started a manual run. The engine audits every run's OUTCOME (all triggers,
+            // both hosts) — this start event exists only for manual runs, where the user's intent
+            // to run is itself the audited action.
             if (trigger == RunTrigger.Manual)
             {
                 await _audit.WriteAsync(AuditAction.RunStarted, "Job", jobId.ToString(), null, "Manual run", cancellationToken)

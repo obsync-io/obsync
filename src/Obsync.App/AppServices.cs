@@ -27,10 +27,6 @@ public static class AppServices
         // Confirms a manual run against a production-tagged job (keyed off the configurable markers).
         services.AddSingleton<IProductionRunGuard, ProductionRunGuard>();
 
-        // Enterprise audit trail. Registered here (app composition root) because every audited
-        // action originates in the app; the writer stamps the actor and timestamp itself.
-        services.AddSingleton<IAuditWriter, AuditWriter>();
-
         // Supportability: environment health checks and the secret-masked support bundle.
         services.AddSingleton<IDiagnosticsService, DiagnosticsService>();
         services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();

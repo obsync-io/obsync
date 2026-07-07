@@ -112,6 +112,12 @@ public enum AuditAction
     JobEdited,
     JobDeleted,
     RunStarted,
+
+    /// <summary>A run finished (succeeded, no changes, warnings, or cancelled) — written by the engine for every trigger.</summary>
+    RunCompleted,
+
+    /// <summary>A run failed — written by the engine for every trigger.</summary>
+    RunFailed,
     ServerAdded,
     ServerEdited,
     ServerDeleted,
