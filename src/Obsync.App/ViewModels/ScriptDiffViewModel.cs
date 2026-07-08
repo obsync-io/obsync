@@ -37,6 +37,21 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     [ObservableProperty] private bool _isSplitView = true;
     [ObservableProperty] private bool _isLoading;
 
+    // --- Object history (every committed version of the selected file, from the local clone) ----
+
+    [ObservableProperty] private bool _isHistoryVisible;
+    [ObservableProperty] private bool _isHistoryLoading;
+    [ObservableProperty] private IReadOnlyList<ScriptFileVersion> _historyVersions = [];
+
+    /// <summary>The version being viewed; null means the run's own commit (the latest the run saw).</summary>
+    [ObservableProperty] private ScriptFileVersion? _selectedVersion;
+
+    /// <summary>Why the history rail is empty (clone missing, no commits); null when versions show.</summary>
+    [ObservableProperty] private string? _historyMessage;
+
+    /// <summary>The path the loaded history belongs to, so re-toggling never re-runs git for nothing.</summary>
+    private string? _historyPath;
+
     /// <summary>Why the diff can't be shown (workspace missing, commit absent, git failure); null when fine.</summary>
     [ObservableProperty] private string? _errorMessage;
 
@@ -63,10 +78,13 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
 
     public bool HasError => ErrorMessage is not null;
 
-    /// <summary>Only a modified object has two versions to lay side by side or unify.</summary>
-    public bool ShowViewToggle => !HasError && SelectedChange?.ChangeType == ChangeType.Modified;
+    /// <summary>A historical version always diffs against its parent, so it renders as a modification.</summary>
+    private bool ViewedAsModified => SelectedVersion is not null || SelectedChange?.ChangeType == ChangeType.Modified;
 
-    public bool ShowSplit => !IsLoading && !HasError && IsSplitView && SelectedChange?.ChangeType == ChangeType.Modified;
+    /// <summary>Only a modified object has two versions to lay side by side or unify.</summary>
+    public bool ShowViewToggle => !HasError && ViewedAsModified;
+
+    public bool ShowSplit => !IsLoading && !HasError && IsSplitView && ViewedAsModified;
 
     public bool ShowSingle => !IsLoading && !HasError && !ShowSplit && SelectedChange is not null;
 
@@ -93,11 +111,87 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
 
     partial void OnSelectedChangeChanged(ObjectChange? value)
     {
+        // A new object always starts at the run's own version. Reset via the backing field so the
+        // partial hook doesn't schedule a second, redundant diff load.
+        _selectedVersion = null;
+        OnPropertyChanged(nameof(SelectedVersion));
+        OnPropertyChanged(nameof(ViewedVersionText));
+
         RaiseViewStateChanged();
         _diffCts?.Cancel();
         var cts = new CancellationTokenSource();
         _diffCts = cts;
         _diffLoad = LoadDiffAsync(value, cts);
+
+        if (IsHistoryVisible)
+        {
+            _ = LoadHistoryAsync();
+        }
+    }
+
+    partial void OnSelectedVersionChanged(ScriptFileVersion? value)
+    {
+        OnPropertyChanged(nameof(ViewedVersionText));
+        RaiseViewStateChanged();
+        _diffCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _diffCts = cts;
+        _diffLoad = LoadDiffAsync(SelectedChange, cts);
+    }
+
+    partial void OnIsHistoryVisibleChanged(bool value)
+    {
+        if (value)
+        {
+            _ = LoadHistoryAsync();
+        }
+    }
+
+    /// <summary>"Viewing a1b2c3d · 05/07/2026 14:03" when a historical version is selected; null at latest.</summary>
+    public string? ViewedVersionText =>
+        SelectedVersion is { } version ? $"Viewing {version.ShortSha} · {version.Date.LocalDateTime:g}" : null;
+
+    /// <summary>Returns to the run's own version of the selected object.</summary>
+    [RelayCommand]
+    private void ShowLatestVersion() => SelectedVersion = null;
+
+    private async Task LoadHistoryAsync()
+    {
+        if (SelectedChange is not { } change || _repository is null)
+        {
+            HistoryVersions = [];
+            HistoryMessage = _repository is null
+                ? "This run has no Git repository, so there is no committed history."
+                : null;
+            return;
+        }
+
+        if (string.Equals(_historyPath, change.RelativePath, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        IsHistoryLoading = true;
+        try
+        {
+            var result = await _scriptHistory.GetFileHistoryAsync(_repository, change.RelativePath);
+            _historyPath = change.RelativePath;
+            HistoryVersions = result.Versions;
+            HistoryMessage = !result.IsAvailable
+                ? result.UnavailableReason
+                : result.Versions.Count == 0
+                    ? "No committed versions of this object were found in the local copy."
+                    : null;
+        }
+        catch (Exception ex)
+        {
+            HistoryVersions = [];
+            HistoryMessage = $"The object's history could not be read — {ex.Message}";
+        }
+        finally
+        {
+            IsHistoryLoading = false;
+        }
     }
 
     partial void OnIsSplitViewChanged(bool value) => RaiseViewStateChanged();
@@ -158,11 +252,17 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
             return;
         }
 
+        // Viewing a historical version diffs that commit against its parent; the change type from
+        // the run only applies to the run's own commit. Modified degrades gracefully when the
+        // parent has no copy (first version) — the service returns an empty old side.
+        var sha = SelectedVersion?.Sha ?? FullSha;
+        var changeType = SelectedVersion is null ? change.ChangeType : ChangeType.Modified;
+
         IsLoading = true;
         try
         {
             var result = await _scriptHistory.GetVersionsAsync(
-                _repository, FullSha, change.RelativePath, change.ChangeType, ct);
+                _repository, sha, change.RelativePath, changeType, ct);
             if (ct.IsCancellationRequested)
             {
                 return;
@@ -175,7 +275,7 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
             }
 
             // Diffing thousands of lines is CPU work; keep it off the UI thread.
-            switch (change.ChangeType)
+            switch (changeType)
             {
                 case ChangeType.Added:
                     // A diff against nothing is noise: show the new script as a plain numbered view.
@@ -223,7 +323,8 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     [RelayCommand]
     private void CopySha()
     {
-        if (FullSha is not { } sha)
+        // Copies what is on screen: the viewed version's commit, or the run's.
+        if ((SelectedVersion?.Sha ?? FullSha) is not { } sha)
         {
             return;
         }
@@ -248,10 +349,10 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         }
     }
 
-    // The most specific page GitHub can show: the selected file at this commit, else the commit itself.
+    // The most specific page GitHub can show: the selected file at the VIEWED commit, else the commit.
     private string? BuildGitHubUrl()
     {
-        if (_repository is { } repo && FullSha is { } sha)
+        if (_repository is { } repo && (SelectedVersion?.Sha ?? FullSha) is { } sha)
         {
             return SelectedChange is { } change
                 ? GitHubService.BuildBlobUrl(repo.Owner, repo.RepositoryName, sha, change.RelativePath)

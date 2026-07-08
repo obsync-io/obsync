@@ -159,6 +159,7 @@
                 <ColumnDefinition Width="300" />
                 <ColumnDefinition Width="16" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <!-- Left rail: this run's changed objects -->
@@ -226,20 +227,45 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="{Binding SelectedChange.RelativePath}"
-                                       FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
-                                       Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis" />
-                            <Border Grid.Column="1" Background="{StaticResource PanelBrush}"
-                                    CornerRadius="{StaticResource RadiusControl}" Padding="3"
-                                    Visibility="{Binding ShowViewToggle, Converter={StaticResource BoolToVisibility}}">
-                                <StackPanel Orientation="Horizontal">
-                                    <ToggleButton Style="{StaticResource SegmentToggle}" Content="Split"
-                                                  IsChecked="{Binding IsSplitView}" />
-                                    <ToggleButton Style="{StaticResource SegmentToggle}" Content="Unified" Margin="2,0,0,0"
-                                                  IsChecked="{Binding IsSplitView, Converter={StaticResource InverseBool}}" />
-                                </StackPanel>
-                            </Border>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding SelectedChange.RelativePath}"
+                                           FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                                           Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" />
+                                <!-- Shown while a historical version is on screen -->
+                                <TextBlock Text="{Binding ViewedVersionText}" Style="{StaticResource Caption}"
+                                           Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" Margin="12,0,0,0"
+                                           Visibility="{Binding ViewedVersionText, Converter={StaticResource NullToVisibility}}" />
+                                <Button Style="{StaticResource LinkButton}" Content="Show latest" Margin="8,0,0,0"
+                                        VerticalAlignment="Center" Command="{Binding ShowLatestVersionCommand}"
+                                        Visibility="{Binding ViewedVersionText, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Border Background="{StaticResource PanelBrush}"
+                                        CornerRadius="{StaticResource RadiusControl}" Padding="3" VerticalAlignment="Center"
+                                        Visibility="{Binding ShowViewToggle, Converter={StaticResource BoolToVisibility}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <ToggleButton Style="{StaticResource SegmentToggle}" Content="Split"
+                                                      IsChecked="{Binding IsSplitView}" />
+                                        <ToggleButton Style="{StaticResource SegmentToggle}" Content="Unified" Margin="2,0,0,0"
+                                                      IsChecked="{Binding IsSplitView, Converter={StaticResource InverseBool}}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="{StaticResource PanelBrush}"
+                                        CornerRadius="{StaticResource RadiusControl}" Padding="3" Margin="8,0,0,0"
+                                        VerticalAlignment="Center">
+                                    <ToggleButton Style="{StaticResource SegmentToggle}" IsChecked="{Binding IsHistoryVisible}"
+                                                  ToolTip="Every committed version of this object, from the local copy"
+                                                  AutomationProperties.Name="Toggle object history">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconHistory}"
+                                                       FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                            <TextBlock Text="History" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </ToggleButton>
+                                </Border>
+                            </StackPanel>
                         </Grid>
                     </Border>
 
@@ -295,6 +321,44 @@
                         </StackPanel>
                     </Grid>
                 </Grid>
+            </Border>
+
+            <!-- History rail: every committed version of the selected object, newest first -->
+            <Border Grid.Column="3" Style="{StaticResource Card}" Padding="10" Width="248" Margin="16,0,0,0"
+                    Visibility="{Binding IsHistoryVisible, Converter={StaticResource BoolToVisibility}}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Versions" Style="{StaticResource SectionTitle}"
+                               FontSize="14" Margin="2,2,2,2" />
+                    <TextBlock DockPanel.Dock="Top" Text="Select a version to see what that commit changed."
+                               Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="2,0,2,10" />
+
+                    <TextBlock DockPanel.Dock="Top" Text="Loading history…" Style="{StaticResource Muted}" Margin="2,4"
+                               Visibility="{Binding IsHistoryLoading, Converter={StaticResource BoolToVisibility}}" />
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding HistoryMessage}" Style="{StaticResource Muted}"
+                               TextWrapping="Wrap" Margin="2,4"
+                               Visibility="{Binding HistoryMessage, Converter={StaticResource NullToVisibility}}" />
+
+                    <ListBox ItemsSource="{Binding HistoryVersions}" SelectedItem="{Binding SelectedVersion}"
+                             Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource ChangeItem}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel ToolTip="{Binding Subject}">
+                                    <TextBlock Text="{Binding Date.LocalDateTime, StringFormat=g}"
+                                               Style="{StaticResource BodyStrong}" FontSize="12.5" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                        <TextBlock Text="{Binding ShortSha}" FontFamily="{StaticResource MonoFontFamily}"
+                                                   FontSize="11.5" Foreground="{StaticResource TextMutedBrush}" />
+                                        <TextBlock Text="{Binding Author}" Style="{StaticResource Caption}"
+                                                   Margin="8,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="130" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
             </Border>
         </Grid>
     </Grid>

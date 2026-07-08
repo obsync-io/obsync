@@ -220,6 +220,12 @@ no network calls and no token needed. If the commit isn't available on this mach
 a different PC than the one that ran the sync), the viewer says so and offers **Open on GitHub**
 instead.
 
+The viewer also carries each object's full **version history**: the **History** toggle lists every
+committed version of the selected object (date, commit, author — renames followed), and selecting
+one shows exactly what that commit changed. Need yesterday's procedure? Open any change to it,
+toggle History, pick the version, and copy the script — Obsync never applies it to a database for
+you, by design.
+
 ## Everyday options
 
 Settings covers the knobs a real deployment needs:

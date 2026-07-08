@@ -124,6 +124,57 @@ public sealed class ScriptHistoryServiceTests : IDisposable
         Assert.Contains("hasn't been synced", result.UnavailableReason);
     }
 
+    [Fact]
+    public async Task GetFileHistory_ListsCommitsNewestFirst_WithDatesAuthorsAndSubjects()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var (repository, firstSha, secondSha) = await InitWorkspaceAsync();
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
+
+        var result = await service.GetFileHistoryAsync(repository, RelativePath);
+
+        Assert.True(result.IsAvailable, result.UnavailableReason);
+        Assert.Equal(2, result.Versions.Count);
+        Assert.Equal(secondSha, result.Versions[0].Sha);
+        Assert.Equal(firstSha, result.Versions[1].Sha);
+        Assert.Equal("second", result.Versions[0].Subject);
+        Assert.Equal("Obsync Tests", result.Versions[0].Author);
+        Assert.True(result.Versions[0].Date >= result.Versions[1].Date);
+    }
+
+    [Fact]
+    public async Task GetFileHistory_ForAnUntrackedPath_ReturnsAnEmptyList()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var (repository, _, _) = await InitWorkspaceAsync();
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
+
+        var result = await service.GetFileHistoryAsync(repository, "views/dbo.never_existed.sql");
+
+        Assert.True(result.IsAvailable, result.UnavailableReason);
+        Assert.Empty(result.Versions);
+    }
+
+    [Fact]
+    public async Task GetFileHistory_MissingWorkspace_ReportsUnavailableWithAReason()
+    {
+        var neverSynced = new GitRepositoryProfile { Name = "r", Owner = "o", RepositoryName = "r" };
+        var service = new ScriptHistoryService(_runner, NoOverrideSettings(), _workspacesRoot);
+
+        var result = await service.GetFileHistoryAsync(neverSynced, RelativePath);
+
+        Assert.False(result.IsAvailable);
+        Assert.Contains("hasn't been synced", result.UnavailableReason);
+    }
+
     /// <summary>Creates a workspace clone for a fresh profile with two commits touching one file.</summary>
     private async Task<(GitRepositoryProfile Repository, string FirstSha, string SecondSha)> InitWorkspaceAsync()
     {

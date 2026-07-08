@@ -38,15 +38,50 @@ public sealed record ScriptVersionsResult
         new(false, string.Empty, string.Empty, reason);
 }
 
+/// <summary>One committed version of a scripted object's file, for the history rail.</summary>
+public sealed record ScriptFileVersion(string Sha, DateTimeOffset Date, string Author, string Subject)
+{
+    public string ShortSha => Sha[..Math.Min(7, Sha.Length)];
+}
+
+/// <summary>A file's committed versions (newest first), or why they are not retrievable here.</summary>
+public sealed record ScriptFileHistoryResult
+{
+    private ScriptFileHistoryResult(bool isAvailable, IReadOnlyList<ScriptFileVersion> versions, string? unavailableReason)
+    {
+        IsAvailable = isAvailable;
+        Versions = versions;
+        UnavailableReason = unavailableReason;
+    }
+
+    public bool IsAvailable { get; }
+
+    public IReadOnlyList<ScriptFileVersion> Versions { get; }
+
+    public string? UnavailableReason { get; }
+
+    public static ScriptFileHistoryResult Available(IReadOnlyList<ScriptFileVersion> versions) =>
+        new(true, versions, null);
+
+    public static ScriptFileHistoryResult Unavailable(string reason) =>
+        new(false, [], reason);
+}
+
 /// <summary>
-/// Reads a scripted object's before/after content for a commit from the repository's LOCAL git
-/// workspace (the same clone the sync engine commits from). Never touches the network: when the
-/// workspace or the commit is missing locally it reports "unavailable" with a reason instead.
+/// Reads a scripted object's before/after content for a commit — and its full committed version
+/// list — from the repository's LOCAL git workspace (the same clone the sync engine commits from).
+/// Never touches the network: when the workspace or the commit is missing locally it reports
+/// "unavailable" with a reason instead.
 /// </summary>
 public interface IScriptHistoryService
 {
     Task<ScriptVersionsResult> GetVersionsAsync(
         GitRepositoryProfile repository, string commitSha, string relativePath, ChangeType changeType,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Every committed version of one file, newest first (follows renames), capped.</summary>
+    Task<ScriptFileHistoryResult> GetFileHistoryAsync(
+        GitRepositoryProfile repository, string relativePath, int limit = 100,
         CancellationToken cancellationToken = default);
 }
 
@@ -64,19 +99,17 @@ public sealed class ScriptHistoryService : IScriptHistoryService
         _defaultWorkspacesRoot = defaultWorkspacesRoot;
     }
 
+    private const string NotSyncedReason =
+        "This repository hasn't been synced on this machine yet, so there is no local copy of the scripts.";
+
     public async Task<ScriptVersionsResult> GetVersionsAsync(
         GitRepositoryProfile repository, string commitSha, string relativePath, ChangeType changeType,
         CancellationToken cancellationToken = default)
     {
-        // Same per-profile workspace formula the engine uses when it clones — including the
-        // configurable workspaces-root override, so the viewer follows relocated clones.
-        var overridePath = await _settings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
-        var root = string.IsNullOrWhiteSpace(overridePath) ? _defaultWorkspacesRoot : overridePath.Trim();
-        var workspace = Path.Combine(root, repository.Id.ToString("N"));
-        if (!Directory.Exists(Path.Combine(workspace, ".git")))
+        var workspace = await ResolveWorkspaceAsync(repository, cancellationToken).ConfigureAwait(false);
+        if (workspace is null)
         {
-            return ScriptVersionsResult.Unavailable(
-                "This repository hasn't been synced on this machine yet, so there is no local copy of the scripts.");
+            return ScriptVersionsResult.Unavailable(NotSyncedReason);
         }
 
         // ArgumentList passes the braces literally (no shell), which is exactly what rev-parse needs.
@@ -122,6 +155,55 @@ public sealed class ScriptHistoryService : IScriptHistoryService
         }
 
         return ScriptVersionsResult.Available(oldContent, newContent);
+    }
+
+    public async Task<ScriptFileHistoryResult> GetFileHistoryAsync(
+        GitRepositoryProfile repository, string relativePath, int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        var workspace = await ResolveWorkspaceAsync(repository, cancellationToken).ConfigureAwait(false);
+        if (workspace is null)
+        {
+            return ScriptFileHistoryResult.Unavailable(NotSyncedReason);
+        }
+
+        // One record per line; \x1f (unit separator) never appears in shas, ISO dates, or sane
+        // author names, and a subject containing it just loses its tail (parsed defensively below).
+        var log = await _git.RunAsync(
+            workspace,
+            ["log", "--follow", $"--max-count={limit}", "--format=%H%x1f%aI%x1f%an%x1f%s", "--", relativePath],
+            cancellationToken).ConfigureAwait(false);
+        if (!log.Success)
+        {
+            return ScriptFileHistoryResult.Unavailable(
+                $"The history of '{relativePath}' could not be read from the local copy.");
+        }
+
+        var versions = new List<ScriptFileVersion>();
+        foreach (var line in log.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = line.TrimEnd('\r').Split('\x1f');
+            if (parts.Length < 4 || parts[0].Length < 7
+                || !DateTimeOffset.TryParse(parts[1], null, System.Globalization.DateTimeStyles.RoundtripKind, out var date))
+            {
+                continue;
+            }
+
+            versions.Add(new ScriptFileVersion(parts[0], date, parts[2], parts[3]));
+        }
+
+        return ScriptFileHistoryResult.Available(versions);
+    }
+
+    // Same per-profile workspace formula the engine uses when it clones — including the
+    // configurable workspaces-root override, so the viewer follows relocated clones. Null when the
+    // repository has never been synced on this machine.
+    private async Task<string?> ResolveWorkspaceAsync(GitRepositoryProfile repository, CancellationToken cancellationToken)
+    {
+        var overridePath = await _settings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
+        var root = string.IsNullOrWhiteSpace(overridePath) ? _defaultWorkspacesRoot : overridePath.Trim();
+        var workspace = Path.Combine(root, repository.Id.ToString("N"));
+        return Directory.Exists(Path.Combine(workspace, ".git")) ? workspace : null;
     }
 
     private static string Short(string sha) => sha[..Math.Min(7, sha.Length)];

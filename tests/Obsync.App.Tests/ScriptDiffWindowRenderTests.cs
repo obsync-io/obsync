@@ -48,6 +48,14 @@ public sealed class ScriptDiffWindowRenderTests
                     .Returns(ScriptVersionsResult.Available(
                         "CREATE VIEW dbo.vw_Orders AS\nSELECT Id, Total FROM dbo.Orders;",
                         "CREATE VIEW dbo.vw_Orders AS\nSELECT Id, Total, Status FROM dbo.Orders;"));
+                service.GetFileHistoryAsync(
+                        Arg.Any<GitRepositoryProfile>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                    .Returns(ScriptFileHistoryResult.Available(
+                    [
+                        new ScriptFileVersion(new string('a', 40), DateTimeOffset.Now, "alice", "Alter vw_Orders"),
+                        new ScriptFileVersion(new string('b', 40), DateTimeOffset.Now.AddDays(-2), "svc-obsync", "Nightly sync"),
+                        new ScriptFileVersion(new string('c', 40), DateTimeOffset.Now.AddDays(-9), "bob", "Create vw_Orders"),
+                    ]));
 
                 var viewModel = new ScriptDiffViewModel(service);
                 var run = new SyncRun
@@ -67,6 +75,7 @@ public sealed class ScriptDiffWindowRenderTests
                 ];
 
                 viewModel.LoadAsync(run, changes, repository, preselect: null).GetAwaiter().GetResult();
+                viewModel.IsHistoryVisible = true; // render the object-history rail too
 
                 var window = new ScriptDiffWindow { DataContext = viewModel };
                 var content = (UIElement)window.Content;
