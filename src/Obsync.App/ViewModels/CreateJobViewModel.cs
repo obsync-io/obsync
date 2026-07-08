@@ -70,6 +70,13 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
     [ObservableProperty] private bool _includeServerObjects;
     [ObservableProperty] private bool _includeReferenceData;
+
+    // The per-database generated files (all default on; see ObjectSelectionProfile).
+    [ObservableProperty] private bool _includeObjectInventory = true;
+    [ObservableProperty] private bool _includeDatabaseOptions = true;
+    [ObservableProperty] private bool _includePermissionsFile = true;
+    [ObservableProperty] private bool _includeDocumentation = true;
+    [ObservableProperty] private bool _includeSecurityReview = true;
     [ObservableProperty] private string _tableSourceDatabase = string.Empty;
     [ObservableProperty] private int _referenceDataMaxRows = 5000;
     [ObservableProperty] private GitRepositoryProfile? _selectedRepository;
@@ -329,6 +336,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
         WindowStart = job.Schedule.WindowStart.ToString("HH:mm");
         WindowEnd = job.Schedule.WindowEnd.ToString("HH:mm");
         SelectedDayScope = job.Schedule.DayScope;
+
+        IncludeObjectInventory = job.Selection.IncludeObjectInventory;
+        IncludeDatabaseOptions = job.Selection.IncludeDatabaseOptions;
+        IncludePermissionsFile = job.Selection.IncludeDatabasePermissionsFile;
+        IncludeDocumentation = job.Selection.IncludeDocumentation;
+        IncludeSecurityReview = job.Selection.IncludeSecurityReview;
 
         IncludeReferenceData = job.Selection.ReferenceDataTables.Count > 0;
         ReferenceTables.Clear();
@@ -683,6 +696,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         job.Selection.ReferenceDataTables = IncludeReferenceData
             ? [.. ReferenceTables.Where(t => t.IsSelected).Select(t => t.QualifiedName)]
             : [];
+        job.Selection.IncludeObjectInventory = IncludeObjectInventory;
+        job.Selection.IncludeDatabaseOptions = IncludeDatabaseOptions;
+        job.Selection.IncludeDatabasePermissionsFile = IncludePermissionsFile;
+        job.Selection.IncludeDocumentation = IncludeDocumentation;
+        job.Selection.IncludeSecurityReview = IncludeSecurityReview;
         job.Advanced.ReferenceDataMaxRows = Math.Max(1, ReferenceDataMaxRows);
 
         job.Schedule = BuildSchedule();

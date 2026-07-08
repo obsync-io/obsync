@@ -488,6 +488,23 @@
                                      Width="140" HorizontalAlignment="Left" Margin="0,4,0,0"
                                      MaxLength="7" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
                         </StackPanel>
+
+                        <Border Style="{StaticResource Divider}" Margin="0,20,0,16" />
+
+                        <!-- Per-database generated files -->
+                        <TextBlock Text="GENERATED FILES" Style="{StaticResource Caption}" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,10"
+                                   Text="Written alongside the scripts and committed only when their content changes." />
+                        <CheckBox Content="Object inventory (metadata/object-inventory.json)"
+                                  IsChecked="{Binding IncludeObjectInventory}" />
+                        <CheckBox Content="Database options script (metadata/database-options.sql)"
+                                  IsChecked="{Binding IncludeDatabaseOptions}" Margin="0,8,0,0" />
+                        <CheckBox Content="Consolidated permissions script (security/permissions/permissions.sql)"
+                                  IsChecked="{Binding IncludePermissionsFile}" Margin="0,8,0,0" />
+                        <CheckBox Content="Schema documentation (docs/README.md — object index + data dictionary)"
+                                  IsChecked="{Binding IncludeDocumentation}" Margin="0,8,0,0" />
+                        <CheckBox Content="Security review (security/security-review.md — versioned findings)"
+                                  IsChecked="{Binding IncludeSecurityReview}" Margin="0,8,0,0" />
                     </StackPanel>
                 </Border>
 
