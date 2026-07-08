@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an improvement or a new capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation where you needed this, rather than just the feature itself.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Obsync to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Workarounds you've tried
+  - type: markdown
+    attributes:
+      value: |
+        Note: Obsync is deliberately **read-only against SQL Server** and sends **no telemetry**.
+        Requests that require executing changes against databases are unlikely to be accepted.

@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in Obsync doesn't work the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not report security vulnerabilities here** — use the
+        repository's *Security* tab (private reporting) or security@obsync.io instead.
+  - type: input
+    id: version
+    attributes:
+      label: Obsync version
+      description: Settings → About (e.g. 0.6.0).
+      placeholder: "0.6.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      options:
+        - Desktop app (UI)
+        - Sync engine / a run's result
+        - Windows service / scheduling
+        - CLI
+        - Installer (MSI)
+        - Generated files (docs, security review, inventory)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the exact error text if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Windows version, SQL Server version/edition, and roughly how large the database is (object count) if engine-related.
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Diagnostics
+      description: |
+        If possible, attach a **support bundle** (Settings → Diagnostics → Export support bundle).
+        It contains versions, config, diagnostics, and recent logs — never secrets or your data.

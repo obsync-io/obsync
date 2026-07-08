@@ -41,7 +41,7 @@ public sealed class RepositoriesPageRenderTests
                     Substitute.For<ICredentialStore>(), Substitute.For<IAuditWriter>());
                 pageVm.Repositories.Add(new GitRepositoryProfile
                 {
-                    Name = "SQLTest", Owner = "nir-n", RepositoryName = "SQLServerScriptsTest", DefaultBranch = "main",
+                    Name = "SQLTest", Owner = "acme", RepositoryName = "sql-history", DefaultBranch = "main",
                 });
                 pageVm.StatusMessage = "SQLTest: All checks passed — authenticated as alice.";
                 pagePng = Render(new RepositoriesView { DataContext = pageVm }, 1220, 760, "repositories-page.png");
@@ -52,10 +52,10 @@ public sealed class RepositoriesPageRenderTests
                     Substitute.For<ICredentialStore>(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
                 dialogVm.LoadForEdit(new GitRepositoryProfile
                 {
-                    Name = "SQLTest", Owner = "nir-n", RepositoryName = "SQLServerScriptsTest", DefaultBranch = "main",
+                    Name = "SQLTest", Owner = "acme", RepositoryName = "sql-history", DefaultBranch = "main",
                 });
                 dialogVm.PermissionChecks.Add(new PermissionCheckLine("Token valid", true));
-                dialogVm.PermissionChecks.Add(new PermissionCheckLine("Repository access — nir-n/SQLServerScriptsTest", true));
+                dialogVm.PermissionChecks.Add(new PermissionCheckLine("Repository access — acme/sql-history", true));
                 dialogVm.PermissionChecks.Add(new PermissionCheckLine("Read (pull)", true));
                 dialogVm.PermissionChecks.Add(new PermissionCheckLine("Write / push — Contents", false));
                 dialogVm.ValidationResult = "The token can read but NOT write. Pushes will fail — grant it Contents: write.";
