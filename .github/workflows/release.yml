@@ -1,0 +1,77 @@
+# Tag vX.Y.Z -> build + test -> build the MSI -> draft a GitHub Release with the MSI attached.
+#
+# The draft is intentional: a maintainer reviews the notes and publishes manually. The tag must
+# match <VersionPrefix> in Directory.Build.props — the guard step fails the run otherwise, so a
+# release can never ship an MSI whose ARP/About version disagrees with its tag.
+#
+# CODE SIGNING (SignPath Foundation — activate after the application is approved):
+# SignPath only signs CI-built artifacts from the public repository. Once the SignPath project
+# exists, insert their signing step between "Build installer" and "Draft release":
+#
+#   - name: Sign the MSI
+#     uses: signpath/github-action-submit-signing-request@v1
+#     with:
+#       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+#       organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+#       project-slug: obsync
+#       signing-policy-slug: release-signing
+#       github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+#       wait-for-completion: true
+#       output-artifact-directory: artifacts
+#
+# See the "Code signing" section of the README for the policy statement.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET (pinned by global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Verify the tag matches Directory.Build.props
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $props = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.VersionPrefix | Where-Object { $_ }
+          if ("$props" -ne $tag) {
+            throw "Tag v$tag does not match <VersionPrefix>$props</VersionPrefix> in Directory.Build.props."
+          }
+
+      - name: Build + test
+        run: |
+          dotnet build Obsync.slnx --configuration Release
+          dotnet test Obsync.slnx --configuration Release --no-build
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # The Release publish and the test build share obj/ state awkwardly for WPF; start clean.
+          Remove-Item -Recurse -Force src/Obsync.App/obj, src/Obsync.App/bin -ErrorAction SilentlyContinue
+          pwsh packaging/build-installer.ps1
+
+      - name: Upload MSI artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: obsync-msi
+          path: artifacts/*.msi
+          if-no-files-found: error
+
+      - name: Draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: artifacts/*.msi
+          generate_release_notes: true

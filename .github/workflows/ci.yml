@@ -1,0 +1,26 @@
+# Build + test on every push and pull request. Windows runner: the solution targets
+# net10.0-windows (WPF, Windows Service) and the tests include headless WPF render probes.
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET (pinned by global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build (warnings are errors)
+        run: dotnet build Obsync.slnx --configuration Release
+
+      - name: Test
+        run: dotnet test Obsync.slnx --configuration Release --no-build --verbosity normal

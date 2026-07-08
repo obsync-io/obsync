@@ -325,6 +325,19 @@ Ignored objects are simply not scripted; anything already committed for them is 
 Rules from `.obsyncignore` merge with a job's configured ignore patterns. (Zip exports have no
 persisted folder, so they honor only the job's configured patterns.)
 
+## Code signing
+
+Official Obsync releases are built **exclusively by the GitHub Actions release workflow in this
+repository** (`.github/workflows/release.yml`) — never on a developer machine — from a tagged
+commit, after the full test suite passes. Code signing via **[SignPath Foundation](https://signpath.org)**
+is planned for public releases; until a signed release ships, the MSI is unsigned and Windows
+SmartScreen may warn on first run.
+
+Policy: maintainers use multi-factor authentication; the author, reviewer, and release-approver
+roles are held by separate identities where the team size allows; and a release artifact is only
+signed if it was produced by CI from this public repository. This program will not request
+exceptions to these rules.
+
 ## Installing
 
 Obsync ships as a per-machine **MSI** that installs the desktop app, the `obsync` CLI (added to
