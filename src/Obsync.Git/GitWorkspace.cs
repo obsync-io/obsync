@@ -90,6 +90,12 @@ public sealed class GitWorkspace : IGitWorkspace
             {
                 return Result.Failure($"git clone failed: {Summarize(clone.StandardError)}");
             }
+
+            // Windows MAX_PATH protection: a deep workspaces root plus a long schema/object path can
+            // exceed 260 chars, failing checkouts and `git show` with "Filename too long". Best-effort
+            // (a failure here surfaces later with git's own clear message).
+            _ = await _git.RunAsync(
+                context.LocalPath, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
         }
         else
         {

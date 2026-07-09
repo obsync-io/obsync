@@ -197,25 +197,54 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         return (newline < 0 ? line : line[..newline]).ToString();
     }
 
+    // True while navigation code itself updates CurrentSection, so the change hook below only
+    // reacts to EXTERNAL writes — the rail's two-way IsChecked binding, i.e. assistive-tech or
+    // programmatic selection, which previously moved the highlight without changing the page.
+    // A real click also fires NavigateCommand; the ReferenceEquals guard in NavigateAsync
+    // collapses that click+binding pair into a single navigation.
+    private bool _syncingSection;
+
+    partial void OnCurrentSectionChanged(string value)
+    {
+        if (!_syncingSection)
+        {
+            _ = NavigateAsync(value);
+        }
+    }
+
     [RelayCommand]
     private async Task NavigateAsync(string section)
     {
-        CurrentView = section switch
+        var target = ResolveSection(section);
+        if (ReferenceEquals(CurrentView, target))
         {
-            "Jobs" => _services.GetRequiredService<JobsViewModel>(),
-            "Servers" => _services.GetRequiredService<ServersViewModel>(),
-            "Repositories" => _services.GetRequiredService<RepositoriesViewModel>(),
-            "History" => _services.GetRequiredService<HistoryViewModel>(),
-            "Settings" => _services.GetRequiredService<SettingsViewModel>(),
-            _ => _services.GetRequiredService<DashboardViewModel>(),
-        };
+            return;
+        }
 
-        CurrentSection = section;
+        CurrentView = target;
+        SetSection(section);
 
         if (CurrentView is IAsyncViewModel asyncViewModel)
         {
             await asyncViewModel.LoadAsync();
         }
+    }
+
+    private object ResolveSection(string section) => section switch
+    {
+        "Jobs" => _services.GetRequiredService<JobsViewModel>(),
+        "Servers" => _services.GetRequiredService<ServersViewModel>(),
+        "Repositories" => _services.GetRequiredService<RepositoriesViewModel>(),
+        "History" => _services.GetRequiredService<HistoryViewModel>(),
+        "Settings" => _services.GetRequiredService<SettingsViewModel>(),
+        _ => _services.GetRequiredService<DashboardViewModel>(),
+    };
+
+    private void SetSection(string section)
+    {
+        _syncingSection = true;
+        CurrentSection = section;
+        _syncingSection = false;
     }
 
     public Task ShowSectionAsync(string section) => NavigateAsync(section);
@@ -227,7 +256,7 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         await detail.LoadAsync(jobId);
         // The job workspace is not a rail item; keep the originating section highlighted so the rail
         // stays consistent and "Back" returns to where the drill-down started.
-        CurrentSection = origin;
+        SetSection(origin);
         CurrentView = detail;
     }
 }

@@ -534,7 +534,10 @@
                         <Border Grid.Row="0" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
                             <TabPanel IsItemsHost="True" Panel.ZIndex="1" Margin="0" />
                         </Border>
-                        <ContentPresenter Grid.Row="1" ContentSource="SelectedContent" Margin="0,16,0,0" />
+                        <!-- The PART_ name matters: without it the selected tab's CONTENT is absent
+                             from the UI Automation tree, so screen readers only see the headers. -->
+                        <ContentPresenter x:Name="PART_SelectedContentHost" Grid.Row="1"
+                                          ContentSource="SelectedContent" Margin="0,16,0,0" />
                     </Grid>
                 </ControlTemplate>
             </Setter.Value>
