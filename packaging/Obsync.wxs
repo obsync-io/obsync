@@ -40,8 +40,8 @@
          advertised Start Menu shortcut's key file is an exe (ICE50). -->
     <Icon Id="ObsyncApp.exe" SourceFile="$(RepoRoot)\src\Obsync.App\Assets\Obsync.ico" />
     <Property Id="ARPPRODUCTICON" Value="ObsyncApp.exe" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/obsync/obsync" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/obsync/obsync" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/obsync-io/obsync" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/obsync-io/obsync" />
 
     <!-- Windows Service logon account. Default LocalSystem installs a functional service host but it
          cannot reach the interactive user's Credential Manager / data root, so scheduled runs need a

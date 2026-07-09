@@ -28,8 +28,8 @@ public interface IUpdateChecker
 /// <inheritdoc cref="IUpdateChecker" />
 public sealed class UpdateChecker : IUpdateChecker
 {
-    // Set to the real repository at public launch (same placeholder as packaging/Obsync.wxs).
-    private const string Owner = "obsync";
+    // The public product repository; the notify-only check contacts ONLY this releases endpoint.
+    private const string Owner = "obsync-io";
     private const string Repo = "obsync";
 
     /// <summary>Hard cap so a slow or blackholed connection never stalls the caller.</summary>
