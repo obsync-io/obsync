@@ -33,6 +33,10 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
     [ObservableProperty]
     private string _currentSection = "Dashboard";
 
+    /// <summary>Navigation rail collapsed to icons only. Persisted across sessions.</summary>
+    [ObservableProperty]
+    private bool _isNavCollapsed;
+
     // Section view models are resolved lazily from the container rather than injected, so that a
     // section that depends on IShellNavigator (e.g. the dashboard's "Open job") does not form a
     // construction-time cycle with this view model. The first navigation is triggered after
@@ -45,6 +49,15 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
     /// <summary>Shows the initial section. Called once after the shell is constructed and shown.</summary>
     public async Task InitializeAsync()
     {
+        try
+        {
+            IsNavCollapsed = await _services.GetRequiredService<IAppSettingsRepository>().GetNavCollapsedAsync();
+        }
+        catch (Exception)
+        {
+            // A cosmetic preference must never block startup; default to expanded.
+        }
+
         await NavigateAsync("Dashboard");
 
         // Resolved lazily (not ctor-injected) to keep this shell view model cycle-free — see the
@@ -52,6 +65,21 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         _services.GetRequiredService<IJobRunCoordinator>().RunCompleted += OnRunCompleted;
         await ShowMissedFailuresAsync();
         await ShowAvailableUpdateAsync();
+    }
+
+    /// <summary>Collapses/expands the navigation rail; the preference persists across sessions.</summary>
+    [RelayCommand]
+    private async Task ToggleNavAsync()
+    {
+        IsNavCollapsed = !IsNavCollapsed;
+        try
+        {
+            await _services.GetRequiredService<IAppSettingsRepository>().SetNavCollapsedAsync(IsNavCollapsed);
+        }
+        catch (Exception)
+        {
+            // Best-effort persistence; the in-session toggle already applied.
+        }
     }
 
     /// <summary>

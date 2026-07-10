@@ -49,6 +49,10 @@
     <SolidColorBrush x:Key="DiffAddedEmphasisBrush" Color="{StaticResource DiffAddedEmphasisColor}" />
     <SolidColorBrush x:Key="DiffDeletedEmphasisBrush" Color="{StaticResource DiffDeletedEmphasisColor}" />
 
+    <!-- Scrollbar thumb: quiet at rest, slightly darker under the pointer / while dragging. -->
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#C9CED6" />
+    <SolidColorBrush x:Key="ScrollThumbActiveBrush" Color="#A8AFBA" />
+
     <!-- ============ Tokens ============ -->
     <!-- Corner radii -->
     <CornerRadius x:Key="RadiusControl">6</CornerRadius>

@@ -56,6 +56,10 @@ public interface IAppSettingsRepository
     /// </summary>
     Task<SchedulerHeartbeat?> GetSchedulerHeartbeatAsync(CancellationToken cancellationToken = default);
     Task SetSchedulerHeartbeatAsync(SchedulerHeartbeat? heartbeat, CancellationToken cancellationToken = default);
+
+    /// <summary>Whether the app's navigation rail is collapsed to icons only. Default false.</summary>
+    Task<bool> GetNavCollapsedAsync(CancellationToken cancellationToken = default);
+    Task SetNavCollapsedAsync(bool collapsed, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IAppSettingsRepository" />
@@ -72,6 +76,7 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     private const string LastUpdateCheckKey = "lastUpdateCheck";
     private const string LastNotifiedUpdateVersionKey = "lastNotifiedUpdateVersion";
     private const string SchedulerHeartbeatKey = "schedulerHeartbeat";
+    private const string NavCollapsedKey = "navCollapsed";
 
     private static readonly IReadOnlyList<string> DefaultProductionTags = ["prod", "production"];
 
@@ -174,6 +179,12 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
 
     public Task SetSchedulerHeartbeatAsync(SchedulerHeartbeat? heartbeat, CancellationToken cancellationToken = default) =>
         SetValueAsync(SchedulerHeartbeatKey, heartbeat is null ? string.Empty : ObsyncJson.Serialize(heartbeat), cancellationToken);
+
+    public async Task<bool> GetNavCollapsedAsync(CancellationToken cancellationToken = default) =>
+        await GetValueAsync(NavCollapsedKey, cancellationToken).ConfigureAwait(false) == "1";
+
+    public Task SetNavCollapsedAsync(bool collapsed, CancellationToken cancellationToken = default) =>
+        SetValueAsync(NavCollapsedKey, collapsed ? "1" : "0", cancellationToken);
 
     private async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken)
     {

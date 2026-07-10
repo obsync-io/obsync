@@ -11,72 +11,137 @@
         UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display"
         TextOptions.TextRenderingMode="ClearType">
+    <Window.Resources>
+        <!-- Nav labels and the wordmark hide when the rail is collapsed to icons. -->
+        <Style x:Key="NavLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="12,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsNavCollapsed}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="224" />
+            <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <!-- Left navigation rail -->
+        <!-- Left navigation rail: full (icons + labels) or collapsed to icons only. The width
+             lives on the Border (the column auto-sizes) so one trigger drives the whole rail. -->
         <Border Grid.Column="0" Background="{StaticResource CardBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Width" Value="224" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsNavCollapsed}" Value="True">
+                            <Setter Property="Width" Value="64" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <DockPanel>
-                <!-- Brand block: icon mark + wordmark (no tagline). -->
-                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="22,24,20,26" VerticalAlignment="Center">
+                <!-- Brand block: icon mark + wordmark; the mark alone when collapsed. -->
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Margin" Value="22,24,20,26" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsNavCollapsed}" Value="True">
+                                    <Setter Property="Margin" Value="0,24,0,26" />
+                                    <Setter Property="HorizontalAlignment" Value="Center" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
                     <Image Source="/Assets/Obsync_Icon.png" Width="32" Height="32"
                            RenderOptions.BitmapScalingMode="HighQuality" SnapsToDevicePixels="True" />
                     <Image Source="{StaticResource ObsyncWordmark}" Height="20" Margin="11,0,0,0"
-                           VerticalAlignment="Center" Stretch="Uniform" />
+                           VerticalAlignment="Center" Stretch="Uniform">
+                        <Image.Style>
+                            <Style TargetType="Image">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsNavCollapsed}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Image.Style>
+                    </Image>
                 </StackPanel>
+
+                <!-- Collapse/expand toggle, tucked at the bottom of the rail. -->
+                <Button DockPanel.Dock="Bottom" Style="{StaticResource IconButton}" Margin="0,0,0,16"
+                        HorizontalAlignment="Center" Command="{Binding ToggleNavCommand}"
+                        AutomationProperties.Name="Collapse or expand navigation">
+                    <Button.ToolTip>
+                        <ToolTip>
+                            <ToolTip.Style>
+                                <Style TargetType="ToolTip">
+                                    <Setter Property="Content" Value="Collapse navigation" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsNavCollapsed}" Value="True">
+                                            <Setter Property="Content" Value="Expand navigation" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ToolTip.Style>
+                        </ToolTip>
+                    </Button.ToolTip>
+                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconNavToggle}" FontSize="15" />
+                </Button>
 
                 <!-- Navigation items -->
                 <StackPanel DockPanel.Dock="Top" Margin="0,4,0,0">
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" ToolTip="Dashboard"
                                  IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Dashboard, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Dashboard">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconDashboard}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Dashboard" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Dashboard" Style="{StaticResource NavLabel}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" ToolTip="Servers"
                                  IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Servers, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Servers">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconConnections}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Servers" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Servers" Style="{StaticResource NavLabel}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" ToolTip="Repositories"
                                  IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Repositories, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Repositories">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRepositories}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Repositories" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Repositories" Style="{StaticResource NavLabel}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" ToolTip="Jobs"
                                  IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Jobs, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Jobs">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconJobs}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Jobs" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Jobs" Style="{StaticResource NavLabel}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" ToolTip="History"
                                  IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=History, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="History">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconHistory}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="History" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="History" Style="{StaticResource NavLabel}" />
                         </StackPanel>
                     </RadioButton>
-                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav"
+                    <RadioButton Style="{StaticResource NavButton}" GroupName="Nav" ToolTip="Settings"
                                  IsChecked="{Binding CurrentSection, Converter={StaticResource SectionToBool}, ConverterParameter=Settings, Mode=TwoWay}"
                                  Command="{Binding NavigateCommand}" CommandParameter="Settings">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconSettings}" Width="20" HorizontalAlignment="Left" />
-                            <TextBlock Text="Settings" Margin="12,0,0,0" VerticalAlignment="Center" />
+                            <TextBlock Text="Settings" Style="{StaticResource NavLabel}" />
                         </StackPanel>
                     </RadioButton>
                 </StackPanel>

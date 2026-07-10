@@ -1,441 +1,493 @@
 <UserControl x:Class="Obsync.App.Views.SettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="28,24" MaxWidth="720" HorizontalAlignment="Left">
+    <Grid Margin="28,24,28,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
             <TextBlock Text="Settings" Style="{StaticResource PageTitle}" />
-            <TextBlock Text="Application and local data locations" Style="{StaticResource Muted}" Margin="0,4,0,18" />
-
-            <!-- About -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="About" Style="{StaticResource SectionTitle}" Margin="0,0,0,16" />
-                    <Grid Margin="0,0,0,16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="170" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Version" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="{Binding Version}" Style="{StaticResource BodyStrong}" />
-                            <TextBlock Text="{Binding EngineVersion}" Style="{StaticResource Muted}" Margin="0,2,0,0" />
-
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button Content="Check for updates" Style="{StaticResource SecondaryButton}"
-                                        Command="{Binding CheckForUpdatesCommand}"
-                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                                <Button Style="{StaticResource LinkButton}" Content="View release"
-                                        Margin="12,0,0,0" VerticalAlignment="Center"
-                                        Command="{Binding OpenReleasePageCommand}"
-                                        Visibility="{Binding UpdateReleaseUrl, Converter={StaticResource NullToVisibility}}" />
-                            </StackPanel>
-                            <TextBlock Text="{Binding UpdateStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
-                                       Visibility="{Binding UpdateStatus, Converter={StaticResource NullToVisibility}}" />
-                        </StackPanel>
-                    </Grid>
-
-                    <Border Style="{StaticResource Panel}" Background="{StaticResource AccentSoftBrush}" Margin="0,0,0,10">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
-                                       Foreground="{StaticResource AccentBrush}" VerticalAlignment="Top" Margin="0,1,10,0" />
-                            <TextBlock Text="Secrets are stored in Windows Credential Manager; the local state database never holds passwords or tokens."
-                                       Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" />
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource Panel}" Background="{StaticResource SuccessSoftBrush}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
-                                       Foreground="{StaticResource SuccessBrush}" VerticalAlignment="Top" Margin="0,1,10,0" />
-                            <TextBlock Text="Read-only by design — Obsync only reads metadata and object definitions. It never modifies SQL Server, never runs deployment scripts, and never requires sysadmin."
-                                       Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Border>
-                </StackPanel>
-            </Border>
-
-            <!-- Required SQL permissions -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Required SQL permissions" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="Obsync reads metadata and object definitions only — it never modifies the database and never needs sysadmin. Generate a least-privilege script your DBA can review and run to grant a dedicated account exactly what Obsync needs." />
-
-                    <TextBlock Text="ACCOUNT (SQL login or DOMAIN\user)" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding PermissionAccount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <TextBlock Text="DATABASES (one per line)" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding PermissionDatabases, UpdateSourceTrigger=PropertyChanged}"
-                             AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
-                             VerticalScrollBarVisibility="Auto" Margin="0,4,0,16" />
-
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                        <Button Content="Generate permission script" Style="{StaticResource PrimaryButton}"
-                                Command="{Binding GeneratePermissionScriptCommand}" Margin="0,0,8,0" />
-                        <Button Content="Copy" Style="{StaticResource SecondaryButton}"
-                                Command="{Binding CopyPermissionScriptCommand}" Margin="0,0,8,0" />
-                        <Button Content="Save as .sql" Style="{StaticResource SecondaryButton}"
-                                Command="{Binding SavePermissionScriptCommand}" />
-                    </StackPanel>
-
-                    <Border Style="{StaticResource Panel}"
-                            Visibility="{Binding PermissionScript, Converter={StaticResource NullToVisibility}}">
-                        <TextBox Text="{Binding PermissionScript, Mode=OneWay}" IsReadOnly="True"
-                                 FontFamily="Cascadia Mono, Consolas" FontSize="12"
-                                 AcceptsReturn="True" TextWrapping="NoWrap"
-                                 MinHeight="140" MaxHeight="320"
-                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                 BorderThickness="0" Background="Transparent" />
-                    </Border>
-                </StackPanel>
-            </Border>
-
-            <!-- Production tags -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Production tags" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="A job carrying any of these tags is treated as production: its tag shows red and a manual Run Now asks for confirmation first. Comma-separated; case-insensitive." />
-
-                    <TextBlock Text="PRODUCTION TAGS" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding ProductionTagsText, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
-                            Command="{Binding SaveProductionTagsCommand}"
-                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    <TextBlock Text="{Binding ProductionTagsStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding ProductionTagsStatus, Converter={StaticResource NullToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- Git commits -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Git commits" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="The author identity stamped on every sync commit — so git blame and the GitHub history show your team instead of a generic tool. Leave blank for the defaults." />
-
-                    <TextBlock Text="COMMITTER NAME" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding CommitterName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <TextBlock Text="COMMITTER EMAIL (OPTIONAL)" Style="{StaticResource Caption}" />
-                    <TextBox Text="{Binding CommitterEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                    <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
-                            Command="{Binding SaveCommitterCommand}"
-                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    <TextBlock Text="{Binding CommitterStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding CommitterStatus, Converter={StaticResource NullToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- Run history retention -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Run history" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="How long completed runs — with their logs and change lists — are kept in the local database. Older runs are removed automatically; what was committed to GitHub is never touched." />
-
-                    <TextBlock Text="KEEP RUN HISTORY FOR" Style="{StaticResource Caption}" />
-                    <ComboBox ItemsSource="{Binding RetentionOptions}" SelectedItem="{Binding SelectedRetention}"
-                              DisplayMemberPath="Label" Margin="0,4,0,16" />
-
-                    <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
-                            Command="{Binding SaveRetentionCommand}"
-                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    <TextBlock Text="{Binding RetentionStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding RetentionStatus, Converter={StaticResource NullToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- Notifications -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Notifications" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="Obsync can tell you, inside the app, when something needs attention." />
-
-                    <CheckBox Content="Notify me when a run fails or completes with warnings"
-                              IsChecked="{Binding NotifyRunFailures}" />
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0"
-                               Text="Scheduled runs that fail while the app is closed are summarized the next time you open Obsync." />
-                    <TextBlock Text="{Binding NotifyStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding NotifyStatus, Converter={StaticResource NullToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- Alerts -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Alerts" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="Email or webhook alerts when scheduled runs need attention — sent by whichever host ran the job, so they work with the app closed." />
-
-                    <CheckBox Content="Email alerts" IsChecked="{Binding AlertEmailEnabled}" Margin="0,0,0,12" />
-                    <StackPanel Visibility="{Binding AlertEmailEnabled, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Text="SMTP HOST" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding SmtpHost, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                        <TextBlock Text="PORT" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding SmtpPortText, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="110" HorizontalAlignment="Left" Margin="0,4,0,12"
-                                 MaxLength="5" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
-
-                        <CheckBox Content="Use TLS" IsChecked="{Binding SmtpUseTls}" Margin="0,0,0,16" />
-
-                        <TextBlock Text="USERNAME (OPTIONAL)" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding SmtpUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                        <TextBlock Text="PASSWORD (LEAVE BLANK TO KEEP THE SAVED ONE)" Style="{StaticResource Caption}" />
-                        <PasswordBox x:Name="SmtpPasswordBox" PasswordChanged="OnSmtpPasswordChanged" Margin="0,4,0,16" />
-
-                        <TextBlock Text="FROM ADDRESS" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding AlertFromAddress, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                        <TextBlock Text="TO (COMMA-SEPARATED)" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding AlertToAddresses, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-                    </StackPanel>
-
-                    <CheckBox Content="Webhook alerts" IsChecked="{Binding AlertWebhookEnabled}" Margin="0,0,0,12" />
-                    <StackPanel Visibility="{Binding AlertWebhookEnabled, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Text="WEBHOOK URL (RECEIVES A JSON POST PER ALERT)" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding AlertWebhookUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-                    </StackPanel>
-
-                    <CheckBox Content="Alert when a run fails" IsChecked="{Binding AlertOnFailure}" />
-                    <CheckBox Content="Alert when a run finishes with warnings" IsChecked="{Binding AlertOnWarning}" Margin="0,8,0,0" />
-                    <CheckBox Content="Alert when changes are detected and committed" IsChecked="{Binding AlertOnChanges}" Margin="0,8,0,0" />
-                    <CheckBox Content="Only for scheduled and startup runs" IsChecked="{Binding AlertScheduledOnly}" Margin="0,8,0,16" />
-
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="Save alerts" Style="{StaticResource PrimaryButton}" Command="{Binding SaveAlertsCommand}" Margin="0,0,8,0"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                        <Button Content="Send test alert" Style="{StaticResource SecondaryButton}" Command="{Binding SendTestAlertCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    </StackPanel>
-                    <TextBlock Text="{Binding AlertStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding AlertStatus, Converter={StaticResource NullToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- Data locations -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Data locations" Style="{StaticResource SectionTitle}" Margin="0,0,0,16" />
-
-                    <Grid Margin="0,0,0,12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="170" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Data folder" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <TextBlock Grid.Column="1" Text="{Binding DataRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
-                    </Grid>
-
-                    <Grid Margin="0,0,0,12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="170" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="State database" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <TextBlock Grid.Column="1" Text="{Binding DatabasePath}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
-                    </Grid>
-
-                    <Grid Margin="0,0,0,12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="170" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Git workspaces" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,7,0,0" />
-                        <StackPanel Grid.Column="1">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="8" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox Text="{Binding WorkspacesRootText, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button Grid.Column="2" Content="Browse…" Style="{StaticResource SecondaryButton}"
-                                        Command="{Binding BrowseWorkspacesRootCommand}" />
-                                <Button Grid.Column="4" Content="Save" Style="{StaticResource PrimaryButton}"
-                                        Command="{Binding SaveWorkspacesRootCommand}"
-                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                            </Grid>
-                            <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0"
-                                       Text="Where repository clones live. Changing it takes effect on each job's next run; clear the field and save to go back to the default." />
-                            <TextBlock Text="{Binding WorkspacesStatus}" Style="{StaticResource Muted}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                       Visibility="{Binding WorkspacesStatus, Converter={StaticResource NullToVisibility}}" />
-                        </StackPanel>
-                    </Grid>
-
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="170" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Logs" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <TextBlock Grid.Column="1" Text="{Binding LogsRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
-                    </Grid>
-                </StackPanel>
-            </Border>
-
-            <!-- Proxy -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Proxy" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="How Obsync reaches GitHub (API and git). SQL Server connects directly. Shared by the app and the Windows Service." />
-
-                    <TextBlock Text="MODE" Style="{StaticResource Caption}" />
-                    <ComboBox ItemsSource="{Binding ProxyModes}" SelectedItem="{Binding SelectedProxyMode}" Margin="0,4,0,16">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-
-                    <StackPanel Visibility="{Binding IsManualProxy, Converter={StaticResource BoolToVisibility}}">
-                        <TextBlock Text="PROXY URL (e.g. http://proxy.corp:8080)" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding ProxyUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                        <TextBlock Text="USERNAME (OPTIONAL)" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding ProxyUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-
-                        <TextBlock Text="PASSWORD (LEAVE BLANK TO KEEP THE SAVED ONE)" Style="{StaticResource Caption}" />
-                        <PasswordBox x:Name="ProxyPasswordBox" PasswordChanged="OnProxyPasswordChanged" Margin="0,4,0,16" />
-
-                        <TextBlock Text="BYPASS (COMMA-SEPARATED HOSTS THAT CONNECT DIRECTLY)" Style="{StaticResource Caption}" />
-                        <TextBox Text="{Binding ProxyBypass, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
-                    </StackPanel>
-
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
-                               Text="For scheduled runs the Windows Service account often has no OS proxy — use Manual for reliable service operation." />
-
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="Save proxy" Style="{StaticResource PrimaryButton}" Command="{Binding SaveProxyCommand}" Margin="0,0,8,0"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                        <Button Content="Test proxy" Style="{StaticResource SecondaryButton}" Command="{Binding TestProxyCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    </StackPanel>
-                    <TextBlock Text="{Binding ProxyStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding ProxyStatus, Converter={StaticResource NullToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <!-- Diagnostics + support bundle -->
-            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                <StackPanel>
-                    <TextBlock Text="Diagnostics" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="Check SQL Server, GitHub, Git, disk space, and the Obsync service — then export a support bundle if you need help." />
-
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                        <Button Content="Run diagnostics" Style="{StaticResource PrimaryButton}"
-                                Command="{Binding RunDiagnosticsCommand}" Margin="0,0,8,0"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                        <Button Content="Export support bundle" Style="{StaticResource SecondaryButton}"
-                                Command="{Binding ExportSupportBundleCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    </StackPanel>
-
-                    <ItemsControl ItemsSource="{Binding Diagnostics}"
-                                  Visibility="{Binding Diagnostics.Count, Converter={StaticResource CountToVisibility}}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Margin="0,0,0,8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="20" />
-                                        <ColumnDefinition Width="Auto" MinWidth="150" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" FontWeight="Bold" VerticalAlignment="Top">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Text" Value="&#x2715;" />
-                                                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Status}" Value="Pass">
-                                                        <Setter Property="Text" Value="&#x2713;" />
-                                                        <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding Status}" Value="Warning">
-                                                        <Setter Property="Text" Value="!" />
-                                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource BodyStrong}" Margin="0,0,12,0" TextWrapping="Wrap" />
-                                    <TextBlock Grid.Column="2" Text="{Binding Detail}" Style="{StaticResource Muted}" TextWrapping="Wrap" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <TextBlock Text="{Binding DiagnosticsSummary}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
-                               Visibility="{Binding DiagnosticsSummary, Converter={StaticResource NullToVisibility}}" />
-                    <TextBlock Text="The support bundle includes versions, config, diagnostics, and recent logs. Secrets are never included."
-                               Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,10,0,0" />
-                </StackPanel>
-            </Border>
-
-            <!-- Recent activity (audit trail) -->
-            <Border Style="{StaticResource Card}" Margin="0,18,0,0">
-                <StackPanel>
-                    <TextBlock Text="Recent activity" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                    <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
-                               Text="Who did what, attributed to the Windows identity that performed the action. The export writes the complete audit history as CSV or JSON." />
-
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                        <Button Content="Export audit log" Style="{StaticResource SecondaryButton}"
-                                Command="{Binding ExportAuditLogCommand}"
-                                IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
-                    </StackPanel>
-                    <TextBlock Text="{Binding AuditExportStatus}" Style="{StaticResource Muted}" Margin="0,0,0,12" TextWrapping="Wrap"
-                               Visibility="{Binding AuditExportStatus, Converter={StaticResource NullToVisibility}}" />
-
-                    <ItemsControl ItemsSource="{Binding RecentActivity}"
-                                  Visibility="{Binding RecentActivity.Count, Converter={StaticResource CountToVisibility}}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Margin="0,0,0,10">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Style="{StaticResource BodyStrong}" TextWrapping="Wrap">
-                                            <Run Text="{Binding Action, Converter={StaticResource EnumDisplay}, Mode=OneWay}" />
-                                            <Run Text="{Binding EntityName, Mode=OneWay}" />
-                                        </TextBlock>
-                                        <TextBlock Text="{Binding Actor}" Style="{StaticResource Muted}" />
-                                    </StackPanel>
-                                    <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
-                                               Text="{Binding OccurredAt, Converter={StaticResource LocalDateTime}}"
-                                               Style="{StaticResource Muted}" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <TextBlock Text="No activity recorded yet.">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding RecentActivity.Count}" Value="0">
-                                        <Setter Property="Visibility" Value="Visible" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                </StackPanel>
-            </Border>
+            <TextBlock Text="Preferences, connectivity, security, and diagnostics" Style="{StaticResource Muted}" Margin="0,4,0,10" />
         </StackPanel>
-    </ScrollViewer>
+
+        <!-- Categorized settings: the same underline tabs the Job Workspace uses. Each tab scrolls
+             independently; cards keep a readable measure instead of stretching across the window. -->
+        <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0">
+
+            <!-- ================================ General ================================ -->
+            <TabItem Header="General">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                    <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
+
+                        <!-- Notifications -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                            <StackPanel>
+                                <TextBlock Text="Notifications" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="Obsync can tell you, inside the app, when something needs attention." />
+
+                                <CheckBox Content="Notify me when a run fails or completes with warnings"
+                                          IsChecked="{Binding NotifyRunFailures}" />
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                           Text="Scheduled runs that fail while the app is closed are summarized the next time you open Obsync." />
+                                <TextBlock Text="{Binding NotifyStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding NotifyStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Production tags -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                            <StackPanel>
+                                <TextBlock Text="Production tags" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="A job carrying any of these tags is treated as production: its tag shows red and a manual Run Now asks for confirmation first. Comma-separated; case-insensitive." />
+
+                                <TextBlock Text="PRODUCTION TAGS" Style="{StaticResource Caption}" />
+                                <TextBox Text="{Binding ProductionTagsText, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                                        Command="{Binding SaveProductionTagsCommand}"
+                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                <TextBlock Text="{Binding ProductionTagsStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding ProductionTagsStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Run history retention -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                            <StackPanel>
+                                <TextBlock Text="Run history" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="How long completed runs — with their logs and change lists — are kept in the local database. Older runs are removed automatically; what was committed to GitHub is never touched." />
+
+                                <TextBlock Text="KEEP RUN HISTORY FOR" Style="{StaticResource Caption}" />
+                                <ComboBox ItemsSource="{Binding RetentionOptions}" SelectedItem="{Binding SelectedRetention}"
+                                          DisplayMemberPath="Label" Margin="0,4,0,16" />
+
+                                <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                                        Command="{Binding SaveRetentionCommand}"
+                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                <TextBlock Text="{Binding RetentionStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding RetentionStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Git commits -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Git commits" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="The author identity stamped on every sync commit — so git blame and the GitHub history show your team instead of a generic tool. Leave blank for the defaults." />
+
+                                <TextBlock Text="COMMITTER NAME" Style="{StaticResource Caption}" />
+                                <TextBox Text="{Binding CommitterName, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                <TextBlock Text="COMMITTER EMAIL (OPTIONAL)" Style="{StaticResource Caption}" />
+                                <TextBox Text="{Binding CommitterEmail, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                <Button Content="Save" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"
+                                        Command="{Binding SaveCommitterCommand}"
+                                        IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                <TextBlock Text="{Binding CommitterStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding CommitterStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ================================ Alerts ================================ -->
+            <TabItem Header="Alerts">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                    <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Alerts" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="Email or webhook alerts when scheduled runs need attention — sent by whichever host ran the job, so they work with the app closed." />
+
+                                <CheckBox Content="Email alerts" IsChecked="{Binding AlertEmailEnabled}" Margin="0,0,0,12" />
+                                <StackPanel Visibility="{Binding AlertEmailEnabled, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="SMTP HOST" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding SmtpHost, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="PORT" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding SmtpPortText, UpdateSourceTrigger=PropertyChanged}"
+                                             Width="110" HorizontalAlignment="Left" Margin="0,4,0,12"
+                                             MaxLength="5" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+
+                                    <CheckBox Content="Use TLS" IsChecked="{Binding SmtpUseTls}" Margin="0,0,0,16" />
+
+                                    <TextBlock Text="USERNAME (OPTIONAL)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding SmtpUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="PASSWORD (LEAVE BLANK TO KEEP THE SAVED ONE)" Style="{StaticResource Caption}" />
+                                    <PasswordBox x:Name="SmtpPasswordBox" PasswordChanged="OnSmtpPasswordChanged" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="FROM ADDRESS" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding AlertFromAddress, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="TO (COMMA-SEPARATED)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding AlertToAddresses, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                                </StackPanel>
+
+                                <CheckBox Content="Webhook alerts" IsChecked="{Binding AlertWebhookEnabled}" Margin="0,0,0,12" />
+                                <StackPanel Visibility="{Binding AlertWebhookEnabled, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="WEBHOOK URL (RECEIVES A JSON POST PER ALERT)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding AlertWebhookUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                                </StackPanel>
+
+                                <CheckBox Content="Alert when a run fails" IsChecked="{Binding AlertOnFailure}" />
+                                <CheckBox Content="Alert when a run finishes with warnings" IsChecked="{Binding AlertOnWarning}" Margin="0,8,0,0" />
+                                <CheckBox Content="Alert when changes are detected and committed" IsChecked="{Binding AlertOnChanges}" Margin="0,8,0,0" />
+                                <CheckBox Content="Only for scheduled and startup runs" IsChecked="{Binding AlertScheduledOnly}" Margin="0,8,0,16" />
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Save alerts" Style="{StaticResource PrimaryButton}" Command="{Binding SaveAlertsCommand}" Margin="0,0,8,0"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                    <Button Content="Send test alert" Style="{StaticResource SecondaryButton}" Command="{Binding SendTestAlertCommand}"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding AlertStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding AlertStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ============================ Network &amp; storage ============================ -->
+            <TabItem Header="Network &amp; storage">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                    <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
+
+                        <!-- Proxy -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                            <StackPanel>
+                                <TextBlock Text="Proxy" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="How Obsync reaches GitHub (API and git). SQL Server connects directly. Shared by the app and the Windows Service." />
+
+                                <TextBlock Text="MODE" Style="{StaticResource Caption}" />
+                                <ComboBox ItemsSource="{Binding ProxyModes}" SelectedItem="{Binding SelectedProxyMode}" Margin="0,4,0,16">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+
+                                <StackPanel Visibility="{Binding IsManualProxy, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="PROXY URL (e.g. http://proxy.corp:8080)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding ProxyUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="USERNAME (OPTIONAL)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding ProxyUsername, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="PASSWORD (LEAVE BLANK TO KEEP THE SAVED ONE)" Style="{StaticResource Caption}" />
+                                    <PasswordBox x:Name="ProxyPasswordBox" PasswordChanged="OnProxyPasswordChanged" Margin="0,4,0,16" />
+
+                                    <TextBlock Text="BYPASS (COMMA-SEPARATED HOSTS THAT CONNECT DIRECTLY)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding ProxyBypass, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                                </StackPanel>
+
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
+                                           Text="For scheduled runs the Windows Service account often has no OS proxy — use Manual for reliable service operation." />
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Save proxy" Style="{StaticResource PrimaryButton}" Command="{Binding SaveProxyCommand}" Margin="0,0,8,0"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                    <Button Content="Test proxy" Style="{StaticResource SecondaryButton}" Command="{Binding TestProxyCommand}"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding ProxyStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding ProxyStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Data locations -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Data locations" Style="{StaticResource SectionTitle}" Margin="0,0,0,16" />
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Data folder" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                    <TextBlock Grid.Column="1" Text="{Binding DataRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="State database" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                    <TextBlock Grid.Column="1" Text="{Binding DatabasePath}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Git workspaces" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,7,0,0" />
+                                    <StackPanel Grid.Column="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="8" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Text="{Binding WorkspacesRootText, UpdateSourceTrigger=PropertyChanged}" />
+                                            <Button Grid.Column="2" Content="Browse…" Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding BrowseWorkspacesRootCommand}" />
+                                            <Button Grid.Column="4" Content="Save" Style="{StaticResource PrimaryButton}"
+                                                    Command="{Binding SaveWorkspacesRootCommand}"
+                                                    IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                        </Grid>
+                                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                                   Text="Where repository clones live. Changing it takes effect on each job's next run; clear the field and save to go back to the default." />
+                                        <TextBlock Text="{Binding WorkspacesStatus}" Style="{StaticResource Muted}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                                   Visibility="{Binding WorkspacesStatus, Converter={StaticResource NullToVisibility}}" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Logs" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                    <TextBlock Grid.Column="1" Text="{Binding LogsRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ============================ Security &amp; audit ============================ -->
+            <TabItem Header="Security &amp; audit">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                    <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
+
+                        <!-- Required SQL permissions -->
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,18">
+                            <StackPanel>
+                                <TextBlock Text="Required SQL permissions" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="Obsync reads metadata and object definitions only — it never modifies the database and never needs sysadmin. Generate a least-privilege script your DBA can review and run to grant a dedicated account exactly what Obsync needs." />
+
+                                <TextBlock Text="ACCOUNT (SQL login or DOMAIN\user)" Style="{StaticResource Caption}" />
+                                <TextBox Text="{Binding PermissionAccount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+
+                                <TextBlock Text="DATABASES (one per line)" Style="{StaticResource Caption}" />
+                                <TextBox Text="{Binding PermissionDatabases, UpdateSourceTrigger=PropertyChanged}"
+                                         AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
+                                         VerticalScrollBarVisibility="Auto" Margin="0,4,0,16" />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                    <Button Content="Generate permission script" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding GeneratePermissionScriptCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Copy" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding CopyPermissionScriptCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Save as .sql" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding SavePermissionScriptCommand}" />
+                                </StackPanel>
+
+                                <Border Style="{StaticResource Panel}"
+                                        Visibility="{Binding PermissionScript, Converter={StaticResource NullToVisibility}}">
+                                    <TextBox Text="{Binding PermissionScript, Mode=OneWay}" IsReadOnly="True"
+                                             FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                                             AcceptsReturn="True" TextWrapping="NoWrap"
+                                             MinHeight="140" MaxHeight="320"
+                                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                             BorderThickness="0" Background="Transparent" />
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Recent activity (audit trail) -->
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Recent activity" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="Who did what, attributed to the Windows identity that performed the action. The export writes the complete audit history as CSV or JSON." />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Button Content="Export audit log" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding ExportAuditLogCommand}"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding AuditExportStatus}" Style="{StaticResource Muted}" Margin="0,0,0,12" TextWrapping="Wrap"
+                                           Visibility="{Binding AuditExportStatus, Converter={StaticResource NullToVisibility}}" />
+
+                                <ItemsControl ItemsSource="{Binding RecentActivity}"
+                                              Visibility="{Binding RecentActivity.Count, Converter={StaticResource CountToVisibility}}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0">
+                                                    <TextBlock Style="{StaticResource BodyStrong}" TextWrapping="Wrap">
+                                                        <Run Text="{Binding Action, Converter={StaticResource EnumDisplay}, Mode=OneWay}" />
+                                                        <Run Text="{Binding EntityName, Mode=OneWay}" />
+                                                    </TextBlock>
+                                                    <TextBlock Text="{Binding Actor}" Style="{StaticResource Muted}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center"
+                                                           Text="{Binding OccurredAt, Converter={StaticResource LocalDateTime}}"
+                                                           Style="{StaticResource Muted}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="No activity recorded yet.">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RecentActivity.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- =============================== Diagnostics =============================== -->
+            <TabItem Header="Diagnostics">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                    <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="Diagnostics" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="Check SQL Server, GitHub, Git, disk space, and the Obsync service — then export a support bundle if you need help." />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                    <Button Content="Run diagnostics" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding RunDiagnosticsCommand}" Margin="0,0,8,0"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                    <Button Content="Export support bundle" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding ExportSupportBundleCommand}"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                </StackPanel>
+
+                                <ItemsControl ItemsSource="{Binding Diagnostics}"
+                                              Visibility="{Binding Diagnostics.Count, Converter={StaticResource CountToVisibility}}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="20" />
+                                                    <ColumnDefinition Width="Auto" MinWidth="150" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" FontWeight="Bold" VerticalAlignment="Top">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="&#x2715;" />
+                                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Status}" Value="Pass">
+                                                                    <Setter Property="Text" Value="&#x2713;" />
+                                                                    <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Status}" Value="Warning">
+                                                                    <Setter Property="Text" Value="!" />
+                                                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource BodyStrong}" Margin="0,0,12,0" TextWrapping="Wrap" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Detail}" Style="{StaticResource Muted}" TextWrapping="Wrap" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="{Binding DiagnosticsSummary}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding DiagnosticsSummary, Converter={StaticResource NullToVisibility}}" />
+                                <TextBlock Text="The support bundle includes versions, config, diagnostics, and recent logs. Secrets are never included."
+                                           Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,10,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ================================= About ================================= -->
+            <TabItem Header="About">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+                    <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="About" Style="{StaticResource SectionTitle}" Margin="0,0,0,16" />
+                                <Grid Margin="0,0,0,16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Version" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Version}" Style="{StaticResource BodyStrong}" />
+                                        <TextBlock Text="{Binding EngineVersion}" Style="{StaticResource Muted}" Margin="0,2,0,0" />
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                            <Button Content="Check for updates" Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding CheckForUpdatesCommand}"
+                                                    IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                            <Button Style="{StaticResource LinkButton}" Content="View release"
+                                                    Margin="12,0,0,0" VerticalAlignment="Center"
+                                                    Command="{Binding OpenReleasePageCommand}"
+                                                    Visibility="{Binding UpdateReleaseUrl, Converter={StaticResource NullToVisibility}}" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding UpdateStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                                   Visibility="{Binding UpdateStatus, Converter={StaticResource NullToVisibility}}" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Border Style="{StaticResource Panel}" Background="{StaticResource AccentSoftBrush}" Margin="0,0,0,10">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
+                                                   Foreground="{StaticResource AccentBrush}" VerticalAlignment="Top" Margin="0,1,10,0" />
+                                        <TextBlock Text="Secrets are stored in Windows Credential Manager; the local state database never holds passwords or tokens."
+                                                   Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Style="{StaticResource Panel}" Background="{StaticResource SuccessSoftBrush}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCheck}"
+                                                   Foreground="{StaticResource SuccessBrush}" VerticalAlignment="Top" Margin="0,1,10,0" />
+                                        <TextBlock Text="Read-only by design — Obsync only reads metadata and object definitions. It never modifies SQL Server, never runs deployment scripts, and never requires sysadmin."
+                                                   Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </Grid>
 </UserControl>
