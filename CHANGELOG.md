@@ -2,6 +2,16 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.8.1 — 2026-07-10
+
+- **Tabbed Settings** — the Settings page is reorganized into categorized tabs (General, Alerts,
+  Network & storage, Security & audit, Diagnostics, About) instead of one long scroll, with a
+  readable card width.
+- **Modern scrollbars** — a slim, rounded scrollbar style replaces the stock Windows chrome
+  throughout the app.
+- **Collapsible sidebar** — the navigation rail collapses to a compact icon-only strip via a toggle
+  at its foot; tooltips carry the labels and the preference persists across sessions.
+
 ## 0.8.0 — 2026-07-10
 
 - **Nothing is silently lost** — tracked object state (hashes, deletions, incremental watermarks)
