@@ -109,7 +109,8 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
         return new SchedulerHealth(
             SchedulerHealthStatus.NotExecutingYourJobs,
             $"Scheduled jobs won't run — the Obsync service is running as {account}, which cannot see " +
-            "your jobs or credentials. Reinstall Obsync and set the service account to your Windows account.");
+            "your jobs or credentials. Set the service's Log On account to your Windows account " +
+            "(services.msc → Obsync → Log On) and restart it, or reinstall Obsync with your account.");
     }
 
     /// <summary>The SCM status, or null when the service is not installed.</summary>
