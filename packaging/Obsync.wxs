@@ -136,10 +136,13 @@
                       Description="Runs Obsync scheduled sync jobs in the background."
                       Type="ownProcess"
                       Start="auto"
-                      DelayedAutoStart="yes"
                       ErrorControl="normal"
                       Account="[SERVICE_ACCOUNT]"
-                      Password="[SERVICE_PASSWORD]" />
+                      Password="[SERVICE_PASSWORD]">
+        <!-- Delayed auto-start (the MSI 5.0 ServiceConfig table; WiX has no attribute for it on
+             ServiceInstall itself). -->
+        <ServiceConfig DelayedAutoStart="yes" OnInstall="yes" OnReinstall="yes" />
+      </ServiceInstall>
       <ServiceControl Id="ObsyncServiceControl" Name="Obsync" Stop="both" Remove="uninstall" Wait="yes" />
       <ServiceControl Id="ObsyncServiceStart" Name="Obsync" Start="install" Wait="no" />
       <util:ServiceConfig ServiceName="Obsync"

@@ -2,7 +2,7 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
-## Unreleased
+## 0.7.0 — 2026-07-10
 
 - **Reliable scheduling** — the launch-blocking scheduling gaps are closed end-to-end:
   - The MSI now registers the Obsync service **automatic (delayed) start** and starts it at install,
