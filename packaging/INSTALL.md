@@ -16,7 +16,7 @@ The MSI installs:
 | --- | --- |
 | Desktop app | `Obsync.App.exe`, Start Menu shortcut |
 | CLI | `obsync.exe`; the install directory is added to the machine `PATH` |
-| Windows service | `Obsync` (display name "Obsync Sync Service"), **manual start** |
+| Windows service | `Obsync` (display name "Obsync Sync Service"), **automatic (delayed) start**, started by the installer |
 | Bundled git | `tools\git\cmd\git.exe` (MinGit) |
 
 ## Interactive install
@@ -27,9 +27,10 @@ Double-click the MSI. The wizard steps are:
 2. **License Agreement** — accepting is required to continue.
 3. **Destination Folder** — defaults to `C:\Program Files\Obsync\`.
 4. **Service Account** — choose who the `Obsync` service logs on as:
-   - **Local System — configure later** (default): the service installs but cannot run scheduled
-     jobs until you change its logon account, because Obsync reads credentials from the *per-user*
-     Windows Credential Manager vault.
+   - **Local System — configure later** (default): the service installs and runs, but it cannot see
+     your jobs or run schedules, because Obsync's data and credentials live in the *per-user*
+     profile and Windows Credential Manager vault. The app shows a scheduler warning until the
+     account is fixed.
    - **This account**: enter `DOMAIN\user` and password — **the same account that runs the Obsync
      app**, so the service sees the credentials and data the app saved. For a group Managed Service
      Account enter `DOMAIN\name$` and leave the password blank.
@@ -45,9 +46,11 @@ msiexec /i Obsync-<version>-win-x64.msi /qn `
     /l*v install.log
 ```
 
-- `SERVICE_ACCOUNT` / `SERVICE_PASSWORD` — the service logon account. Omit both to get manual-start
-  Local System (configure later). The account needs the **"Log on as a service"** right; the Service
-  Control Manager grants it automatically when the MSI assigns the account.
+- `SERVICE_ACCOUNT` / `SERVICE_PASSWORD` — the service logon account. Omit both to get Local System
+  (configure later — schedules won't run until the account is set). The account needs the
+  **"Log on as a service"** right. If the service fails to start after an unattended install, grant
+  the right (Group Policy, or re-enter the credentials once on the service's Log On tab in
+  `services.msc`, which grants it) and start the service.
 - `INSTALLFOLDER` — the install directory (the same property the wizard's Destination Folder page
   sets). Omit for the default under Program Files.
 - `/l*v install.log` — verbose install log; always capture it for unattended rollouts.
@@ -86,13 +89,18 @@ install folder and are untouched). Installing an *older* version over a newer on
 
 The `Obsync` Windows service runs scheduled sync jobs **with the desktop app closed** (Quartz
 scheduler host) and picks up job/schedule changes made in the app within 30 seconds — no restart
-needed. It is installed **manual start**; set it to Automatic once the logon account is configured:
+needed. It is installed **automatic (delayed) start** and started by the installer, so schedules
+keep firing after every reboot with no manual step. To change the logon account later:
 
 ```powershell
-Set-Service Obsync -StartupType Automatic
+Stop-Service Obsync
+sc.exe config Obsync obj= "DOMAIN\user" password= "..."   # or the Log On tab in services.msc
 Start-Service Obsync
 ```
 
+- **Missed schedules**: if a run time passes while the machine or service is off, the service runs
+  the job **once** at startup to catch up (never once per missed occurrence, and never if a later
+  run already covered it).
 - **Recovery**: preconfigured by the installer — on each of the first three failures the service
   restarts after 60 seconds; the failure counter resets daily.
 - **Event Viewer**: the installer registers the **"Obsync"** source in the **Application** log; the

@@ -11,12 +11,14 @@ public interface IRunRepository
     Task InsertAsync(SyncRun run, CancellationToken cancellationToken = default);
     Task UpdateAsync(SyncRun run, CancellationToken cancellationToken = default);
 
+    /// <summary>All runs currently in <see cref="RunStatus.Running"/> (feeds orphaned-run recovery).</summary>
+    Task<IReadOnlyList<SyncRun>> GetRunningAsync(CancellationToken cancellationToken = default);
+
     /// <summary>
-    /// Marks runs left in <see cref="RunStatus.Running"/> since before <paramref name="staleBefore"/>
-    /// as failed. A run executes in-process, so any still "Running" after the app restarts is orphaned
-    /// (e.g. the app was killed mid-run, or a past concurrency bug). Returns how many were reconciled.
+    /// Marks one run as failed with a reason, but only if it is still Running — a run that completed
+    /// in the meantime is left untouched.
     /// </summary>
-    Task<int> FailStaleRunningAsync(DateTimeOffset staleBefore, DateTimeOffset completedAt, string reason, CancellationToken cancellationToken = default);
+    Task FailRunAsync(Guid runId, DateTimeOffset completedAt, string reason, CancellationToken cancellationToken = default);
     Task<SyncRun?> GetAsync(Guid runId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SyncRun>> GetForJobAsync(Guid jobId, int limit = 50, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SyncRun>> GetRecentAsync(int limit = 20, CancellationToken cancellationToken = default);
@@ -95,15 +97,24 @@ public sealed class RunRepository : IRunRepository
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
-    public async Task<int> FailStaleRunningAsync(
-        DateTimeOffset staleBefore, DateTimeOffset completedAt, string reason, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SyncRun>> GetRunningAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return await connection.ExecuteAsync(new CommandDefinition(
+        var rows = await connection.QueryAsync<RunRow>(new CommandDefinition(
+            $"{SelectRun} WHERE status = $running;",
+            new { running = (int)RunStatus.Running }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return [.. rows.Select(Map)];
+    }
+
+    public async Task FailRunAsync(
+        Guid runId, DateTimeOffset completedAt, string reason, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await connection.ExecuteAsync(new CommandDefinition(
             """
             UPDATE runs
             SET status = $failed, completed_at = $completed, error_message = $reason
-            WHERE status = $running AND started_at < $stale;
+            WHERE id = $id AND status = $running;
             """,
             new
             {
@@ -111,7 +122,7 @@ public sealed class RunRepository : IRunRepository
                 running = (int)RunStatus.Running,
                 completed = completedAt,
                 reason,
-                stale = staleBefore,
+                id = runId.ToString(),
             },
             cancellationToken: cancellationToken)).ConfigureAwait(false);
     }

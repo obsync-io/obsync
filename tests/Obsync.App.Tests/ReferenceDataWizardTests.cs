@@ -37,7 +37,8 @@ public sealed class ReferenceDataWizardTests
         var probe = Substitute.For<ISqlServerProbe>();
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, probe,
-            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>());
+            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
         return (vm, () => saved, probe);
     }
 

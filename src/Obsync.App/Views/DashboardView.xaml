@@ -6,6 +6,17 @@
             <TextBlock Text="Dashboard" Style="{StaticResource PageTitle}" />
             <TextBlock Text="High-level health and recent activity" Style="{StaticResource Muted}" Margin="0,4,0,20" />
 
+            <!-- Scheduler health: schedules exist that the background service can't execute -->
+            <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
+                    Padding="14,10" Margin="0,0,0,16"
+                    Visibility="{Binding SchedulerWarning, Converter={StaticResource NullToVisibility}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
+                               Foreground="{StaticResource WarningBrush}" FontSize="15" VerticalAlignment="Top" Margin="0,1,10,0" />
+                    <TextBlock Text="{Binding SchedulerWarning}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="900" />
+                </StackPanel>
+            </Border>
+
             <!-- Metric cards: a WrapPanel of fixed-width cards so they reflow onto a second row on
                  narrow windows instead of squeezing. Inside each card a DockPanel keeps the caption
                  from overlapping the icon chip (it trims with an ellipsis if the card is narrow). -->

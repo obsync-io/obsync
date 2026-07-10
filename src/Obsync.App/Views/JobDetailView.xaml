@@ -134,6 +134,17 @@
                         Visibility="{Binding HasPullRequest, Converter={StaticResource BoolToVisibility}}" />
             </StackPanel>
 
+            <!-- Scheduler health: this job's schedule can't be executed by the background service -->
+            <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
+                    Padding="14,10" Margin="0,12,0,0"
+                    Visibility="{Binding SchedulerWarning, Converter={StaticResource NullToVisibility}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
+                               Foreground="{StaticResource WarningBrush}" FontSize="15" VerticalAlignment="Top" Margin="0,1,10,0" />
+                    <TextBlock Text="{Binding SchedulerWarning}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="900" />
+                </StackPanel>
+            </Border>
+
             <!-- Live status message from the most recent action -->
             <TextBlock Style="{StaticResource Muted}" Text="{Binding StatusMessage}" Margin="0,8,0,0" TextWrapping="Wrap"
                        Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />

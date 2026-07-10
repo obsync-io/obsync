@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Obsync.Data.Repositories;
+using Obsync.Shared;
 using Obsync.Shared.Models;
 using Quartz;
 using Quartz.Impl.Matchers;
@@ -47,10 +48,27 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
 
     public async Task ScheduleAllAsync(CancellationToken cancellationToken = default)
     {
+        var nowUtc = DateTimeOffset.UtcNow;
         var jobs = await _jobs.GetAllAsync(cancellationToken).ConfigureAwait(false);
         foreach (var job in jobs.Where(j => j.Enabled))
         {
+            // Evaluate BEFORE scheduling: ScheduleJobAsync overwrites the persisted next-run (the
+            // evidence of a fire time missed while the scheduler was down) with the next future fire.
+            var catchUp = MissedRunPolicy.ShouldCatchUp(job, nowUtc) && CronTranslator.IsValid(job.Schedule);
+
             await ScheduleJobAsync(job, triggerStartupRun: true, cancellationToken).ConfigureAwait(false);
+
+            if (catchUp)
+            {
+                var scheduler = await _schedulerFactory.GetScheduler(cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Job {Name}: a scheduled run (due {Due:u}) was missed while the scheduler was offline; running once now.",
+                    job.Name, job.RunSummary.NextRunAt);
+                await scheduler.TriggerJob(
+                    new JobKey(job.Id.ToString("N"), Group),
+                    new JobDataMap { [SyncQuartzJob.TriggerKey] = nameof(RunTrigger.CatchUp) },
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -100,7 +118,12 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
 
         if (job.Schedule.RunOnStartup && triggerStartupRun)
         {
-            await scheduler.TriggerJob(jobKey, cancellationToken).ConfigureAwait(false);
+            // Attributed as a Startup run (not Scheduled) so History reads honestly and the
+            // maintenance window does not apply, matching the documented bypass.
+            await scheduler.TriggerJob(
+                jobKey,
+                new JobDataMap { [SyncQuartzJob.TriggerKey] = nameof(RunTrigger.Startup) },
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -123,6 +146,13 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
         foreach (var key in existingKeys.Where(k => !desiredKeys.Contains(k)))
         {
             await scheduler.DeleteJob(key, cancellationToken).ConfigureAwait(false);
+            if (Guid.TryParseExact(key.Name, "N", out var jobId))
+            {
+                // Clear the cached next-run so a disabled job stops advertising a fire time that
+                // will never happen (a no-op for deleted jobs — the row is gone).
+                await _jobs.UpdateNextRunAtAsync(jobId, null, cancellationToken).ConfigureAwait(false);
+            }
+
             _logger.LogInformation("Unscheduled job {Key} (deleted or disabled).", key.Name);
         }
 

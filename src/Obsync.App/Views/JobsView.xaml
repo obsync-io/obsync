@@ -5,6 +5,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -31,11 +32,22 @@
             </StackPanel>
         </Grid>
 
-        <TextBlock Grid.Row="1" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0"
+        <!-- Scheduler health: schedules exist that the background service can't execute -->
+        <Border Grid.Row="1" Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
+                Padding="14,10" Margin="0,14,0,0"
+                Visibility="{Binding SchedulerWarning, Converter={StaticResource NullToVisibility}}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
+                           Foreground="{StaticResource WarningBrush}" FontSize="15" VerticalAlignment="Top" Margin="0,1,10,0" />
+                <TextBlock Text="{Binding SchedulerWarning}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="900" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock Grid.Row="2" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0"
                    Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
 
         <!-- Jobs table -->
-        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0" Padding="0">
+        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,16,0,0" Padding="0">
             <Grid>
                 <DataGrid ItemsSource="{Binding Jobs}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                           Visibility="{Binding Jobs.Count, Converter={StaticResource CountToVisibility}}">

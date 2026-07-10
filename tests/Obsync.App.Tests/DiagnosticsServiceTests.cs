@@ -26,8 +26,11 @@ public sealed class DiagnosticsServiceTests
         serverRepo.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(servers));
         var repoRepo = Substitute.For<IRepositoryProfileRepository>();
         repoRepo.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(repositories));
+        var schedulerHealth = Substitute.For<ISchedulerHealthService>();
+        schedulerHealth.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.NotInstalled, "not installed"));
         return new DiagnosticsService(probe, gitHub, git, credentials, serverRepo, repoRepo,
-            Substitute.For<IProxyProvider>(), Substitute.For<IAppSettingsRepository>());
+            Substitute.For<IProxyProvider>(), Substitute.For<IAppSettingsRepository>(), schedulerHealth);
     }
 
     [Fact]

@@ -19,10 +19,14 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     private readonly IAuditWriter _audit;
     private readonly IAppSettingsRepository _settings;
     private readonly IJobConfigPorter _porter;
+    private readonly ISchedulerHealthService _schedulerHealth;
 
     private bool _reloading;
 
     [ObservableProperty] private string? _statusMessage;
+
+    /// <summary>Set when jobs have active schedules the background service cannot execute.</summary>
+    [ObservableProperty] private string? _schedulerWarning;
 
     public ObservableCollection<SyncJob> Jobs { get; } = [];
 
@@ -33,7 +37,8 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         IJobRunCoordinator coordinator,
         IAuditWriter audit,
         IAppSettingsRepository settings,
-        IJobConfigPorter porter)
+        IJobConfigPorter porter,
+        ISchedulerHealthService schedulerHealth)
     {
         _jobs = jobs;
         _connections = connections;
@@ -42,6 +47,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         _audit = audit;
         _settings = settings;
         _porter = porter;
+        _schedulerHealth = schedulerHealth;
         _coordinator.RunStateChanged += OnRunStateChanged;
     }
 
@@ -112,6 +118,13 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
             job.IsRunning = _coordinator.IsRunning(job.Id);
             Jobs.Add(job);
         }
+
+        // Warn when a schedule exists that the background service cannot execute — otherwise the
+        // "Next Run" column would quietly promise runs that will never happen.
+        var health = jobs.Any(SchedulerHealthService.NeedsScheduler)
+            ? await _schedulerHealth.GetAsync()
+            : null;
+        SchedulerWarning = health?.CanExecuteSchedules == false ? health.Summary : null;
     }
 
     // AllowConcurrentExecutions so different jobs can run at once; CanRun blocks a second run of the
@@ -124,10 +137,18 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
             return;
         }
 
-        var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
-        if (run is null)
+        try
         {
-            StatusMessage = $"{job.Name}: a run is already in progress.";
+            var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
+            if (run is null)
+            {
+                StatusMessage = $"{job.Name}: a run is already in progress.";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. the job is already running in another Obsync process (service/CLI run lock).
+            StatusMessage = ex.Message;
         }
     }
 

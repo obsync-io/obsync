@@ -77,6 +77,38 @@ hosts (`App`, `Service`, `Cli`) compose everything via dependency injection.
 > "Run Now" from the app succeeds. The service logs the identity it runs as on startup, and a run that
 > can't find its credentials fails with a clear, actionable message.
 
+## Scheduling & the background service
+
+Schedules are executed by the **Obsync Windows Service** (Quartz.NET host) — **not** by the desktop
+app. Closing the app never stops scheduled jobs; the app is where you manage and monitor them.
+
+**Execution requirements.** The service must be installed (the MSI does this, automatic delayed
+start) and must run **as the same Windows account that runs the desktop app**, because jobs,
+run history, and credentials are per-user. When that isn't the case, the app says so: the
+Dashboard, Jobs page, Job Workspace, and job wizard show a scheduler warning whenever an enabled
+schedule exists that the service cannot execute, and **Settings → Diagnostics** has an
+"Obsync service" row with the exact reason. Health is verified end-to-end — the service writes a
+heartbeat into the job database every 30 seconds, so "healthy" means a scheduler is genuinely
+executing *your* jobs, not merely that a process is running.
+
+**How changes apply.** The service reconciles its live schedule against the database every
+30 seconds, so creating, editing, enabling, disabling, or deleting a job in the app takes effect
+within half a minute — no service restart. "Next Run" is stamped when you save a job and kept
+Quartz-accurate by the service. Times are local wall-clock; daylight-saving transitions are handled
+by the scheduler's time-zone-aware triggers.
+
+**Missed schedules.** If a run time passes while the machine or service is off, the service runs
+that job **once** at startup to catch up (shown in History as a *Catch Up* run). It never fires
+once per missed occurrence, and never fires at all if any later run — scheduled, manual, or CLI —
+already covered the missed time.
+
+**No duplicate runs.** A per-job, machine-wide run lock guarantees the same job never runs twice at
+once across the app, the service, and the CLI. If a scheduled occurrence comes due while a previous
+run of that job is still active, the occurrence is skipped with a logged reason and the next one
+fires normally. A run whose process dies mid-flight is failed with an explicit
+"interrupted" message on the next app or service start — long-running live runs are never falsely
+marked failed.
+
 ## Read-only by design
 
 Obsync **only reads** from SQL Server. It queries catalog metadata and object definitions
@@ -369,18 +401,21 @@ Event Viewer / log locations.
 
 ### Service account (required for scheduled runs)
 
-The Windows Service is installed **manual-start under `LocalSystem`** by default. Because Obsync keeps
-secrets in the per-user Windows Credential Manager and its data under `%LOCALAPPDATA%`, the service
-**must run under the same Windows account that runs the desktop app** (see the Credential Manager note
-above). Supply that account at install time:
+The Windows Service is installed **automatic (delayed) start** and started by the installer, so
+schedules survive reboots with no manual step. It defaults to `LocalSystem`, which can host the
+service but **cannot execute your schedules**: Obsync keeps secrets in the per-user Windows
+Credential Manager and its data under `%LOCALAPPDATA%`, so the service **must run under the same
+Windows account that runs the desktop app** (see the Credential Manager note above) — the app's
+scheduler warning tells you when it doesn't. Supply that account at install time:
 
 ```powershell
 msiexec /i Obsync-<version>-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
 ```
 
 For a group Managed Service Account pass `SERVICE_ACCOUNT="DOMAIN\name$"` and no password. The
-account needs the "Log on as a service" right (the Service Control Manager grants it when the
-account is assigned).
+account needs the "Log on as a service" right; if the service won't start after an unattended
+install, grant it via Group Policy or re-enter the credentials once on the service's Log On tab in
+`services.msc` (which grants it), then start the service.
 
 ## Building
 

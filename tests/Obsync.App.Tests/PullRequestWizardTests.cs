@@ -47,7 +47,8 @@ public sealed class PullRequestWizardTests
 
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
-            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>());
+            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
         await vm.LoadAsync();
         vm.InitializeForEdit(ExistingJob(connectionId, repositoryId));
 
@@ -85,7 +86,8 @@ public sealed class PullRequestWizardTests
 
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
-            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>());
+            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
         await vm.LoadAsync();
         vm.InitializeForEdit(ExistingJob(connectionId, repositoryId));
 
@@ -122,7 +124,8 @@ public sealed class PullRequestWizardTests
 
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
-            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>());
+            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
         await vm.LoadAsync();
         vm.InitializeForEdit(ExistingJob(connectionId, repositoryId));
 

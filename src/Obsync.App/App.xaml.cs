@@ -43,11 +43,12 @@ public partial class App : Application
             await _host.StartAsync();
             await _host.Services.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
 
-            // Reconcile orphaned runs: any run still "Running" after a restart never completed
-            // (runs execute in-process), so clear the zombie rows the History would otherwise show.
+            // Reconcile orphaned runs: a "Running" row whose job lock is no longer held belongs to a
+            // process that died mid-run. Lock-probing (not an age cutoff) means a long run currently
+            // executing in the scheduler service is never falsely marked failed.
             var now = DateTimeOffset.UtcNow;
             var runs = _host.Services.GetRequiredService<IRunRepository>();
-            await runs.FailStaleRunningAsync(now.AddMinutes(-5), now, "Run interrupted — the app closed before it finished.");
+            await OrphanedRunCleaner.CleanAsync(runs, ObsyncPaths.LocksRoot, now);
 
             // Apply the run-history retention setting (0 = keep forever). The service also prunes
             // daily; doing it here keeps app-only installs tidy too.

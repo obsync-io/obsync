@@ -30,6 +30,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IRunReportWriter _reportWriter;
     private readonly IAppSettingsRepository _settings;
     private readonly IJobConfigPorter _porter;
+    private readonly ISchedulerHealthService _schedulerHealth;
 
     /// <summary>The Dependencies tab's own state (object picker + live dependency lookups).</summary>
     public DependencyExplorerViewModel Dependencies { get; }
@@ -71,6 +72,9 @@ public sealed partial class JobDetailViewModel : ObservableObject
     /// <summary>The last run's error/warning detail, shown as a banner when the run did not fully succeed.</summary>
     [ObservableProperty] private string? _lastError;
 
+    /// <summary>Set when this job has an active schedule the background service cannot execute.</summary>
+    [ObservableProperty] private string? _schedulerWarning;
+
     /// <summary>True when the last run reported an error or warning worth surfacing.</summary>
     public bool HasError => !string.IsNullOrEmpty(LastError);
 
@@ -100,6 +104,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IRunReportWriter reportWriter,
         IAppSettingsRepository settings,
         IJobConfigPorter porter,
+        ISchedulerHealthService schedulerHealth,
         DependencyExplorerViewModel dependencies)
     {
         _jobs = jobs;
@@ -111,6 +116,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _reportWriter = reportWriter;
         _settings = settings;
         _porter = porter;
+        _schedulerHealth = schedulerHealth;
         Dependencies = dependencies;
     }
 
@@ -214,6 +220,10 @@ public sealed partial class JobDetailViewModel : ObservableObject
         Status = job.RunSummary.LastStatus;
         LastRunText = job.RunSummary.LastRunAt is { } at ? at.LocalDateTime.ToString("g") : "Never run";
         NextRunText = job.RunSummary.NextRunAt is { } next ? next.LocalDateTime.ToString("g") : "—";
+
+        // Never show a schedule (or next-run time) as live when the background service can't run it.
+        var health = SchedulerHealthService.NeedsScheduler(job) ? await _schedulerHealth.GetAsync() : null;
+        SchedulerWarning = health?.CanExecuteSchedules == false ? health.Summary : null;
 
         var runs = await _runs.GetForJobAsync(jobId, 50);
         Runs.Clear();
@@ -324,10 +334,18 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
         // The coordinator guards against a second concurrent run and owns the shared live state; the
         // run-state subscription drives the live progress and the post-run refresh.
-        var run = await _coordinator.RunAsync(Job.Id, RunTrigger.Manual);
-        if (run is null)
+        try
         {
-            StatusMessage = "A run is already in progress for this job.";
+            var run = await _coordinator.RunAsync(Job.Id, RunTrigger.Manual);
+            if (run is null)
+            {
+                StatusMessage = "A run is already in progress for this job.";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. the job is already running in another Obsync process (service/CLI run lock).
+            StatusMessage = ex.Message;
         }
     }
 

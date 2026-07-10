@@ -4,10 +4,13 @@
 
   Installs the desktop app, the CLI (obsync.exe, added to PATH), a bundled MinGit under tools\git\
   (harvested from the staging folder), and the background Windows service ("Obsync"). The service is
-  registered manual-start; its logon account is set from the SERVICE_ACCOUNT / SERVICE_PASSWORD
-  properties. Because Obsync stores secrets in the per-user Windows Credential Manager and data under
-  %LOCALAPPDATA%, the service must run under the SAME account that runs the desktop app — pass that
-  account for scheduled runs to work:
+  registered delayed auto-start and started at the end of the install, so schedules keep firing
+  across reboots without anyone opening services.msc; its logon account is set from the
+  SERVICE_ACCOUNT / SERVICE_PASSWORD properties. Because Obsync stores secrets in the per-user
+  Windows Credential Manager and data under %LOCALAPPDATA%, the service must run under the SAME
+  account that runs the desktop app — pass that account for scheduled runs to work (under the
+  LocalSystem default the service runs but idles against an empty data root, and the app's
+  scheduler-health banner tells the user exactly that):
 
     msiexec /i Obsync-0.1.0-win-x64.msi SERVICE_ACCOUNT="DOMAIN\user" SERVICE_PASSWORD="secret" /qn
 
@@ -117,7 +120,11 @@
     </Component>
 
     <!-- The Windows service host. Registered as "Obsync" (matches AddWindowsService and the app's
-         DiagnosticsService check). Manual start so it never auto-runs under the wrong account.
+         scheduler-health check). Delayed auto-start so schedules survive reboots with no manual
+         step; started at install end (Wait="no" — a start failure, e.g. an account missing the
+         "Log on as a service" right, must not roll back the install; the app's health banner
+         reports a stopped service with the fix). Stop/remove keep their own element so they still
+         Wait="yes" — files can't be replaced or removed under a running service.
          Recovery: restart 60s after each of the first three failures, counter resets daily. The
          "Obsync" Application-log event source backs the service's Warning+ EventLog sink and is
          registered here so the service never needs the (admin-only) right to create it. -->
@@ -128,11 +135,13 @@
                       DisplayName="Obsync Sync Service"
                       Description="Runs Obsync scheduled sync jobs in the background."
                       Type="ownProcess"
-                      Start="demand"
+                      Start="auto"
+                      DelayedAutoStart="yes"
                       ErrorControl="normal"
                       Account="[SERVICE_ACCOUNT]"
                       Password="[SERVICE_PASSWORD]" />
       <ServiceControl Id="ObsyncServiceControl" Name="Obsync" Stop="both" Remove="uninstall" Wait="yes" />
+      <ServiceControl Id="ObsyncServiceStart" Name="Obsync" Start="install" Wait="no" />
       <util:ServiceConfig ServiceName="Obsync"
                           FirstFailureActionType="restart"
                           SecondFailureActionType="restart"

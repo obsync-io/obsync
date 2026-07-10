@@ -121,10 +121,43 @@ public sealed class SyncEngine : ISyncEngine
         var job = await _jobs.GetAsync(jobId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Job {jobId} was not found.");
 
-        // Maintenance window: a SCHEDULED run outside the allowed window is skipped (manual "Run Now"
-        // and startup runs bypass). Skips are log-only — advance the cached next-run so the UI stays
-        // accurate, and return an un-persisted run (the scheduler ignores the result).
-        if (trigger == RunTrigger.Scheduled && !job.Schedule.IsWithinMaintenanceWindow(_clock.UtcNow.ToLocalTime()))
+        // Cross-process run lock: the app, the scheduler service, and the CLI all execute jobs
+        // against the same database and git workspace, so the same job must never run twice at
+        // once across processes. Held until this method returns (after final persistence).
+        using var runLock = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, job.Id);
+        if (runLock is null)
+        {
+            if (trigger == RunTrigger.Manual)
+            {
+                throw new InvalidOperationException(
+                    $"\"{job.Name}\" is already running in another Obsync process (the scheduler service or CLI). " +
+                    "Wait for that run to finish.");
+            }
+
+            // A scheduled occurrence came due while a previous run of this job is still active in
+            // another process. Policy: skip this occurrence (running it would collide on the job's
+            // git workspace); the next occurrence fires normally. Log-only, like window skips.
+            _logger.LogWarning(
+                "Job {JobId} ({JobName}) {Trigger} run skipped — a previous run is still active in another process.",
+                job.Id, job.Name, trigger);
+            return new SyncRun
+            {
+                JobId = job.Id,
+                JobName = job.Name,
+                Trigger = trigger,
+                Status = RunStatus.NoChanges,
+                StartedAt = _clock.UtcNow,
+                CompletedAt = _clock.UtcNow,
+                Tags = [.. job.Tags],
+            };
+        }
+
+        // Maintenance window: a SCHEDULED (or catch-up) run outside the allowed window is skipped
+        // (manual "Run Now" and startup runs bypass). Skips are log-only — advance the cached
+        // next-run so the UI stays accurate, and return an un-persisted run (the scheduler ignores
+        // the result).
+        if (trigger is RunTrigger.Scheduled or RunTrigger.CatchUp
+            && !job.Schedule.IsWithinMaintenanceWindow(_clock.UtcNow.ToLocalTime()))
         {
             _logger.LogInformation("Job {JobId} ({JobName}) skipped — outside its maintenance window.", job.Id, job.Name);
             await _jobs.UpdateNextRunAtAsync(job.Id, job.Schedule.GetNextRun(_clock.UtcNow), cancellationToken).ConfigureAwait(false);

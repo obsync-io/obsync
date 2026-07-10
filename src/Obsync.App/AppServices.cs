@@ -29,6 +29,8 @@ public static class AppServices
 
         // Supportability: environment health checks and the secret-masked support bundle.
         services.AddSingleton<IDiagnosticsService, DiagnosticsService>();
+        // "Will my schedules actually run?" — SCM state + service account + scheduler heartbeat.
+        services.AddSingleton<ISchedulerHealthService, SchedulerHealthService>();
         services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();
         services.AddSingleton<IRunReportWriter, RunReportWriter>();
 

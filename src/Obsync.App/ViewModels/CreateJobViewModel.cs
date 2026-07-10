@@ -57,6 +57,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
     private readonly IAuditWriter _audit;
+    private readonly Services.ISchedulerHealthService _schedulerHealth;
 
     private SyncJob? _editingJob;
 
@@ -112,6 +113,13 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private string? _statusMessage;
     [ObservableProperty] private bool _isBusy;
 
+    /// <summary>
+    /// Shown on the Schedule step when the background service can't execute schedules right now, so
+    /// the user never leaves the wizard believing a schedule is live when it isn't. Informational —
+    /// the schedule is still saved and activates once the service is healthy.
+    /// </summary>
+    [ObservableProperty] private string? _scheduleServiceNotice;
+
     public ObservableCollection<SqlConnectionProfile> Connections { get; } = [];
     public ObservableCollection<GitRepositoryProfile> Repositories { get; } = [];
     public ObservableCollection<SelectableDatabase> Databases { get; } = [];
@@ -151,7 +159,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         ISqlServerProbe probe,
         ICredentialStore credentialStore,
         IClock clock,
-        IAuditWriter audit)
+        IAuditWriter audit,
+        Services.ISchedulerHealthService schedulerHealth)
     {
         _connections = connections;
         _repositories = repositories;
@@ -160,6 +169,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _credentialStore = credentialStore;
         _clock = clock;
         _audit = audit;
+        _schedulerHealth = schedulerHealth;
 
         // The main picker offers database objects; server-scoped types have their own checklist.
         foreach (var descriptor in SqlObjectTypeCatalog.All)
@@ -282,6 +292,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             Repositories.Add(repository);
         }
+
+        var health = await _schedulerHealth.GetAsync();
+        ScheduleServiceNotice = health is { CanExecuteSchedules: false }
+            ? $"{health.Summary} The schedule is saved either way and starts working once the service is running."
+            : null;
     }
 
     /// <summary>Populates the wizard from an existing job for editing. Call after <see cref="LoadAsync"/>.</summary>
@@ -722,6 +737,17 @@ public sealed partial class CreateJobViewModel : ObservableObject
             // scheduler host and picks up jobs and their schedules when it loads them. The app runs
             // jobs on demand via Run Now.
             await _jobs.UpsertAsync(job);
+
+            // Stamp the intended next run so the UI shows it immediately. Standard cadences compute
+            // it here; a cron schedule's exact fire time is written by the scheduler (which owns the
+            // cron engine) on its next reconcile, and the scheduler refines all of them with the
+            // Quartz-precise time. Manual schedules clear any leftover value.
+            await _jobs.UpdateNextRunAtAsync(
+                job.Id,
+                job.Enabled && job.Schedule.Kind != ScheduleKind.Manual
+                    ? job.Schedule.GetNextRun(_clock.UtcNow) ?? job.RunSummary.NextRunAt
+                    : null);
+
             await _audit.WriteAsync(
                 IsEditMode ? AuditAction.JobEdited : AuditAction.JobCreated, "Job", job.Id.ToString(), job.Name);
             Saved?.Invoke(this, EventArgs.Empty);

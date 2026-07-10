@@ -90,6 +90,9 @@ public enum RunTrigger
     Manual = 0,
     Scheduled = 1,
     Startup = 2,
+
+    /// <summary>A one-time recovery run for a scheduled occurrence missed while the scheduler was offline.</summary>
+    CatchUp = 3,
 }
 
 /// <summary>How Obsync reaches the internet for GitHub API + git operations.</summary>

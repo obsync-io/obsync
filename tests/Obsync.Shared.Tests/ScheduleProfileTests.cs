@@ -80,4 +80,48 @@ public sealed class ScheduleProfileTests
         Assert.Equal(0, local.Minute);
         Assert.Equal(0, local.Hour % 3);
     }
+
+    [Fact]
+    public void Daily_CarriesTheOffsetInEffectAtTheFireDate_AcrossAFullYear()
+    {
+        // Regression for a DST bug: candidates used to be stamped with TODAY'S UTC offset, so a
+        // fire time on the other side of a daylight-saving transition was off by the transition
+        // delta. Scanning a year of reference instants crosses both transitions in any zone with
+        // DST (and is trivially true in zones without it).
+        var schedule = new ScheduleProfile { Kind = ScheduleKind.Daily, TimeOfDay = new TimeOnly(4, 0) };
+
+        for (var day = 0; day < 366; day += 5)
+        {
+            var from = From.AddDays(day);
+            var next = schedule.GetNextRun(from);
+
+            Assert.NotNull(next);
+            Assert.True(next > from);
+            Assert.Equal(4, next!.Value.Hour); // wall-clock time preserved
+            Assert.Equal(TimeZoneInfo.Local.GetUtcOffset(next.Value.DateTime), next.Value.Offset);
+        }
+    }
+
+    [Fact]
+    public void Weekly_CarriesTheOffsetInEffectAtTheFireDate_AcrossAFullYear()
+    {
+        var schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Weekly,
+            DayOfWeek = DayOfWeek.Wednesday,
+            TimeOfDay = new TimeOnly(22, 15),
+        };
+
+        for (var day = 0; day < 366; day += 5)
+        {
+            var from = From.AddDays(day);
+            var next = schedule.GetNextRun(from);
+
+            Assert.NotNull(next);
+            Assert.True(next > from);
+            Assert.Equal(DayOfWeek.Wednesday, next!.Value.DayOfWeek);
+            Assert.Equal(22, next.Value.Hour);
+            Assert.Equal(TimeZoneInfo.Local.GetUtcOffset(next.Value.DateTime), next.Value.Offset);
+        }
+    }
 }

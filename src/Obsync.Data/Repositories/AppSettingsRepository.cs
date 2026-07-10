@@ -48,6 +48,14 @@ public interface IAppSettingsRepository
     /// <summary>The newest release version already announced by a startup toast, so a given version is announced at most once.</summary>
     Task<string?> GetLastNotifiedUpdateVersionAsync(CancellationToken cancellationToken = default);
     Task SetLastNotifiedUpdateVersionAsync(string version, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The scheduler service's liveness beacon (see <see cref="SchedulerHeartbeat"/>). The service
+    /// refreshes it every reconcile tick and clears it (null) on a graceful stop; the app treats a
+    /// missing or stale beacon as "no scheduler is executing this database's jobs".
+    /// </summary>
+    Task<SchedulerHeartbeat?> GetSchedulerHeartbeatAsync(CancellationToken cancellationToken = default);
+    Task SetSchedulerHeartbeatAsync(SchedulerHeartbeat? heartbeat, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IAppSettingsRepository" />
@@ -63,6 +71,7 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     private const string LastFailureCheckKey = "lastFailureCheck";
     private const string LastUpdateCheckKey = "lastUpdateCheck";
     private const string LastNotifiedUpdateVersionKey = "lastNotifiedUpdateVersion";
+    private const string SchedulerHeartbeatKey = "schedulerHeartbeat";
 
     private static readonly IReadOnlyList<string> DefaultProductionTags = ["prod", "production"];
 
@@ -156,6 +165,15 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
 
     public Task SetLastNotifiedUpdateVersionAsync(string version, CancellationToken cancellationToken = default) =>
         SetValueAsync(LastNotifiedUpdateVersionKey, version, cancellationToken);
+
+    public async Task<SchedulerHeartbeat?> GetSchedulerHeartbeatAsync(CancellationToken cancellationToken = default)
+    {
+        var json = await GetValueAsync(SchedulerHeartbeatKey, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrEmpty(json) ? null : ObsyncJson.Deserialize<SchedulerHeartbeat>(json);
+    }
+
+    public Task SetSchedulerHeartbeatAsync(SchedulerHeartbeat? heartbeat, CancellationToken cancellationToken = default) =>
+        SetValueAsync(SchedulerHeartbeatKey, heartbeat is null ? string.Empty : ObsyncJson.Serialize(heartbeat), cancellationToken);
 
     private async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken)
     {

@@ -31,7 +31,8 @@ public sealed class MaintenanceWindowWizardTests
 
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
-            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>());
+            Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
         return (vm, () => saved);
     }
 

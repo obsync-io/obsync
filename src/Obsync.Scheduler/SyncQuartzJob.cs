@@ -11,6 +11,12 @@ public sealed class SyncQuartzJob : IJob
 {
     public const string JobIdKey = "jobId";
 
+    /// <summary>
+    /// Optional <see cref="RunTrigger"/> name attached when the scheduler fires a job manually
+    /// (startup and catch-up runs). Cron fires carry no override and default to Scheduled.
+    /// </summary>
+    public const string TriggerKey = "trigger";
+
     private readonly ISyncEngine _engine;
     private readonly ILogger<SyncQuartzJob> _logger;
 
@@ -29,8 +35,12 @@ public sealed class SyncQuartzJob : IJob
             return;
         }
 
-        _logger.LogInformation("Scheduled run starting for job {JobId}.", jobId);
-        var run = await _engine.RunJobAsync(jobId, RunTrigger.Scheduled, null, context.CancellationToken).ConfigureAwait(false);
-        _logger.LogInformation("Scheduled run for job {JobId} finished with status {Status}.", jobId, run.Status);
+        var trigger = Enum.TryParse<RunTrigger>(context.MergedJobDataMap.GetString(TriggerKey), out var parsed)
+            ? parsed
+            : RunTrigger.Scheduled;
+
+        _logger.LogInformation("{Trigger} run starting for job {JobId}.", trigger, jobId);
+        var run = await _engine.RunJobAsync(jobId, trigger, null, context.CancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("{Trigger} run for job {JobId} finished with status {Status}.", trigger, jobId, run.Status);
     }
 }

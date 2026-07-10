@@ -19,6 +19,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     private readonly IJobRunCoordinator _coordinator;
     private readonly IShellNavigator _navigator;
     private readonly IAppSettingsRepository _settings;
+    private readonly ISchedulerHealthService _schedulerHealth;
 
     private bool _reloading;
 
@@ -29,13 +30,16 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     [ObservableProperty] private string _latestCommit = "—";
     [ObservableProperty] private string? _statusMessage;
 
+    /// <summary>Set when jobs have active schedules the background service cannot execute.</summary>
+    [ObservableProperty] private string? _schedulerWarning;
+
     public ObservableCollection<SyncJob> Jobs { get; } = [];
 
     public DashboardViewModel(
         IJobRepository jobs, IConnectionProfileRepository connections, IRepositoryProfileRepository repositories,
         IRunRepository runs, IObjectStateRepository objectStates,
         IJobRunCoordinator coordinator, IShellNavigator navigator,
-        IAppSettingsRepository settings)
+        IAppSettingsRepository settings, ISchedulerHealthService schedulerHealth)
     {
         _jobs = jobs;
         _connections = connections;
@@ -45,6 +49,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         _coordinator = coordinator;
         _navigator = navigator;
         _settings = settings;
+        _schedulerHealth = schedulerHealth;
         _coordinator.RunStateChanged += OnRunStateChanged;
     }
 
@@ -90,10 +95,18 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
             return;
         }
 
-        var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
-        if (run is null)
+        try
         {
-            StatusMessage = $"{job.Name}: a run is already in progress.";
+            var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
+            if (run is null)
+            {
+                StatusMessage = $"{job.Name}: a run is already in progress.";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. the job is already running in another Obsync process (service/CLI run lock).
+            StatusMessage = ex.Message;
         }
     }
 
@@ -119,5 +132,12 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         var recent = await _runs.GetRecentAsync(1);
         var latest = recent.FirstOrDefault(r => r.CommitSha is not null);
         LatestCommit = latest?.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : "—";
+
+        // Warn when a schedule exists that the background service cannot execute — otherwise the
+        // "Next Run" column would quietly promise runs that will never happen.
+        var health = jobs.Any(SchedulerHealthService.NeedsScheduler)
+            ? await _schedulerHealth.GetAsync()
+            : null;
+        SchedulerWarning = health?.CanExecuteSchedules == false ? health.Summary : null;
     }
 }

@@ -1,5 +1,4 @@
 using System.IO;
-using System.ServiceProcess;
 using Obsync.Data.Repositories;
 using Obsync.Git;
 using Obsync.GitHub;
@@ -40,6 +39,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
     private readonly IRepositoryProfileRepository _repositories;
     private readonly IProxyProvider _proxy;
     private readonly IAppSettingsRepository _settings;
+    private readonly ISchedulerHealthService _schedulerHealth;
 
     public DiagnosticsService(
         ISqlServerProbe probe,
@@ -49,7 +49,8 @@ public sealed class DiagnosticsService : IDiagnosticsService
         IConnectionProfileRepository servers,
         IRepositoryProfileRepository repositories,
         IProxyProvider proxy,
-        IAppSettingsRepository settings)
+        IAppSettingsRepository settings,
+        ISchedulerHealthService schedulerHealth)
     {
         _probe = probe;
         _gitHub = gitHub;
@@ -59,6 +60,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         _repositories = repositories;
         _proxy = proxy;
         _settings = settings;
+        _schedulerHealth = schedulerHealth;
     }
 
     public async Task<IReadOnlyList<DiagnosticResult>> RunAsync(CancellationToken cancellationToken = default)
@@ -67,7 +69,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         {
             await CheckGitAsync(cancellationToken).ConfigureAwait(false),
             await CheckDiskSpaceAsync(cancellationToken).ConfigureAwait(false),
-            CheckService(),
+            await CheckSchedulerAsync(cancellationToken).ConfigureAwait(false),
             await CheckProxyAsync(cancellationToken).ConfigureAwait(false),
         };
 
@@ -155,22 +157,15 @@ public sealed class DiagnosticsService : IDiagnosticsService
         }
     }
 
-    private static DiagnosticResult CheckService()
+    private async Task<DiagnosticResult> CheckSchedulerAsync(CancellationToken cancellationToken)
     {
-        try
-        {
-            using var controller = new ServiceController("Obsync");
-            var status = controller.Status; // throws if the service is not installed
-            return status == ServiceControllerStatus.Running
-                ? new DiagnosticResult("Obsync service", DiagnosticStatus.Pass, "Running")
-                : new DiagnosticResult("Obsync service", DiagnosticStatus.Warning, status.ToString());
-        }
-        catch (InvalidOperationException)
-        {
-            // The common case until the Phase 4 installer ships: the service isn't registered.
-            return new DiagnosticResult("Obsync service", DiagnosticStatus.Warning,
-                "Not installed. Scheduled runs need the Obsync Windows Service; install it to enable them.");
-        }
+        // SCM state alone can't answer "will MY schedules run" — the health service also checks the
+        // logon account and the heartbeat the service writes into this user's database.
+        var health = await _schedulerHealth.GetAsync(cancellationToken).ConfigureAwait(false);
+        return new DiagnosticResult(
+            "Obsync service",
+            health.CanExecuteSchedules ? DiagnosticStatus.Pass : DiagnosticStatus.Warning,
+            health.Summary);
     }
 
     private async Task<DiagnosticResult> CheckProxyAsync(CancellationToken cancellationToken)

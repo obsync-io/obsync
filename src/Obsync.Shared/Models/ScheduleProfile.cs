@@ -85,13 +85,16 @@ public sealed class ScheduleProfile
     /// </summary>
     public DateTimeOffset? GetNextRun(DateTimeOffset fromUtc)
     {
+        // Work in the local wall-clock domain and convert at the end: building candidates with
+        // TODAY'S offset would mislabel a fire time that falls on the other side of a DST
+        // transition (Local() applies the offset in effect at the candidate's own date).
         var now = fromUtc.ToLocalTime();
         switch (Kind)
         {
             case ScheduleKind.Hourly:
             {
                 var step = IntervalHours <= 0 ? 1 : IntervalHours;
-                var candidate = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, 0, 0, now.Offset).AddHours(1);
+                var candidate = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(1);
                 while (candidate.Hour % step != 0)
                 {
                     candidate = candidate.AddHours(1);
@@ -99,32 +102,37 @@ public sealed class ScheduleProfile
 
                 // A maintenance window can skip most hourly fires — advance to the next in-window hour so
                 // the displayed "next run" is the time the job will actually run. Bounded to ~8 days.
-                for (var i = 0; MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(candidate) && i < 200; i++)
+                for (var i = 0; MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(Local(candidate)) && i < 200; i++)
                 {
                     candidate = candidate.AddHours(step);
                 }
 
-                return candidate;
+                return Local(candidate);
             }
 
             case ScheduleKind.Daily:
             {
-                var candidate = new DateTimeOffset(now.Year, now.Month, now.Day, TimeOfDay.Hour, TimeOfDay.Minute, 0, now.Offset);
-                return candidate <= now ? candidate.AddDays(1) : candidate;
+                var candidate = At(now.Date, TimeOfDay);
+                return Local(candidate <= now.DateTime ? candidate.AddDays(1) : candidate);
             }
 
             case ScheduleKind.Weekly:
             {
-                var candidate = new DateTimeOffset(now.Year, now.Month, now.Day, TimeOfDay.Hour, TimeOfDay.Minute, 0, now.Offset);
                 var daysUntil = ((int)DayOfWeek - (int)now.DayOfWeek + 7) % 7;
-                candidate = candidate.AddDays(daysUntil);
-                return candidate <= now ? candidate.AddDays(7) : candidate;
+                var candidate = At(now.Date.AddDays(daysUntil), TimeOfDay);
+                return Local(candidate <= now.DateTime ? candidate.AddDays(7) : candidate);
             }
 
             default:
                 return null; // Manual (no schedule) or Cron (scheduler computes the exact fire time).
         }
     }
+
+    private static DateTime At(DateTime date, TimeOnly time) => date.Date + time.ToTimeSpan();
+
+    /// <summary>A local wall-clock time as a DateTimeOffset, with the UTC offset in effect at THAT date.</summary>
+    private static DateTimeOffset Local(DateTime wallClock) =>
+        new(DateTime.SpecifyKind(wallClock, DateTimeKind.Local));
 
     /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
     public string Describe()

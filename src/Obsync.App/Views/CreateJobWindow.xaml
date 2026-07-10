@@ -563,6 +563,17 @@
                         <TextBlock Text="Schedule" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
                         <TextBlock Text="How often this job runs." Style="{StaticResource Caption}" Margin="0,0,0,18" />
 
+                        <!-- The background service isn't currently able to execute schedules -->
+                        <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
+                                Padding="12,10" Margin="0,0,0,16"
+                                Visibility="{Binding ScheduleServiceNotice, Converter={StaticResource NullToVisibility}}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
+                                           Foreground="{StaticResource WarningBrush}" FontSize="14" VerticalAlignment="Top" Margin="0,1,8,0" />
+                                <TextBlock Text="{Binding ScheduleServiceNotice}" Style="{StaticResource Caption}" TextWrapping="Wrap" MaxWidth="560" />
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Text="CADENCE" Style="{StaticResource Caption}" />
                         <ComboBox ItemsSource="{Binding ScheduleKinds}" SelectedItem="{Binding SelectedScheduleKind}" Margin="0,4,0,16">
                             <ComboBox.ItemTemplate>
