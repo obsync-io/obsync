@@ -53,3 +53,8 @@ desktop.ini
 .nuget/
 packages/
 .claude/worktrees/
+
+# Internal working files: AI-assistant harness config and the pre-launch checklist
+# (kept locally, never part of the public repository).
+.claude/
+VERIFICATION.md

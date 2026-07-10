@@ -317,7 +317,9 @@ Settings covers the knobs a real deployment needs:
   scheduled runs that failed while the app was closed. Can be turned off.
 - **Update checks** — on startup (at most once per day) and via Settings → About → Check for
   updates, Obsync asks github.com's releases endpoint whether a newer version exists and only
-  notifies; it never auto-installs, and nothing else is transmitted — no telemetry.
+  notifies; it never auto-installs, and nothing else is transmitted — no telemetry. To hear about
+  new versions without opening the app, use GitHub's own notifications: **Watch → Custom →
+  Releases** on [obsync-io/obsync](https://github.com/obsync-io/obsync).
 
 Jobs are also portable: **Export configuration** (Job Workspace → Configuration) writes a
 secret-free JSON file that references the server and repository by name; **Import** on the Jobs
