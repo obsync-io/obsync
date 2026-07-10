@@ -19,7 +19,11 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
 {
     private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(12);
 
+    /// <summary>Minimum gap between activation-driven refreshes — activation fires on every focus switch.</summary>
+    private static readonly TimeSpan ActivationRefreshInterval = TimeSpan.FromSeconds(5);
+
     private readonly IServiceProvider _services;
+    private DateTimeOffset _lastActivationRefresh;
 
     [ObservableProperty]
     private object? _currentView;
@@ -48,6 +52,32 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
         _services.GetRequiredService<IJobRunCoordinator>().RunCompleted += OnRunCompleted;
         await ShowMissedFailuresAsync();
         await ShowAvailableUpdateAsync();
+    }
+
+    /// <summary>
+    /// Reloads the visible section when the window regains focus, so runs executed by the background
+    /// service show up without navigating away and back. Called from the shell window's Activated.
+    /// Re-navigating would be a no-op (NavigateAsync dedupes on the same view instance), so the
+    /// section's LoadAsync is invoked directly.
+    /// </summary>
+    public async Task RefreshOnActivationAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastActivationRefresh < ActivationRefreshInterval
+            || CurrentView is not IAsyncViewModel section)
+        {
+            return;
+        }
+
+        _lastActivationRefresh = now;
+        try
+        {
+            await section.LoadAsync();
+        }
+        catch (Exception)
+        {
+            // A focus-driven refresh is best-effort; user-driven loads surface their own errors.
+        }
     }
 
     // A run the app itself executed just finished: surface failures/warnings as a toast.

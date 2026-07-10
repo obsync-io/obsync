@@ -85,6 +85,16 @@ older version in place (same or different folder — settings, jobs, and credent
 install folder and are untouched). Installing an *older* version over a newer one is blocked with
 "A newer version of Obsync is already installed."
 
+**Service account on upgrade:** the last configured logon account is remembered (registry,
+`HKLM\SOFTWARE\Obsync\ServiceAccount`) and used as the default, so an upgrade never silently resets
+a working service to Local System. Windows cannot remember the *password*, so:
+
+- **Interactive upgrade** — the Service Account page opens preselected with the remembered account;
+  re-enter the password (gMSA accounts need none).
+- **Silent upgrade** of a password-logon service — pass `SERVICE_PASSWORD="..."` again (the account
+  is remembered; without the password the service is reconfigured but cannot start, and the app's
+  scheduler warning says so). gMSA and Local System silent upgrades need nothing extra.
+
 ## What the service does
 
 The `Obsync` Windows service runs scheduled sync jobs **with the desktop app closed** (Quartz

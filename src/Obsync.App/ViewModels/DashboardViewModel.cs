@@ -97,8 +97,8 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
 
         try
         {
-            var run = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
-            if (run is null)
+            var outcome = await _coordinator.RunAsync(job.Id, RunTrigger.Manual);
+            if (outcome.Status == RunRequestStatus.AlreadyRunning)
             {
                 StatusMessage = $"{job.Name}: a run is already in progress.";
             }

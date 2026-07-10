@@ -59,6 +59,9 @@ public sealed partial class JobDetailViewModel : ObservableObject
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
 
+    /// <summary>True after "Cancel run" is clicked, until the run actually stops (disables the button).</summary>
+    [ObservableProperty] private bool _isCancelling;
+
     /// <summary>Inline feedback for the "Export report" action (save path or error).</summary>
     [ObservableProperty] private string? _reportMessage;
 
@@ -336,8 +339,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         // run-state subscription drives the live progress and the post-run refresh.
         try
         {
-            var run = await _coordinator.RunAsync(Job.Id, RunTrigger.Manual);
-            if (run is null)
+            var outcome = await _coordinator.RunAsync(Job.Id, RunTrigger.Manual);
+            if (outcome.Status == RunRequestStatus.AlreadyRunning)
             {
                 StatusMessage = "A run is already in progress for this job.";
             }
@@ -348,6 +351,35 @@ public sealed partial class JobDetailViewModel : ObservableObject
             StatusMessage = ex.Message;
         }
     }
+
+    private bool CanCancelRun() => IsBusy && !IsCancelling;
+
+    // Fire-and-forget by design: the engine winds down asynchronously and the run-state subscription
+    // reports "Cancelling…" and then the final (Cancelled) result.
+    [RelayCommand(CanExecute = nameof(CanCancelRun))]
+    private void CancelRun()
+    {
+        if (Job is null)
+        {
+            return;
+        }
+
+        IsCancelling = true;
+        _coordinator.Cancel(Job.Id);
+    }
+
+    partial void OnIsBusyChanged(bool value)
+    {
+        // The run stopped (cancelled or otherwise) — re-arm the cancel button for the next run.
+        if (!value)
+        {
+            IsCancelling = false;
+        }
+
+        CancelRunCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsCancellingChanged(bool value) => CancelRunCommand.NotifyCanExecuteChanged();
 
     private bool CanExportReport() => LatestRun is not null;
 

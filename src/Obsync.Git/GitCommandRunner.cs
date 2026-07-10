@@ -15,6 +15,15 @@ public interface IGitCommandRunner
 {
     Task<GitCommandResult> RunAsync(
         string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default);
+
+    /// <param name="environment">
+    /// Extra environment variables for the child process. Secrets (auth header, proxy credentials)
+    /// travel here — environment blocks are not captured by Windows process-creation auditing
+    /// (Event 4688 / Sysmon / EDR), unlike command lines, which those pipelines record verbatim.
+    /// </param>
+    Task<GitCommandResult> RunAsync(
+        string workingDirectory, IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? environment, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IGitCommandRunner" />
@@ -47,8 +56,13 @@ public sealed class GitCommandRunner : IGitCommandRunner
         return File.Exists(bundled) ? bundled : "git";
     }
 
+    public Task<GitCommandResult> RunAsync(
+        string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default) =>
+        RunAsync(workingDirectory, arguments, environment: null, cancellationToken);
+
     public async Task<GitCommandResult> RunAsync(
-        string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+        string workingDirectory, IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? environment, CancellationToken cancellationToken = default)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -67,6 +81,18 @@ public sealed class GitCommandRunner : IGitCommandRunner
 
         // Never block on an interactive credential prompt.
         startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+
+        // Stable English output: transient-vs-permanent classification and the push-failure
+        // explanations match on stderr text, which a localized PATH git would translate.
+        startInfo.Environment["LC_ALL"] = "C";
+
+        if (environment is not null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                startInfo.Environment[key] = value;
+            }
+        }
 
         using var process = new Process { StartInfo = startInfo };
         var stdout = new StringBuilder();

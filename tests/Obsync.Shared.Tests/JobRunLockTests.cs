@@ -52,6 +52,38 @@ public sealed class JobRunLockTests : IDisposable
     }
 
     [Fact]
+    public void NamedLock_SecondAcquire_IsRefused_WhileHeld()
+    {
+        using var first = JobRunLock.TryAcquire(_locksRoot, "repo-abc");
+        Assert.NotNull(first);
+        Assert.Null(JobRunLock.TryAcquire(_locksRoot, "repo-abc"));
+        Assert.NotNull(JobRunLock.TryAcquire(_locksRoot, "repo-other"));
+    }
+
+    [Fact]
+    public async Task WaitAsync_AcquiresTheLock_OnceTheHolderReleases()
+    {
+        var holder = JobRunLock.TryAcquire(_locksRoot, "repo-wait");
+        Assert.NotNull(holder);
+
+        var waiter = JobRunLock.WaitAsync(_locksRoot, "repo-wait", TimeSpan.FromSeconds(30));
+        await Task.Delay(300);
+        holder!.Dispose();
+
+        using var acquired = await waiter;
+        Assert.NotNull(acquired);
+    }
+
+    [Fact]
+    public async Task WaitAsync_ReturnsNull_WhenTheTimeoutElapses()
+    {
+        using var holder = JobRunLock.TryAcquire(_locksRoot, "repo-busy");
+        Assert.NotNull(holder);
+
+        Assert.Null(await JobRunLock.WaitAsync(_locksRoot, "repo-busy", TimeSpan.Zero));
+    }
+
+    [Fact]
     public void IsHeld_TracksTheLockLifetime_AndDoesNotStealIt()
     {
         var jobId = Guid.NewGuid();

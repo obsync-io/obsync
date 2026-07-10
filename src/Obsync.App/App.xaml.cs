@@ -24,6 +24,21 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Failures on background threads never reach DispatcherUnhandledException; log them so a
+        // crash outside the UI thread is diagnosable. No dialogs here — these can fire off the UI
+        // thread (and, for AppDomain, while the process is already terminating).
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            Log.Fatal(args.ExceptionObject as Exception,
+                "Unhandled background exception (terminating: {IsTerminating}).", args.IsTerminating);
+            Log.CloseAndFlush();
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Error(args.Exception, "Unobserved task exception.");
+            args.SetObserved();
+        };
+
         MainViewModel mainViewModel;
         try
         {

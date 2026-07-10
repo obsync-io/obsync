@@ -174,7 +174,15 @@
 
                                 <!-- Live progress (only while a run is in flight) -->
                                 <StackPanel Margin="0,16,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
-                                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Body}" TextWrapping="Wrap" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Body}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                        <Button Grid.Column="1" Style="{StaticResource SecondaryButton}" Content="Cancel run"
+                                                Command="{Binding CancelRunCommand}" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
                                     <ProgressBar IsIndeterminate="True" Height="4" Margin="0,10,0,0"
                                                  Foreground="{StaticResource AccentBrush}" Background="{StaticResource PanelBrush}" BorderThickness="0" />
                                 </StackPanel>
@@ -486,6 +494,26 @@
                             <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" MinWidth="70" />
                             <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" MinWidth="64" />
                             <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" MinWidth="64" />
+                            <DataGridTemplateColumn Header="Skipped" Width="*" MinWidth="72">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <!-- Only rendered when objects could not be scripted -->
+                                        <TextBlock Text="{Binding ObjectsFailed, StringFormat={}{0:N0} skipped}"
+                                                   Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                   ToolTip="Objects that could not be scripted — see the Logs tab for the list">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ObjectsFailed}" Value="0">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Commit SHA" Binding="{Binding CommitSha}" Width="1.4*" MinWidth="90">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
@@ -548,7 +576,23 @@
                         <CheckBox DockPanel.Dock="Top" Content="Show technical details" IsChecked="{Binding ShowTechnicalLogs}"
                                   Margin="0,0,0,14" />
                         <DataGrid ItemsSource="{Binding Logs}" AutoGenerateColumns="False" IsReadOnly="True"
-                                  VirtualizingPanel.VirtualizationMode="Recycling">
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  RowDetailsVisibilityMode="VisibleWhenSelected">
+                            <!-- Selecting a row reveals its full detail — e.g. the per-object list behind
+                                 an "N item(s) could not be scripted" warning. Read-only TextBox so the
+                                 skip reasons can be copied. -->
+                            <DataGrid.RowDetailsTemplate>
+                                <DataTemplate>
+                                    <Border Background="{StaticResource PanelBrush}" CornerRadius="{StaticResource RadiusControl}"
+                                            Padding="12,10" Margin="8,4,8,10"
+                                            Visibility="{Binding Detail, Converter={StaticResource NullToVisibility}}">
+                                        <TextBox Text="{Binding Detail, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                                                 Background="Transparent" Padding="0"
+                                                 FontFamily="{StaticResource MonoFontFamily}" FontSize="12"
+                                                 TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxHeight="260" />
+                                    </Border>
+                                </DataTemplate>
+                            </DataGrid.RowDetailsTemplate>
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat=HH:mm:ss}" Width="Auto" />
                                 <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="Auto" />

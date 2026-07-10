@@ -11,7 +11,8 @@ internal sealed record IncrementalSkip(ModifiedObjectSnapshotItem Item, TrackedO
 internal sealed record IncrementalPlan(
     IReadOnlyList<IncrementalSkip> SkippedItems,
     IReadOnlySet<SqlObjectType> FilterableTypes,
-    IReadOnlyDictionary<SqlObjectType, DateTime> NewWatermarks);
+    IReadOnlyDictionary<SqlObjectType, DateTime> NewWatermarks,
+    IReadOnlyList<ModifiedObjectSnapshotItem> IgnoredItems);
 
 /// <summary>
 /// The pure heart of incremental scripting: given a modification snapshot, the prior object
@@ -61,6 +62,7 @@ internal static class IncrementalPlanner
         var newWatermarks = new Dictionary<SqlObjectType, DateTime>();
         var violatedTypes = new HashSet<SqlObjectType>();
         var candidates = new List<IncrementalSkip>();
+        var ignored = new List<ModifiedObjectSnapshotItem>();
 
         foreach (var item in snapshot)
         {
@@ -78,6 +80,12 @@ internal static class IncrementalPlanner
 
             if (isIgnored(item.Type, item.Schema, item.Name))
             {
+                // Ignored objects are never scripted, but their committed files are deliberately
+                // retained (the full-scan path marks them seen BEFORE the ignore check). They must
+                // be reported so the engine marks them seen here too — dropping them made the
+                // deletion pass treat them as dropped objects and delete their committed files,
+                // but only when incremental filtering kicked in.
+                ignored.Add(item);
                 continue;
             }
 
@@ -96,7 +104,7 @@ internal static class IncrementalPlanner
         // the provider will yield them again and they must go through the normal apply path once.
         var skipped = candidates.Where(c => filterable.Contains(c.Item.Type)).ToList();
 
-        return new IncrementalPlan(skipped, filterable, newWatermarks);
+        return new IncrementalPlan(skipped, filterable, newWatermarks, ignored);
     }
 
     /// <summary>The engine's object-state key format — must match <c>SyncEngine.StateKey</c> exactly.</summary>

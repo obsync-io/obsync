@@ -103,6 +103,29 @@ public sealed class IncrementalPlannerTests
     }
 
     [Fact]
+    public void IgnoredObject_WithPriorState_IsReportedAsIgnored_SoItsCommittedFileIsRetained()
+    {
+        // Regression: the planner used to drop old ignored objects entirely — never marked seen —
+        // so the deletion pass treated them as dropped objects and DELETED their committed files,
+        // but only when incremental filtering kicked in. The full-scan path retains them (it marks
+        // seen before the ignore check); the planner must report them so the engine can do the same.
+        var ignored = Item(SqlObjectType.StoredProcedure, "usp_Ignored", Older);
+        var normal = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [ignored, normal],
+            Prior(ignored, normal),
+            Watermarks(SqlObjectType.StoredProcedure),
+            (_, _, name) => name == "usp_Ignored");
+
+        var reported = Assert.Single(plan.IgnoredItems);
+        Assert.Equal(ignored, reported);
+        var skip = Assert.Single(plan.SkippedItems); // ignored is not in SkippedItems (not inventoried)
+        Assert.Equal(normal, skip.Item);
+        Assert.Contains(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+    }
+
+    [Fact]
     public void OldObjectWithoutPriorState_RemovesItsTypeFromFilterableTypes_AndItsSkips()
     {
         // "usp_NewlyInScope" is old but was never scripted (e.g. the selection changed) —

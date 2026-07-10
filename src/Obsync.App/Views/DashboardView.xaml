@@ -6,6 +6,10 @@
             <TextBlock Text="Dashboard" Style="{StaticResource PageTitle}" />
             <TextBlock Text="High-level health and recent activity" Style="{StaticResource Muted}" Margin="0,4,0,20" />
 
+            <!-- Live status message from the most recent action (run refused, refresh failure) -->
+            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,0,0,16" TextWrapping="Wrap"
+                       Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibility}}" />
+
             <!-- Scheduler health: schedules exist that the background service can't execute -->
             <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
                     Padding="14,10" Margin="0,0,0,16"

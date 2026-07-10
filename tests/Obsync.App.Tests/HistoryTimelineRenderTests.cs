@@ -65,7 +65,8 @@ public sealed class HistoryTimelineRenderTests
 
                 var viewModel = new HistoryViewModel(
                     runs, Substitute.For<IJobRepository>(), Substitute.For<IRepositoryProfileRepository>(),
-                    Substitute.For<IRunReportWriter>(), Substitute.For<IAppSettingsRepository>(), clock);
+                    Substitute.For<IRunReportWriter>(), Substitute.For<IAppSettingsRepository>(), clock,
+                    Substitute.For<IJobRunCoordinator>());
 
                 viewModel.LoadAsync().GetAwaiter().GetResult();
                 var entry = viewModel.TimelineDays[0].Entries[0];

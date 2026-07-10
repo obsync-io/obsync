@@ -29,6 +29,15 @@ public sealed class SyncEngine : ISyncEngine
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>How long a run waits for another job using the same repository before giving up.</summary>
+    private static readonly TimeSpan WorkspaceLockTimeout = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Scripts larger than this are skipped: GitHub hard-rejects files over 100 MB and the failed
+    /// push would wedge the branch. (Realistic source: reference-data exports with wide rows.)
+    /// </summary>
+    private const int MaxScriptChars = 95_000_000;
+
     private readonly IJobRepository _jobs;
     private readonly IConnectionProfileRepository _connections;
     private readonly IRepositoryProfileRepository _repositories;
@@ -195,6 +204,53 @@ public sealed class SyncEngine : ISyncEngine
             ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(connection.Id))
             : null;
 
+        // Different jobs can share one repository profile — and therefore one git workspace. A
+        // second lock (per repository) serializes them: interleaved checkout/add in a shared clone
+        // would sweep another job's half-written tree into the wrong branch/commit. Waiting
+        // (bounded) rather than skipping, so overlapping schedules run back-to-back instead of one
+        // silently dropping its sync.
+        IDisposable? workspaceLock = null;
+        if (job.CommitMode != CommitMode.ExportOnly && job.RepositoryProfileId is { } workspaceRepoId)
+        {
+            var lockName = $"repo-{workspaceRepoId:N}";
+            workspaceLock = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, lockName);
+            if (workspaceLock is null)
+            {
+                progress?.Report(new SyncProgress(SyncPhase.PreparingRepository,
+                    "Waiting for another job that uses the same repository to finish…"));
+                _logger.LogInformation(
+                    "Job {JobId} ({JobName}) is waiting for the repository workspace lock.", job.Id, job.Name);
+                workspaceLock = await JobRunLock.WaitAsync(
+                    ObsyncPaths.LocksRoot, lockName, WorkspaceLockTimeout, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (workspaceLock is null)
+            {
+                if (trigger == RunTrigger.Manual)
+                {
+                    throw new InvalidOperationException(
+                        $"Another job kept the repository busy for over {WorkspaceLockTimeout.TotalMinutes:N0} minutes — " +
+                        "wait for it to finish, then run again.");
+                }
+
+                _logger.LogWarning(
+                    "Job {JobId} ({JobName}) {Trigger} run skipped — another job kept the shared repository busy " +
+                    "for over {Timeout} minutes.", job.Id, job.Name, trigger, WorkspaceLockTimeout.TotalMinutes);
+                return new SyncRun
+                {
+                    JobId = job.Id,
+                    JobName = job.Name,
+                    Trigger = trigger,
+                    Status = RunStatus.NoChanges,
+                    StartedAt = _clock.UtcNow,
+                    CompletedAt = _clock.UtcNow,
+                    Tags = [.. job.Tags],
+                };
+            }
+        }
+
+        using var heldWorkspaceLock = workspaceLock;
+
         var started = _clock.UtcNow;
         var run = new SyncRun
         {
@@ -224,6 +280,14 @@ public sealed class SyncEngine : ISyncEngine
         {
             run.Status = RunStatus.Cancelled;
             context.Log(SyncLogLevel.Warning, "Run cancelled.");
+        }
+        catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+        {
+            // Cancellation mid-query surfaces as a provider error, not OperationCanceledException
+            // (SqlClient throws "a severe error occurred on the current command"). The user asked
+            // to stop — record Cancelled, not a scary failure.
+            run.Status = RunStatus.Cancelled;
+            context.Log(SyncLogLevel.Warning, "Run cancelled.", ex.Message);
         }
         catch (Exception ex)
         {
@@ -549,8 +613,9 @@ public sealed class SyncEngine : ISyncEngine
         // are written), the deletion pass a no-op, and no object_states are consulted.
         var prior = fullSnapshot
             ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
-            : (await _objectStates.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false))
-                .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
+            : BuildPriorMap(
+                await _objectStates.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false),
+                database);
 
         // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
         // `prior` is only read during processing, so a plain dictionary is safe to share.
@@ -595,9 +660,40 @@ public sealed class SyncEngine : ISyncEngine
                 context.IncrementScanned();
                 inventory.Add(new ObjectInventoryEntry(
                     identity.Type.ToString(), identity.Schema, identity.Name, relativePath, hash));
+
+                // A live count during the longest phase — throttled so a VLDB run posts a few
+                // updates per second, not one per object.
+                var scanned = context.Scanned;
+                if (scanned % 500 == 0)
+                {
+                    context.Report(SyncPhase.Scripting, $"Scripting {database}… {scanned:N0} objects processed", scanned);
+                }
+            }
+
+            if (script.Length > MaxScriptChars)
+            {
+                // Skip-and-report (file retained via "seen"): committing it would make GitHub
+                // reject the push and wedge the branch for every later run.
+                context.IncrementFailed();
+                skipped.Add($"{identity.Type} {DescribeIdentity(identity)} — the generated script is " +
+                    $"{script.Length / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
+                return;
             }
 
             var hasPrior = prior.TryGetValue(key, out var priorState);
+
+            // Layout changes move an object's file (e.g. a job growing from one database to several
+            // nests per-database folders). Remove the old path so the repository does not keep a
+            // stale duplicate tree; the state row follows to the new path with this run's upsert.
+            if (hasPrior && !string.Equals(priorState!.FilePath, repoRelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                var oldAbsolute = Path.Combine(localPath, priorState.FilePath.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(oldAbsolute))
+                {
+                    File.Delete(oldAbsolute);
+                }
+            }
+
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
             if (changeType == ChangeType.Unchanged)
             {
@@ -654,9 +750,14 @@ public sealed class SyncEngine : ISyncEngine
         // An object a provider could not script (encrypted/CLR module, SMO failure) is recorded as a
         // skip rather than silently dropped: it is counted, marked "seen" (so it is not deleted), and
         // surfaced as a warning. Runs concurrently, so it only touches thread-safe accumulators.
+        // The type is remembered so the incremental watermark for it does NOT advance this run —
+        // otherwise a transiently skipped object whose change predates the new watermark would never
+        // be re-examined until it changed again.
+        var skippedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
         Task RecordSkipAsync(RawScriptedObject raw)
         {
             seen.TryAdd(StateKey(raw.Identity), 0);
+            skippedTypes.TryAdd(raw.Identity.Type, 0);
             context.IncrementScanned();
             context.IncrementFailed();
             skipped.Add($"{raw.Identity.Type} {DescribeIdentity(raw.Identity)} — {raw.SkipReason}");
@@ -696,10 +797,20 @@ public sealed class SyncEngine : ISyncEngine
             skipped.Add($"Reference data {DescribeIdentity(identity)} — {reason}");
         }
 
+        // A generated file whose catalog read failed is a skip too — the objects are already
+        // scripted at this point, and failing the whole run over a permissions/options query would
+        // discard that work. Marked "seen" so the committed copy is never deleted on a blip.
+        void RecordArtifactSkip(ScriptedObjectIdentity identity, string reason)
+        {
+            seen.TryAdd(StateKey(identity), 0);
+            context.IncrementFailed();
+            skipped.Add($"Generated file {identity.Name} — {reason}");
+        }
+
         // Artifacts, reference data, documentation, and deletions run after the parallel phase, so
         // they touch the accumulators alone.
         var inventorySnapshot = inventory.ToList();
-        await GenerateDatabaseArtifactsAsync(context, database, inventorySnapshot, ApplyItemAsync, cancellationToken).ConfigureAwait(false);
+        await GenerateDatabaseArtifactsAsync(context, database, inventorySnapshot, ApplyItemAsync, RecordArtifactSkip, cancellationToken).ConfigureAwait(false);
         await GenerateReferenceDataAsync(context, database, ApplyItemAsync, RecordDataSkip, cancellationToken).ConfigureAwait(false);
         await GenerateDocumentationAsync(
             context, database, inventorySnapshot, prior, seen, changesBeforeDatabase, ApplyItemAsync, cancellationToken)
@@ -713,7 +824,17 @@ public sealed class SyncEngine : ISyncEngine
                 string.Join("\n", details.Take(100)));
         }
 
-        await ApplyDeletionsAsync(context, database, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
+        ApplyDeletions(context, database, localPath, prior, seen);
+
+        // A type that had skips must not advance its watermark: the skipped object's change may
+        // predate the new watermark, and advancing past it would hide the change from every later
+        // incremental run.
+        if (!skippedTypes.IsEmpty && context.PendingWatermarks.TryGetValue(database, out var staged))
+        {
+            context.PendingWatermarks[database] = staged
+                .Where(pair => !skippedTypes.ContainsKey(pair.Key))
+                .ToDictionary(pair => pair.Key, pair => pair.Value);
+        }
 
         context.PendingStates.AddRange(changedStates);
     }
@@ -765,6 +886,13 @@ public sealed class SyncEngine : ISyncEngine
                 _pathMapper.MapRelativePath(identity), skip.PriorState.LastHash));
         }
 
+        // Ignored objects: seen (committed files retained, matching the full-scan path) but never
+        // scanned or inventoried — full scans exclude them from both as well.
+        foreach (var item in plan.IgnoredItems)
+        {
+            seen.TryAdd(StateKey(new ScriptedObjectIdentity(item.Type, item.Schema, item.Name)), 0);
+        }
+
         if (plan.NewWatermarks.Count > 0)
         {
             context.PendingWatermarks[database] = plan.NewWatermarks;
@@ -808,8 +936,9 @@ public sealed class SyncEngine : ISyncEngine
 
         var prior = fullSnapshot
             ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
-            : (await _objectStates.GetForJobDatabaseAsync(context.Job.Id, RepositoryLayout.ServerScopeName, cancellationToken).ConfigureAwait(false))
-                .ToDictionary(StateKey, StringComparer.OrdinalIgnoreCase);
+            : BuildPriorMap(
+                await _objectStates.GetForJobDatabaseAsync(context.Job.Id, RepositoryLayout.ServerScopeName, cancellationToken).ConfigureAwait(false),
+                "The server scope");
 
         // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
@@ -974,7 +1103,7 @@ public sealed class SyncEngine : ISyncEngine
             }
         }
 
-        await ApplyDeletionsAsync(context, RepositoryLayout.ServerScopeName, localPath, prior, seen, cancellationToken).ConfigureAwait(false);
+        ApplyDeletions(context, RepositoryLayout.ServerScopeName, localPath, prior, seen);
 
         context.PendingStates.AddRange(changedStates);
     }
@@ -1026,40 +1155,63 @@ public sealed class SyncEngine : ISyncEngine
     /// </summary>
     private async Task GenerateDatabaseArtifactsAsync(
         RunContext context, string database, IReadOnlyList<ObjectInventoryEntry> inventory,
-        Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply, CancellationToken cancellationToken)
+        Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply,
+        Action<ScriptedObjectIdentity, string> recordSkip, CancellationToken cancellationToken)
     {
         var selection = context.Job.Selection;
         var timeout = context.Job.Advanced.SqlCommandTimeoutSeconds;
         var lockTimeout = context.Job.Advanced.SqlLockTimeoutSeconds;
 
+        // A failed catalog read becomes a reported skip (like documentation and reference data),
+        // never a run failure — every object is already scripted by the time these generate.
+        async Task GenerateAsync(string name, string repositoryFile, Func<Task<string>> read)
+        {
+            var identity = ArtifactIdentity(name);
+            try
+            {
+                var content = await read().ConfigureAwait(false);
+                await apply(identity, content, repositoryFile, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                recordSkip(identity, ex.Message);
+            }
+        }
+
         if (selection.IncludeObjectInventory)
         {
-            var json = ObjectInventoryWriter.Serialize(context.Connection.ServerName, database, inventory);
-            await apply(ArtifactIdentity("object-inventory"), json, RepositoryLayout.ObjectInventoryFile, cancellationToken).ConfigureAwait(false);
+            await GenerateAsync("object-inventory", RepositoryLayout.ObjectInventoryFile,
+                () => Task.FromResult(ObjectInventoryWriter.Serialize(context.Connection.ServerName, database, inventory)))
+                .ConfigureAwait(false);
         }
 
         if (selection.IncludeDatabaseOptions)
         {
-            var options = await _artifactReader.ReadDatabaseOptionsAsync(
-                context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
-            await apply(ArtifactIdentity("database-options"), options, RepositoryLayout.DatabaseOptionsFile, cancellationToken).ConfigureAwait(false);
+            await GenerateAsync("database-options", RepositoryLayout.DatabaseOptionsFile,
+                () => _artifactReader.ReadDatabaseOptionsAsync(
+                    context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken))
+                .ConfigureAwait(false);
         }
 
         if (selection.IncludeDatabasePermissionsFile)
         {
-            var permissions = await _artifactReader.ReadPermissionsAsync(
-                context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
-            await apply(ArtifactIdentity("permissions"), permissions, RepositoryLayout.PermissionsFile, cancellationToken).ConfigureAwait(false);
+            await GenerateAsync("permissions", RepositoryLayout.PermissionsFile,
+                () => _artifactReader.ReadPermissionsAsync(
+                    context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken))
+                .ConfigureAwait(false);
         }
 
         // Like the permissions file, the review is read every run: grants and role membership do
         // not bump any modify_date, so posture drift is only caught by re-reading the catalog.
         if (selection.IncludeSecurityReview)
         {
-            var findings = await _securityReader.ReadDatabaseFindingsAsync(
-                context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken).ConfigureAwait(false);
-            var review = SecurityReviewWriter.Build(database, findings);
-            await apply(ArtifactIdentity("security-review"), review, RepositoryLayout.SecurityReviewFile, cancellationToken).ConfigureAwait(false);
+            await GenerateAsync("security-review", RepositoryLayout.SecurityReviewFile, async () =>
+            {
+                var findings = await _securityReader.ReadDatabaseFindingsAsync(
+                    context.Connection, context.SqlPassword, database, timeout, lockTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+                return SecurityReviewWriter.Build(database, findings);
+            }).ConfigureAwait(false);
         }
     }
 
@@ -1181,9 +1333,9 @@ public sealed class SyncEngine : ISyncEngine
     private static ScriptedObjectIdentity ArtifactIdentity(string name) =>
         new(SqlObjectType.DatabaseArtifact, string.Empty, name);
 
-    private async Task ApplyDeletionsAsync(
+    private static void ApplyDeletions(
         RunContext context, string database, string localPath,
-        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen, CancellationToken cancellationToken)
+        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen)
     {
         if (!context.Job.Selection.RemoveDroppedObjects)
         {
@@ -1218,8 +1370,9 @@ public sealed class SyncEngine : ISyncEngine
             deletedIds.Add(state.Id);
         }
 
-        // One transaction for the whole batch — a mass drop on a VLDB removes many rows at once.
-        await _objectStates.DeleteManyAsync(deletedIds, cancellationToken).ConfigureAwait(false);
+        // The state rows are removed by PersistStatesAsync only after the changeset is delivered —
+        // deleting them here would forget the deletion forever if the commit/push later failed.
+        context.PendingDeletedStateIds.AddRange(deletedIds);
     }
 
     private async Task FinalizeAsync(SyncRun run, RunContext context, GitWorkspaceContext gitContext, CancellationToken cancellationToken)
@@ -1262,14 +1415,16 @@ public sealed class SyncEngine : ISyncEngine
                 context.Log(SyncLogLevel.Info, "No changes detected — nothing to commit.");
             }
 
-            await PersistStatesAsync(context, run.Status, run.CommitSha, cancellationToken).ConfigureAwait(false);
+            // Nothing was pending this run (no changes), so there is no state to protect — persist
+            // unconditionally to keep watermarks advancing on healthy no-change runs.
+            await PersistStatesAsync(context, run.Status, run.CommitSha, delivered: true, cancellationToken).ConfigureAwait(false);
             EscalateForSkips(run, context);
             context.Report(SyncPhase.Completed, "Run completed.");
             return;
         }
 
         await CommitAndPushAsync(run, context, gitContext, allowEmpty: false, cancellationToken).ConfigureAwait(false);
-        await PersistStatesAsync(context, run.Status, run.CommitSha, cancellationToken).ConfigureAwait(false);
+        await PersistStatesAsync(context, run.Status, run.CommitSha, context.ChangesDelivered, cancellationToken).ConfigureAwait(false);
         EscalateForSkips(run, context);
         context.Report(SyncPhase.Completed, "Run completed.");
     }
@@ -1307,6 +1462,9 @@ public sealed class SyncEngine : ISyncEngine
         if (!commit.HadChanges
             && (isLocalOnly || !await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false)))
         {
+            // The detected changes produced an identical git tree (e.g. a file already carried the
+            // new content) — the repository already reflects them, so state may advance.
+            context.ChangesDelivered = true;
             run.Status = RunStatus.NoChanges;
             return;
         }
@@ -1314,9 +1472,18 @@ public sealed class SyncEngine : ISyncEngine
         // Local Commit Only stops here: the commit lives in the local clone, to be pushed later.
         if (isLocalOnly)
         {
+            context.ChangesDelivered = true;
             run.Status = RunStatus.Succeeded;
             context.Log(SyncLogLevel.Info, "Committed locally (not pushed).");
             return;
+        }
+
+        // Direct mode: the local commit is durable delivery — even if the push below fails, the
+        // stranded commit is preserved and re-pushed by the next run. PR mode is different: its
+        // head branch is recut from the base every run, so delivery is only the opened PR.
+        if (gitContext.BaseBranch is null)
+        {
+            context.ChangesDelivered = true;
         }
 
         await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
@@ -1346,6 +1513,7 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         var pr = result.Value;
+        context.ChangesDelivered = true;
         run.PullRequestUrl = pr.HtmlUrl;
         run.PullRequestNumber = pr.Number;
         context.Log(SyncLogLevel.Info, $"Opened pull request #{pr.Number}. {pr.HtmlUrl}");
@@ -1391,11 +1559,11 @@ public sealed class SyncEngine : ISyncEngine
         if (push.IsFailure)
         {
             run.Status = RunStatus.Warning;
-            run.ErrorMessage = push.Error;
-            // Put the real reason in the visible (non-technical) message — a hidden push failure is
-            // exactly what stops objects from reaching GitHub. Add a hint for the most common cause.
+            // The banner/toast show ErrorMessage — give them the explained, actionable reason;
+            // the raw git stderr stays available in the log entry's technical details.
             var reason = ExplainPushFailure(push.Error);
-            context.Log(SyncLogLevel.Warning, $"The commit was created locally but the push to GitHub failed. {reason}", push.Error);
+            run.ErrorMessage = $"The commit was created locally but the push to GitHub failed. {reason}";
+            context.Log(SyncLogLevel.Warning, run.ErrorMessage, push.Error);
         }
         else
         {
@@ -1419,6 +1587,18 @@ public sealed class SyncEngine : ISyncEngine
             return "GitHub rejected the credentials — check the repository's access token is valid and not expired.";
         }
 
+        if (text.Contains("protected branch") || text.Contains("gh006"))
+        {
+            return "The branch is protected — GitHub blocks direct pushes to it. Switch the job to " +
+                   "Pull request mode, or allow this token's account to push to the branch.";
+        }
+
+        if (text.Contains("gh001") || text.Contains("exceeds github's file size limit"))
+        {
+            return "GitHub rejected a file over its 100 MB limit. Remove the oversized file from the " +
+                   "workspace branch (or reduce the job's reference-data scope), then re-run.";
+        }
+
         if (text.Contains("non-fast-forward") || text.Contains("fetch first") || text.Contains("rejected"))
         {
             return "The remote branch has commits Obsync does not have — pull/merge the branch, then re-run.";
@@ -1439,6 +1619,11 @@ public sealed class SyncEngine : ISyncEngine
         if (context.Failed > 0 && run.Status is RunStatus.Succeeded or RunStatus.NoChanges)
         {
             run.Status = RunStatus.Warning;
+            // The warning banner shows ErrorMessage; without it a skip-Warning looked like an
+            // unexplained yellow badge. The per-object reasons are in the run's log details.
+            run.ErrorMessage =
+                $"{context.Failed:N0} object(s) could not be scripted and were skipped — " +
+                "open the run's Logs and expand the warning entry for the per-object reasons.";
         }
     }
 
@@ -1479,8 +1664,26 @@ public sealed class SyncEngine : ISyncEngine
         return rules;
     }
 
-    private async Task PersistStatesAsync(RunContext context, RunStatus status, string? commitSha, CancellationToken cancellationToken)
+    private async Task PersistStatesAsync(
+        RunContext context, RunStatus status, string? commitSha, bool delivered, CancellationToken cancellationToken)
     {
+        if (!delivered)
+        {
+            // The changeset never reached durable delivery (commit failed, or — in PR mode — the
+            // push or pull request failed on a branch that is recut every run). Leave states,
+            // deletion records, and watermarks untouched so the NEXT run re-detects and re-delivers
+            // everything. Advancing them here would make every later run report "no changes" while
+            // the repository silently misses this run's work.
+            if (context.PendingStates.Count > 0 || context.PendingDeletedStateIds.Count > 0)
+            {
+                context.Log(SyncLogLevel.Warning,
+                    $"The run's {context.PendingStates.Count + context.PendingDeletedStateIds.Count:N0} change(s) " +
+                    "were not delivered — they will be re-detected and retried on the next run.");
+            }
+
+            return;
+        }
+
         var committedAt = commitSha is null ? (DateTimeOffset?)null : _clock.UtcNow;
         foreach (var state in context.PendingStates)
         {
@@ -1492,6 +1695,9 @@ public sealed class SyncEngine : ISyncEngine
         // One transaction for the whole batch — a VLDB first run persists hundreds of thousands
         // of states, and per-row auto-commits would dominate the run time.
         await _objectStates.UpsertManyAsync(context.PendingStates, cancellationToken).ConfigureAwait(false);
+
+        // Dropped objects: their files are gone from the delivered commit, so the rows can go too.
+        await _objectStates.DeleteManyAsync(context.PendingDeletedStateIds, cancellationToken).ConfigureAwait(false);
 
         // Incremental watermarks only advance when the run reached a healthy final status — a
         // failed or cancelled run must re-examine everything past the last good watermark next time.
@@ -1510,30 +1716,90 @@ public sealed class SyncEngine : ISyncEngine
     {
         var absolute = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
         EnsureDirectory(context, Path.GetDirectoryName(absolute)!);
-        await File.WriteAllTextAsync(absolute, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        await WriteAtomicAsync(absolute, content, cancellationToken).ConfigureAwait(false);
 
         if (!string.IsNullOrWhiteSpace(localExportRoot))
         {
             var exportRelative = RepositoryLayout.Combine(dbFolder, relativePath).Replace('/', Path.DirectorySeparatorChar);
             var exportPath = Path.Combine(localExportRoot, exportRelative);
             EnsureDirectory(context, Path.GetDirectoryName(exportPath)!);
-            await File.WriteAllTextAsync(exportPath, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await WriteAtomicAsync(exportPath, content, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Write-to-temp then rename: a cancelled or crashed write can never leave a truncated .sql in
+    /// place — the change-detection self-heal is existence-only (it never re-reads content), so a
+    /// torn file would otherwise be swept into the next commit as-is. The rename is atomic on NTFS;
+    /// the temp name is cleaned up on failure here and excluded from git commits as a backstop for
+    /// a hard process kill between write and rename.
+    /// </summary>
+    private static async Task WriteAtomicAsync(string absolute, string content, CancellationToken cancellationToken)
+    {
+        var temp = absolute + ".obsync-tmp";
+        try
+        {
+            await File.WriteAllTextAsync(temp, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            File.Move(temp, absolute, overwrite: true);
+        }
+        catch
+        {
+            try
+            {
+                File.Delete(temp);
+            }
+            catch (IOException)
+            {
+                // Best-effort: the git-side exclusion keeps a stray temp file out of commits.
+            }
+
+            throw;
         }
     }
 
     // Objects of a type share a handful of folders; without this cache a VLDB run issues one
     // CreateDirectory syscall per object (hundreds of thousands, nearly all redundant).
-    private static void EnsureDirectory(RunContext context, string directory)
-    {
-        if (context.EnsuredDirectories.TryAdd(directory, 0))
+    // GetOrAdd (not TryAdd-then-create): with parallel workers, marking the directory as ensured
+    // BEFORE creating it let a second worker write into a directory that did not exist yet —
+    // an intermittent "could not find a part of the path" that failed the whole run. The factory
+    // can run concurrently for one key, but CreateDirectory is idempotent, so that is harmless.
+    private static void EnsureDirectory(RunContext context, string directory) =>
+        context.EnsuredDirectories.GetOrAdd(directory, static d =>
         {
-            Directory.CreateDirectory(directory);
-        }
-    }
+            Directory.CreateDirectory(d);
+            return 0;
+        });
 
     private static string StateKey(ScriptedObjectIdentity identity) => $"{(int)identity.Type}|{identity.Schema}|{identity.Name}";
 
     private static string StateKey(TrackedObjectState state) => $"{(int)state.ObjectType}|{state.SchemaName}|{state.ObjectName}";
+
+    /// <summary>
+    /// Builds the prior-state lookup, failing with an actionable message when a case-sensitive
+    /// database contains two objects whose names differ only by letter case. All of Obsync's
+    /// change-detection maps — and Windows file paths themselves — are case-insensitive, so such a
+    /// pair cannot be tracked distinctly; without this check the duplicate key surfaced as an
+    /// opaque crash on every run.
+    /// </summary>
+    private static Dictionary<string, TrackedObjectState> BuildPriorMap(
+        IReadOnlyList<TrackedObjectState> states, string scope)
+    {
+        var map = new Dictionary<string, TrackedObjectState>(states.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var state in states)
+        {
+            if (!map.TryAdd(StateKey(state), state))
+            {
+                var clash = map[StateKey(state)];
+                throw new InvalidOperationException(
+                    $"{scope} contains two objects whose names differ only by letter case " +
+                    $"({clash.SchemaName}.{clash.ObjectName} and {state.SchemaName}.{state.ObjectName}). " +
+                    "Windows file paths are case-insensitive, so Obsync cannot version them as separate files — " +
+                    "rename one of the objects, or exclude one with an .obsyncignore rule.");
+            }
+        }
+
+        return map;
+    }
 
     /// <summary>Mutable per-run accumulator passed between the engine stages.</summary>
     private sealed class RunContext
@@ -1602,6 +1868,24 @@ public sealed class SyncEngine : ISyncEngine
         public ConcurrentDictionary<string, byte> EnsuredDirectories { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<SyncRunLog> Logs { get; } = [];
         public List<TrackedObjectState> PendingStates { get; } = [];
+
+        /// <summary>
+        /// State-row ids of objects dropped from the database this run. Their files are removed from
+        /// the working tree during scripting (so the commit carries the deletions), but the rows are
+        /// only removed from tracked state after the changeset is durably delivered — otherwise a
+        /// failed delivery would erase the record and the deletion would never be retried.
+        /// </summary>
+        public List<long> PendingDeletedStateIds { get; } = [];
+
+        /// <summary>
+        /// True once this run's changeset is durably delivered: committed for the direct and
+        /// local-only modes (an unpushed direct commit is re-pushed by the next run), or the pull
+        /// request opened for PR mode (whose head branch is recut from the base every run, so
+        /// anything short of an opened PR is lost). This is the gate for advancing tracked object
+        /// state — advancing it on a failed delivery makes every later run report "no changes"
+        /// while the repository silently misses this run's work.
+        /// </summary>
+        public bool ChangesDelivered { get; set; }
 
         /// <summary>Per-database incremental watermarks staged during scripting; persisted with the
         /// final states only when the run ends healthy. Written from single-threaded stages.</summary>

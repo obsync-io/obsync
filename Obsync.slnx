@@ -13,6 +13,9 @@
     <Project Path="src/Obsync.Shared/Obsync.Shared.csproj" />
     <Project Path="src/Obsync.Smo/Obsync.Smo.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Obsync.Benchmark/Obsync.Benchmark.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Obsync.App.Tests/Obsync.App.Tests.csproj" />
     <Project Path="tests/Obsync.Engine.Tests/Obsync.Engine.Tests.csproj" />

@@ -14,7 +14,15 @@ public static class JobRunLock
     /// Tries to take the exclusive run lock for a job. Returns a handle to dispose when the run is
     /// fully finished (including final persistence), or null when another process already holds it.
     /// </summary>
-    public static IDisposable? TryAcquire(string locksRoot, Guid jobId)
+    public static IDisposable? TryAcquire(string locksRoot, Guid jobId) =>
+        TryAcquire(locksRoot, $"job-{jobId:N}");
+
+    /// <summary>
+    /// Tries to take an arbitrary named machine-wide lock under the same crash-safe scheme —
+    /// e.g. the per-repository workspace lock (<c>repo-{id}</c>) that keeps two different jobs
+    /// sharing one clone from interleaving git operations.
+    /// </summary>
+    public static IDisposable? TryAcquire(string locksRoot, string name)
     {
         Directory.CreateDirectory(locksRoot);
         try
@@ -23,7 +31,7 @@ public static class JobRunLock
             // (the delete happens atomically with the handle close, so a waiter that opens the file
             // a moment earlier still holds a valid lock on the same path).
             return new FileStream(
-                LockPath(locksRoot, jobId), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None,
+                Path.Combine(locksRoot, $"{name}.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None,
                 bufferSize: 1, FileOptions.DeleteOnClose);
         }
         catch (IOException)
@@ -37,6 +45,27 @@ public static class JobRunLock
     }
 
     /// <summary>
+    /// Waits (polling) for a named lock to become free, up to <paramref name="timeout"/>. Returns
+    /// the held lock, or null when the timeout elapsed. Used where skipping would silently drop
+    /// work — e.g. two jobs sharing a repository run back-to-back instead of one being skipped.
+    /// </summary>
+    public static async Task<IDisposable?> WaitAsync(
+        string locksRoot, string name, TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var handle = TryAcquire(locksRoot, name);
+            if (handle is not null || DateTime.UtcNow >= deadline)
+            {
+                return handle;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// True when some live process currently holds the run lock for this job. Used to tell a run
     /// that is genuinely in progress (in any host) apart from an orphaned "Running" database row
     /// left behind by a crash.
@@ -46,7 +75,4 @@ public static class JobRunLock
         using var probe = TryAcquire(locksRoot, jobId);
         return probe is null;
     }
-
-    private static string LockPath(string locksRoot, Guid jobId) =>
-        Path.Combine(locksRoot, $"job-{jobId:N}.lock");
 }

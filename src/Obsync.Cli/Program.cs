@@ -89,8 +89,18 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
     var engine = provider.GetRequiredService<ISyncEngine>();
     var progress = new Progress<SyncProgress>(p => Console.WriteLine($"  [{p.Phase}] {p.Message}"));
 
+    // Ctrl+C requests a clean cancellation (the engine persists the run as Cancelled with its
+    // logs) instead of hard-killing the process mid-run.
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        Console.Error.WriteLine("Cancelling — waiting for the run to stop cleanly…");
+        cts.Cancel();
+    };
+
     Console.WriteLine($"Running job '{job.Name}'…");
-    var run = await engine.RunJobAsync(job.Id, RunTrigger.Manual, progress);
+    var run = await engine.RunJobAsync(job.Id, RunTrigger.Manual, progress, cts.Token);
 
     Console.WriteLine();
     Console.WriteLine($"Status:   {run.Status}");
@@ -107,12 +117,12 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
         Console.Error.WriteLine($"Error:    {run.ErrorMessage}");
     }
 
-    return run.Status is RunStatus.Failed ? 1 : 0;
+    return run.Status is RunStatus.Failed or RunStatus.Cancelled ? 1 : 0;
 }
 
 static int PrintVersion()
 {
-    Console.WriteLine("Obsync CLI 0.1.0");
+    Console.WriteLine($"Obsync CLI {VersionInfo.Of(typeof(Program).Assembly)}");
     return 0;
 }
 

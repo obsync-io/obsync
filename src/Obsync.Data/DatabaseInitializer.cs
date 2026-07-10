@@ -35,6 +35,11 @@ public sealed class DatabaseInitializer : IDatabaseInitializer
         // (SqliteConnectionFactory sets them ON per connection), so enforcement is unchanged.
         await ExecuteAsync(connection, "PRAGMA foreign_keys = OFF;", cancellationToken).ConfigureAwait(false);
 
+        // The app and the service can initialize concurrently (the installer starts the service and
+        // launches the app back-to-back): give the loser enough patience to sit out a slow
+        // table-rebuild migration instead of failing its startup with SQLITE_BUSY.
+        await ExecuteAsync(connection, "PRAGMA busy_timeout = 60000;", cancellationToken).ConfigureAwait(false);
+
         await ExecuteAsync(
             connection,
             "CREATE TABLE IF NOT EXISTS __migrations (version TEXT NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);",
@@ -49,10 +54,22 @@ public sealed class DatabaseInitializer : IDatabaseInitializer
                 continue;
             }
 
+            // BeginTransaction (non-deferred) takes the write lock up front, so concurrent
+            // initializers serialize here rather than mid-migration.
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
             try
             {
+                // Re-check under the write lock: the pre-scan above ran before the lock, so a
+                // concurrent initializer may have applied this migration while we waited. Without
+                // this the loser re-runs the migration and fails its host's startup with
+                // "table/index already exists".
+                if (await IsAppliedAsync(connection, transaction, version, cancellationToken).ConfigureAwait(false))
+                {
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
                 await ExecuteAsync(connection, sql, cancellationToken, transaction).ConfigureAwait(false);
                 await ExecuteAsync(
                     connection,
@@ -71,6 +88,16 @@ public sealed class DatabaseInitializer : IDatabaseInitializer
                 throw;
             }
         }
+    }
+
+    private static async Task<bool> IsAppliedAsync(
+        SqliteConnection connection, SqliteTransaction transaction, string version, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT COUNT(*) FROM __migrations WHERE version = $v;";
+        command.Parameters.AddWithValue("$v", version);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) > 0;
     }
 
     private static IEnumerable<(string Version, string Sql)> LoadMigrations()

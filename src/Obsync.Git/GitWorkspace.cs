@@ -78,31 +78,36 @@ public sealed class GitWorkspace : IGitWorkspace
         var gitDir = Path.Combine(context.LocalPath, ".git");
         if (!Directory.Exists(gitDir))
         {
-            var parent = Path.GetDirectoryName(Path.GetFullPath(context.LocalPath));
-            if (!string.IsNullOrEmpty(parent))
+            var cloned = await CloneFreshAsync(context, cancellationToken).ConfigureAwait(false);
+            if (cloned.IsFailure)
             {
-                Directory.CreateDirectory(parent);
+                return cloned;
             }
-
-            var clone = await RunNetworkAsync(parent ?? ".", context, ["clone", context.RemoteUrl, context.LocalPath], cancellationToken)
-                .ConfigureAwait(false);
-            if (!clone.Success)
-            {
-                return Result.Failure($"git clone failed: {Summarize(clone.StandardError)}");
-            }
-
-            // Windows MAX_PATH protection: a deep workspaces root plus a long schema/object path can
-            // exceed 260 chars, failing checkouts and `git show` with "Filename too long". Best-effort
-            // (a failure here surfaces later with git's own clear message).
-            _ = await _git.RunAsync(
-                context.LocalPath, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
         }
         else
         {
             var fetch = await RunNetworkAsync(context.LocalPath, context, ["fetch", "origin"], cancellationToken).ConfigureAwait(false);
             if (!fetch.Success)
             {
-                return Result.Failure($"git fetch failed: {Summarize(fetch.StandardError)}");
+                // Distinguish "network/auth problem" (surface it) from "the clone itself is broken"
+                // (a crash or kill mid-clone corrupts .git) — a broken workspace would otherwise
+                // fail every future run until someone manually deletes an internal folder. The
+                // workspace is fully regenerable, so delete and clone fresh.
+                var healthy = (await _git.RunAsync(context.LocalPath, ["rev-parse", "--git-dir"], cancellationToken)
+                    .ConfigureAwait(false)).Success;
+                if (healthy)
+                {
+                    return Result.Failure($"git fetch failed: {Summarize(fetch.StandardError)}");
+                }
+
+                _logger.LogWarning(
+                    "The git workspace at {Path} is corrupt (likely an interrupted clone); recreating it.",
+                    context.LocalPath);
+                var recloned = await CloneFreshAsync(context, cancellationToken).ConfigureAwait(false);
+                if (recloned.IsFailure)
+                {
+                    return recloned;
+                }
             }
         }
 
@@ -157,6 +162,52 @@ public sealed class GitWorkspace : IGitWorkspace
             : Result.Failure($"git checkout failed: {Summarize(checkout.StandardError)}");
     }
 
+    /// <summary>
+    /// Deletes any remnant at the workspace path (a cancelled or killed clone leaves a partial
+    /// directory that makes every later clone fail with "destination path already exists") and
+    /// clones fresh. Everything in the workspace is regenerable — from the remote and from SQL
+    /// Server — so deletion is always safe here.
+    /// </summary>
+    private async Task<Result> CloneFreshAsync(GitWorkspaceContext context, CancellationToken cancellationToken)
+    {
+        if (Directory.Exists(context.LocalPath))
+        {
+            DeleteDirectory(context.LocalPath);
+        }
+
+        var parent = Path.GetDirectoryName(Path.GetFullPath(context.LocalPath));
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
+        }
+
+        var clone = await RunNetworkAsync(parent ?? ".", context, ["clone", context.RemoteUrl, context.LocalPath], cancellationToken)
+            .ConfigureAwait(false);
+        if (!clone.Success)
+        {
+            return Result.Failure($"git clone failed: {Summarize(clone.StandardError)}");
+        }
+
+        // Windows MAX_PATH protection: a deep workspaces root plus a long schema/object path can
+        // exceed 260 chars, failing checkouts and `git show` with "Filename too long". Best-effort
+        // (a failure here surfaces later with git's own clear message).
+        _ = await _git.RunAsync(
+            context.LocalPath, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    // Git object files are read-only, which makes Directory.Delete(recursive) throw — clear the
+    // attribute first.
+    private static void DeleteDirectory(string path)
+    {
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+
+        Directory.Delete(path, recursive: true);
+    }
+
     public async Task<bool> HasUnpushedCommitsAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default)
     {
         var remoteBranchExists = (await _git.RunAsync(
@@ -179,16 +230,21 @@ public sealed class GitWorkspace : IGitWorkspace
     {
         // untrackedCache persists untracked-directory mtimes in the index, so the add/status walks
         // over a large exported tree (a VLDB run writes 100k+ script files) skip unchanged directories
-        // on subsequent runs.
+        // on subsequent runs. The exclude pathspec keeps the engine's atomic-write temp files
+        // (*.obsync-tmp, orphaned only by a hard process kill mid-write) out of commits.
         var add = await _git.RunAsync(
-            context.LocalPath, ["-c", "core.untrackedCache=true", "add", "-A"], cancellationToken).ConfigureAwait(false);
+            context.LocalPath,
+            ["-c", "core.untrackedCache=true", "add", "-A", "--", ".", ":(exclude,glob)**/*.obsync-tmp"],
+            cancellationToken).ConfigureAwait(false);
         if (!add.Success)
         {
             return GitCommitResult.Failed($"git add failed: {Summarize(add.StandardError)}");
         }
 
         var status = await _git.RunAsync(
-            context.LocalPath, ["-c", "core.untrackedCache=true", "status", "--porcelain"], cancellationToken).ConfigureAwait(false);
+            context.LocalPath,
+            ["-c", "core.untrackedCache=true", "status", "--porcelain", "--", ".", ":(exclude,glob)**/*.obsync-tmp"],
+            cancellationToken).ConfigureAwait(false);
         var hasWorkingChanges = !string.IsNullOrWhiteSpace(status.StandardOutput);
         if (!hasWorkingChanges && !allowEmpty)
         {
@@ -230,38 +286,46 @@ public sealed class GitWorkspace : IGitWorkspace
     private async Task<GitCommandResult> RunNetworkAsync(
         string workingDirectory, GitWorkspaceContext context, IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
-        // Authentication is injected per-command via http.extraheader so the token is never
-        // written to .git/config and never persisted on disk.
-        var full = new List<string>();
+        // Secrets travel as GIT_CONFIG_* ENVIRONMENT variables, never as -c command-line arguments:
+        // Windows process-creation auditing (Event 4688, Sysmon, EDR) records child command lines
+        // verbatim into machine-wide security logs, which would capture the token and any proxy
+        // credentials; environment blocks are not captured. Nothing is written to .git/config.
+        var environment = new Dictionary<string, string>();
+        void AddConfig(string key, string value)
+        {
+            var index = environment.Count / 2;
+            environment[$"GIT_CONFIG_KEY_{index}"] = key;
+            environment[$"GIT_CONFIG_VALUE_{index}"] = value;
+        }
+
         if (!string.IsNullOrEmpty(context.AuthorizationHeader))
         {
-            full.Add("-c");
-            full.Add($"http.extraheader={context.AuthorizationHeader}");
+            AddConfig("http.extraheader", context.AuthorizationHeader);
 
             // Authenticate with ONLY the injected header. Disable any configured credential helper
             // (e.g. Git Credential Manager, which is on by default on Windows): otherwise git can
             // override or race our header, or block trying to prompt — the usual reason a push that
             // should succeed fails with "could not read Username" / "Authentication failed".
-            full.Add("-c");
-            full.Add("credential.helper=");
+            AddConfig("credential.helper", string.Empty);
         }
 
-        // Route network operations through the configured proxy (may carry credentials); injected
-        // per-command, never written to .git/config.
+        // Route network operations through the configured proxy (may carry credentials).
         if (!string.IsNullOrEmpty(context.ProxyUrl))
         {
-            full.Add("-c");
-            full.Add($"http.proxy={context.ProxyUrl}");
+            AddConfig("http.proxy", context.ProxyUrl);
         }
 
-        full.AddRange(args);
+        if (environment.Count > 0)
+        {
+            environment["GIT_CONFIG_COUNT"] = (environment.Count / 2).ToString();
+        }
 
         var maxAttempts = Math.Max(1, context.NetworkRetryCount);
         var attempt = 0;
         while (true)
         {
             attempt++;
-            var result = await _git.RunAsync(workingDirectory, full, cancellationToken).ConfigureAwait(false);
+            var result = await _git.RunAsync(workingDirectory, args, environment, cancellationToken).ConfigureAwait(false);
             if (result.Success || attempt >= maxAttempts || !GitTransientErrors.IsTransient(result.StandardError))
             {
                 return result;

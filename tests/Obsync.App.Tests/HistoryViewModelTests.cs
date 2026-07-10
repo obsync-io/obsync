@@ -20,7 +20,7 @@ public sealed class HistoryViewModelTests
         return new(
             runs ?? Substitute.For<IRunRepository>(), Substitute.For<IJobRepository>(),
             Substitute.For<IRepositoryProfileRepository>(), Substitute.For<IRunReportWriter>(),
-            Substitute.For<IAppSettingsRepository>(), clock);
+            Substitute.For<IAppSettingsRepository>(), clock, Substitute.For<IJobRunCoordinator>());
     }
 
     private static IRunRepository RepositoryWith(params SyncRun[] runs)
@@ -68,6 +68,20 @@ public sealed class HistoryViewModelTests
 
         vm.SelectedRun = new SyncRun { JobName = "Prod Sync", RunKey = "20260702-094500", CommitSha = new string('a', 40) };
         Assert.True(vm.ViewChangesCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task LoadAsync_FlagsTheSilentCap_OnlyWhenTheFetchLimitCameBackFull()
+    {
+        // Exactly the fetch cap (100) — older runs likely exist, so the caption must show.
+        var capped = NewViewModel(RepositoryWith([.. Enumerable.Range(0, 100).Select(i => NewRun($"Job {i % 5}"))]));
+        await capped.LoadAsync();
+        Assert.True(capped.IsCapped);
+
+        // Under the cap — everything is shown, no caption.
+        var complete = NewViewModel(RepositoryWith(NewRun("Prod Sync")));
+        await complete.LoadAsync();
+        Assert.False(complete.IsCapped);
     }
 
     [Fact]

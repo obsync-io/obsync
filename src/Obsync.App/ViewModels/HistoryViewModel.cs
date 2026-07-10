@@ -20,6 +20,9 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
 {
     private const string AllJobs = "All jobs";
 
+    /// <summary>How many recent runs the page loads; older history stays in the database.</summary>
+    private const int MaxRecentRuns = 100;
+
     /// <summary>A VLDB run can record hundreds of thousands of changes; the diff viewer's list shows
     /// at most this many (the report export always contains the complete list).</summary>
     private const int MaxDiffViewerChanges = 2000;
@@ -35,9 +38,15 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
     private readonly IAppSettingsRepository _settings;
     private readonly IClock _clock;
 
+    private bool _reloading;
+
     [ObservableProperty] private string _selectedJob = AllJobs;
     [ObservableProperty] private StatusFilterOption _selectedStatus;
     [ObservableProperty] private string _searchText = string.Empty;
+
+    /// <summary>True when the load hit the <see cref="MaxRecentRuns"/> cap, i.e. older runs exist
+    /// that the page does not show.</summary>
+    [ObservableProperty] private bool _isCapped;
 
     /// <summary>The run selected in the grid; the "Export report" action targets it.</summary>
     [ObservableProperty] private SyncRun? _selectedRun;
@@ -75,7 +84,8 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         IRepositoryProfileRepository repositories,
         IRunReportWriter reportWriter,
         IAppSettingsRepository settings,
-        IClock clock)
+        IClock clock,
+        IJobRunCoordinator coordinator)
     {
         _runs = runs;
         _jobs = jobs;
@@ -86,11 +96,35 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         _selectedStatus = StatusOptions[0];
         RunsView = CollectionViewSource.GetDefaultView(Runs);
         RunsView.Filter = FilterRun;
+        coordinator.RunStateChanged += OnRunStateChanged;
+    }
+
+    // A run started or finished in this app — refresh so it appears without leaving and returning.
+    private async void OnRunStateChanged(object? sender, Guid jobId)
+    {
+        if (_reloading)
+        {
+            return;
+        }
+
+        _reloading = true;
+        try
+        {
+            await LoadAsync();
+        }
+        catch (Exception)
+        {
+            // Best-effort refresh; the run's outcome is already persisted and the next load shows it.
+        }
+        finally
+        {
+            _reloading = false;
+        }
     }
 
     public async Task LoadAsync()
     {
-        var runs = await _runs.GetRecentAsync(100);
+        var runs = await _runs.GetRecentAsync(MaxRecentRuns);
         var markers = await _settings.GetProductionTagsAsync();
         Runs.Clear();
         foreach (var run in runs)
@@ -98,6 +132,8 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
             run.TagChips = JobTags.Classify(run.Tags, markers);
             Runs.Add(run);
         }
+
+        IsCapped = runs.Count == MaxRecentRuns;
 
         // Rebuild the job-name choices from the loaded set, preserving the current selection if it
         // still exists (otherwise fall back to "All jobs").

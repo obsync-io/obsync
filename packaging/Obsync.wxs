@@ -46,16 +46,28 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/obsync-io/obsync" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/obsync-io/obsync" />
 
-    <!-- Windows Service logon account. Default LocalSystem installs a functional service host but it
-         cannot reach the interactive user's Credential Manager / data root, so scheduled runs need a
-         real account passed here (Secure so it can be set during a silent, elevated install). -->
-    <Property Id="SERVICE_ACCOUNT" Value="LocalSystem" Secure="yes" />
+    <!-- Windows Service logon account. Defaults to LocalSystem (functional host, but it cannot reach
+         the interactive user's Credential Manager / data root, so scheduled runs need a real account
+         here; Secure so it can be set during a silent, elevated install). The last configured account
+         is remembered in the registry so a MAJOR UPGRADE does not silently reset a working service
+         back to LocalSystem — Windows cannot remember the password, so an interactive upgrade
+         prefills the account and asks for the password again, and a silent upgrade of a
+         password-logon service must re-pass SERVICE_PASSWORD (gMSA/LocalSystem need none). -->
+    <Property Id="SERVICE_ACCOUNT" Secure="yes">
+      <RegistrySearch Id="RememberedServiceAccount" Root="HKLM" Key="SOFTWARE\Obsync" Name="ServiceAccount" Type="raw" />
+    </Property>
+    <SetProperty Id="SERVICE_ACCOUNT" Value="LocalSystem" After="AppSearch" Condition="NOT SERVICE_ACCOUNT" />
     <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
 
     <!-- Interactive-only staging for the Service Account dialog. The dialog copies its answers into
-         SERVICE_ACCOUNT / SERVICE_PASSWORD on Next, so silent installs are untouched. -->
+         SERVICE_ACCOUNT / SERVICE_PASSWORD on Next, so silent installs are untouched. A remembered
+         custom account preselects "This account" with the name prefilled. -->
     <Property Id="SERVICE_ACCOUNT_MODE" Value="system" />
     <Property Id="SERVICE_ACCOUNT_PWD" Hidden="yes" />
+    <SetProperty Id="SERVICE_ACCOUNT_MODE" Value="custom" After="SetSERVICE_ACCOUNT"
+                 Condition="SERVICE_ACCOUNT AND SERVICE_ACCOUNT &lt;&gt; &quot;LocalSystem&quot;" />
+    <SetProperty Id="SERVICE_ACCOUNT_NAME" Value="[SERVICE_ACCOUNT]" After="SetSERVICE_ACCOUNT_MODE"
+                 Condition="SERVICE_ACCOUNT AND SERVICE_ACCOUNT &lt;&gt; &quot;LocalSystem&quot;" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Obsync" />
@@ -154,6 +166,9 @@
       <util:EventSource Log="Application"
                         Name="Obsync"
                         EventMessageFile="[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll" />
+      <!-- Remember the logon account (never the password) so upgrades default to it instead of
+           silently resetting a working service to LocalSystem. -->
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Obsync" Name="ServiceAccount" Value="[SERVICE_ACCOUNT]" Type="string" />
     </Component>
 
     <!-- Add the install directory to the machine PATH so `obsync` (the CLI) is callable anywhere. -->

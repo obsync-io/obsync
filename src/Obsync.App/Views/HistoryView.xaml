@@ -106,7 +106,12 @@
 
         <TabControl Grid.Row="2" Visibility="{Binding Runs.Count, Converter={StaticResource CountToVisibility}}">
             <TabItem Header="Runs">
-        <Border Style="{StaticResource Card}" Padding="0" Margin="0,14,0,0">
+        <DockPanel Margin="0,14,0,0">
+            <!-- The load is capped; older runs are still in the database -->
+            <TextBlock DockPanel.Dock="Bottom" Style="{StaticResource Caption}" Margin="2,8,0,0" TextWrapping="Wrap"
+                       Text="Showing the 100 most recent runs — export a run report or use filters for older history."
+                       Visibility="{Binding IsCapped, Converter={StaticResource BoolToVisibility}}" />
+        <Border Style="{StaticResource Card}" Padding="0">
             <DataGrid ItemsSource="{Binding RunsView}" SelectedItem="{Binding SelectedRun}">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="Job" Binding="{Binding JobName}" Width="2*" MinWidth="120">
@@ -129,6 +134,26 @@
                     <DataGridTextColumn Header="Duration" Binding="{Binding DurationMs, Converter={StaticResource MsToDuration}}" Width="*" MinWidth="70" />
                     <DataGridTextColumn Header="Scanned" Binding="{Binding ObjectsScanned}" Width="*" MinWidth="64" />
                     <DataGridTextColumn Header="Changed" Binding="{Binding ChangeCount}" Width="*" MinWidth="64" />
+                    <DataGridTemplateColumn Header="Skipped" Width="*" MinWidth="72">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <!-- Only rendered when objects could not be scripted -->
+                                <TextBlock Text="{Binding ObjectsFailed, StringFormat={}{0:N0} skipped}"
+                                           Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold" VerticalAlignment="Center"
+                                           ToolTip="Objects that could not be scripted — open the job's Logs tab for the list">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ObjectsFailed}" Value="0">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                     <DataGridTextColumn Header="Commit" Binding="{Binding CommitSha}" Width="1.4*" MinWidth="90">
                         <DataGridTextColumn.ElementStyle>
                             <Style TargetType="TextBlock">
@@ -150,6 +175,7 @@
                 </DataGrid.Columns>
             </DataGrid>
         </Border>
+        </DockPanel>
             </TabItem>
 
             <TabItem Header="Timeline">

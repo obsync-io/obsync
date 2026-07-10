@@ -156,6 +156,84 @@ public sealed class GitWorkspaceTests : IDisposable
         Assert.False(await _workspace.HasUnpushedCommitsAsync(context));
     }
 
+    [Fact]
+    public async Task CommitAll_ExcludesAtomicWriteTempFiles()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+
+        // A hard process kill mid-write can strand an .obsync-tmp next to real output; commits
+        // must never sweep it in.
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "real.sql"), "CREATE SCHEMA [r];");
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "torn.sql.obsync-tmp"), "CREATE SCH");
+
+        var commit = await _workspace.CommitAllAsync(context, "real only", "body");
+        Assert.True(commit.Success, commit.Error);
+        Assert.True(commit.HadChanges);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        var verifyPath = Path.Combine(_root, "verify");
+        Assert.True((await _runner.RunAsync(_root, ["clone", remote, verifyPath])).Success);
+        Assert.True(File.Exists(Path.Combine(verifyPath, "schemas", "real.sql")));
+        Assert.False(File.Exists(Path.Combine(verifyPath, "schemas", "torn.sql.obsync-tmp")));
+
+        // A stray temp file alone must not read as "changes" (it would create junk commits forever).
+        var again = await _workspace.CommitAllAsync(context, "should be nothing", "body");
+        Assert.True(again.Success, again.Error);
+        Assert.False(again.HadChanges);
+    }
+
+    [Fact]
+    public async Task Prepare_RecoversFromAPartialClone()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+
+        // A cancelled/killed first clone leaves a .git-less remnant that used to fail every later
+        // clone with "destination path already exists and is not an empty directory".
+        Directory.CreateDirectory(Path.Combine(workPath, "schemas"));
+        await File.WriteAllTextAsync(Path.Combine(workPath, "schemas", "partial.sql"), "CREATE SCH");
+
+        var prepared = await _workspace.PrepareAsync(NewContext(remote, workPath));
+
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.True(Directory.Exists(Path.Combine(workPath, ".git")));
+        Assert.False(File.Exists(Path.Combine(workPath, "schemas", "partial.sql"))); // remnant cleared
+    }
+
+    [Fact]
+    public async Task Prepare_RecoversFromACorruptGitDirectory()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+
+        // .git exists but is empty (interrupted mid-clone): fetch fails, the workspace is
+        // detected as corrupt, deleted, and recloned instead of failing every future run.
+        Directory.CreateDirectory(Path.Combine(workPath, ".git"));
+
+        var prepared = await _workspace.PrepareAsync(NewContext(remote, workPath));
+
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.True(File.Exists(Path.Combine(workPath, ".git", "HEAD"))); // a real clone now
+    }
+
     private static GitWorkspaceContext NewContext(string remote, string localPath) => new()
     {
         RemoteUrl = remote,
