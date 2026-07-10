@@ -17,6 +17,9 @@ recolored to its inverse (white disc, brand-blue swoosh) -- the swoosh then
 reads as a cutout against the panel, mirroring how the original mark reads on
 white. The banner uses the mark unmodified on white.
 
+Both bitmaps are flat fields with no gradients (which band in 24-bit BMP) and
+no timestamps or other varying data -- output is deterministic byte-for-byte.
+
 Run:  python packaging/assets/generate-bitmaps.py
 Requires Pillow. Paths resolve relative to this file; output lands beside it.
 """
@@ -32,16 +35,17 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 ICON_PATH = os.path.join(REPO, "src", "Obsync.App", "Assets", "Obsync_Icon.png")
 
 BLUE = (27, 23, 255)        # #1B17FF brand accent (also the icon disc color)
-BLUE_DARK = (21, 18, 214)   # #1512D6 hover/dark accent
 WHITE = (255, 255, 255)
-# White at 60% opacity flattened onto BLUE (the bitmaps carry no alpha).
-TAGLINE = tuple(round(b + 0.6 * (255 - b)) for b in BLUE)
+# White at 78% opacity flattened onto BLUE (the bitmaps carry no alpha):
+# bright enough to read as body text on the panel, dim enough to rank below
+# the wordmark.
+TAGLINE = tuple(round(b + 0.78 * (255 - b)) for b in BLUE)
 
 FONT_DIR = r"C:\Windows\Fonts"
 SEGOE_SEMIBOLD = os.path.join(FONT_DIR, "seguisb.ttf")
 SEGOE_REGULAR = os.path.join(FONT_DIR, "segoeui.ttf")
 
-# Shape work (disc, arc) is drawn at 4x and LANCZOS-downsampled for clean
+# Shape work (disc, swoosh) is drawn at 4x and LANCZOS-downsampled for clean
 # anti-aliased edges; text is drawn at 1x where Pillow's rasterizer is crisp.
 SS = 4
 
@@ -69,39 +73,46 @@ def invert_icon(icon: Image.Image) -> Image.Image:
 
 
 def build_dialog(icon: Image.Image) -> Image.Image:
+    """Solid brand-blue side panel: mark, wordmark, tagline, generous space.
+
+    One centered column with a clear hierarchy -- mark (92 px), wordmark,
+    a short accent rule, two-line tagline -- and nothing else; the empty
+    lower third is deliberate negative space, matching the app's whitespace.
+    """
     w, h = 493, 312
     img = Image.new("RGB", (w, h), WHITE)
+    ImageDraw.Draw(img).rectangle((0, 0, PANEL_W - 1, h - 1), fill=BLUE)
 
-    # Blue side panel with a subtle darker arc rising from the bottom, at 4x.
-    panel = Image.new("RGB", (PANEL_W * SS, h * SS), BLUE)
-    pd = ImageDraw.Draw(panel)
-    cx, cy, radius = 85 * SS, 392 * SS, 160 * SS  # arc top at y=232 (1x)
-    pd.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=BLUE_DARK)
+    # Inverted mark (white disc, blue swoosh), 92 px, centered, upper third.
+    mark = invert_icon(icon).resize((92 * SS, 92 * SS), Image.LANCZOS)
+    mark = mark.resize((92, 92), Image.LANCZOS)
+    img.paste(mark, ((PANEL_W - 92) // 2, 52), mark)
 
-    # Inverted mark, 96 px, centered in the panel's upper third.
-    mark = invert_icon(icon).resize((96 * SS, 96 * SS), Image.LANCZOS)
-    panel.paste(mark, ((PANEL_W * SS - 96 * SS) // 2, 40 * SS), mark)
-
-    img.paste(panel.resize((PANEL_W, h), Image.LANCZOS), (0, 0))
+    d = ImageDraw.Draw(img)
+    cx = PANEL_W // 2
 
     # Wordmark and tagline, drawn at 1x.
-    d = ImageDraw.Draw(img)
-    d.text((PANEL_W // 2, 162), "Obsync",
-           font=ImageFont.truetype(SEGOE_SEMIBOLD, 34), fill=WHITE, anchor="mm")
+    d.text((cx, 186), "Obsync",
+           font=ImageFont.truetype(SEGOE_SEMIBOLD, 32), fill=WHITE, anchor="mm")
+
+    # Hairline separator: short, centered, faint -- ties wordmark to tagline.
+    d.rectangle((cx - 14, 212, cx + 14, 213), fill=TAGLINE)
+
     tagline_font = ImageFont.truetype(SEGOE_REGULAR, 14)
-    d.text((PANEL_W // 2, 192), "SQL Server", font=tagline_font, fill=TAGLINE, anchor="mm")
-    d.text((PANEL_W // 2, 210), "schema versioning", font=tagline_font, fill=TAGLINE, anchor="mm")
+    d.text((cx, 232), "SQL Server", font=tagline_font, fill=TAGLINE, anchor="mm")
+    d.text((cx, 251), "schema versioning", font=tagline_font, fill=TAGLINE, anchor="mm")
     return img
 
 
 def build_banner(icon: Image.Image) -> Image.Image:
+    """Minimal white strip: small right-aligned mark over a 2 px accent rule."""
     w, h, rule = 493, 58, 2
     img = Image.new("RGB", (w, h), WHITE)
 
-    # Original mark (blue disc on white), 40 px, right-aligned with 12 px
+    # Original mark (blue disc on white), 32 px, right-aligned with 16 px
     # padding, vertically centered in the strip above the rule.
-    mark = icon.resize((40 * SS, 40 * SS), Image.LANCZOS).resize((40, 40), Image.LANCZOS)
-    img.paste(mark, (w - 12 - 40, (h - rule - 40) // 2), mark)
+    mark = icon.resize((32 * SS, 32 * SS), Image.LANCZOS).resize((32, 32), Image.LANCZOS)
+    img.paste(mark, (w - 16 - 32, (h - rule - 32) // 2), mark)
 
     ImageDraw.Draw(img).rectangle((0, h - rule, w, h), fill=BLUE)
     return img

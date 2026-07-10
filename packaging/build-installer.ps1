@@ -175,6 +175,7 @@ $msiPath = Join-Path $outDir "Obsync-$version-$Runtime.msi"
 
 dotnet wix build (Join-Path $packagingDir 'Obsync.wxs') `
     -arch x64 `
+    -loc (Join-Path $packagingDir 'Obsync.wxl') `
     -d Version=$version `
     -d PublishDir=$stageDir `
     -d PackagingDir=$packagingDir `

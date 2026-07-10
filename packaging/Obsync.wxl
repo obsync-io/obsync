@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copy overrides for the stock WixUI loc strings (WixToolset.UI.wixext ships them Overridable;
+  strings here win at bind time — passed via `wix build -loc` in build-installer.ps1). Purely
+  presentational: plainer, sentence-cased wording consistent with the app. The license page keeps
+  the stock checkbox text and License.rtf untouched; only the header framing is reworded.
+-->
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="en-US">
+
+  <!-- Welcome page -->
+  <String Id="WelcomeDlgTitle" Value="{\WixUI_Font_Bigger}Set up Obsync" />
+  <String Id="WelcomeDlgDescription" Value="Obsync scripts your SQL Server objects and keeps them in sync with GitHub. Click Next to continue or Cancel to exit Setup." />
+
+  <!-- License page (framing only; the agreement text itself is License.rtf, unchanged) -->
+  <String Id="LicenseAgreementDlgTitle" Value="{\WixUI_Font_Title}License agreement" />
+  <String Id="LicenseAgreementDlgDescription" Value="Please review the license terms before installing Obsync." />
+
+  <!-- Destination folder page -->
+  <String Id="InstallDirDlgTitle" Value="{\WixUI_Font_Title}Destination folder" />
+  <String Id="InstallDirDlgDescription" Value="Install to the default folder, or click Change to choose another." />
+
+  <!-- Finish page (shown after a successful install, repair, or remove — keep it neutral) -->
+  <String Id="ExitDialogTitle" Value="{\WixUI_Font_Bigger}Setup complete" />
+  <String Id="ExitDialogDescription" Value="Click Finish to close Setup." />
+
+</WixLocalization>

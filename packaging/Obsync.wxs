@@ -19,9 +19,11 @@
   ServiceInstall hands CreateService a NULL password, which is what gMSA logons require.
 
   UI: the stock WixUI_InstallDir dialog set is copied below (the documented WiX customization path —
-  the set cannot be extended in place) with three changes: a Service Account dialog between the
-  install-directory and ready pages, an optional "Launch Obsync" checkbox on the finish page, and
-  ARPNOMODIFY left unset so Repair stays available from Add/Remove Programs.
+  the set cannot be extended in place) with these changes: a Service Account dialog between the
+  install-directory and ready pages, an optional "Launch Obsync" checkbox on the finish page,
+  ARPNOMODIFY left unset so Repair stays available from Add/Remove Programs, Segoe UI text styles
+  instead of Tahoma, and reworded stock-page copy via packaging\Obsync.wxl (loc-string overrides;
+  purely presentational).
 
   Built by packaging/build-installer.ps1, which supplies the Version/PublishDir/PackagingDir/RepoRoot
   preprocessor variables and stages MinGit into PublishDir\tools\git.
@@ -190,9 +192,12 @@
   -->
   <Fragment>
     <UI Id="ObsyncUI_InstallDir">
-      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
-      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12" />
-      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes" />
+      <!-- Obsync: Segoe UI instead of the stock Tahoma — matches the app and every modern Windows
+           wizard. Control rectangles are fixed installer units, so sizes stay conservative (9 pt
+           body ≈ the Windows message font) to keep the stock layouts truncation-free. -->
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="12" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="9" Bold="yes" />
 
       <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
 
@@ -265,7 +270,7 @@
         </Control>
 
         <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose the Windows account that runs scheduled sync jobs." />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Service Account" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Service account" />
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
@@ -277,27 +282,36 @@
           </RadioButtonGroup>
         </Control>
 
-        <Control Id="AccountLabel" Type="Text" X="36" Y="100" Width="304" Height="10" NoPrefix="no" Text="&amp;Account (DOMAIN\user or DOMAIN\gmsa$):"
+        <!-- Obsync: label heights are 12 units — a Segoe UI 9 line does not fit the classic 10-unit
+             label, and the MSI Text control path-ellipsizes ("Account ...\gmsa$):") instead of
+             clipping when that happens. -->
+        <Control Id="AccountLabel" Type="Text" X="36" Y="98" Width="304" Height="12" NoPrefix="no" Text="&amp;Account (DOMAIN\user or DOMAIN\gmsa$):"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="AccountEdit" Type="Edit" X="36" Y="112" Width="304" Height="16" Property="SERVICE_ACCOUNT_NAME"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
-        <Control Id="PasswordLabel" Type="Text" X="36" Y="134" Width="304" Height="10" NoPrefix="no" Text="&amp;Password:"
+        <Control Id="PasswordLabel" Type="Text" X="36" Y="132" Width="304" Height="12" NoPrefix="no" Text="&amp;Password:"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="PasswordEdit" Type="Edit" Password="yes" X="36" Y="146" Width="304" Height="16" Property="SERVICE_ACCOUNT_PWD"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
 
-        <Control Id="VaultNote" Type="Text" X="20" Y="174" Width="330" Height="52" NoPrefix="yes"
-                 Text="Scheduled jobs read credentials from the account's Windows Credential Manager vault — use the same account that runs the Obsync app. For a group Managed Service Account, enter DOMAIN\name$ and leave the password blank." />
+        <!-- Obsync: two short paragraphs read better than one dense block. The first explains the
+             per-user credential-vault constraint; the second covers the gMSA case. -->
+        <Control Id="VaultNote" Type="Text" X="20" Y="172" Width="330" Height="24" NoPrefix="yes"
+                 Text="Scheduled jobs read credentials from this account's Windows Credential Manager vault, so choose the same account you use to run the Obsync app." />
+        <Control Id="GmsaNote" Type="Text" X="20" Y="202" Width="330" Height="24" NoPrefix="yes"
+                 Text="For a group Managed Service Account, enter DOMAIN\name$ and leave the password blank." />
       </Dialog>
 
-      <!-- Obsync: shown when "This account" is selected but no account was entered. -->
-      <Dialog Id="ObsyncAccountRequiredDlg" Width="260" Height="85" Title="[ProductName] Setup">
-        <Control Id="OK" Type="PushButton" X="100" Y="57" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
+      <!-- Obsync: shown when "This account" is selected but no account was entered. The Text control
+           gets three Segoe UI lines of headroom — an overflowing MSI Text control path-ellipsizes
+           text that contains backslashes rather than wrapping further. -->
+      <Dialog Id="ObsyncAccountRequiredDlg" Width="260" Height="95" Title="[ProductName] Setup">
+        <Control Id="OK" Type="PushButton" X="100" Y="68" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
-        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="36" NoPrefix="yes"
-                 Text="Enter the account to run the service as (DOMAIN\user or DOMAIN\gmsa$), or choose Local System." />
+        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="40" NoPrefix="yes"
+                 Text="Enter an account (DOMAIN\user or DOMAIN\gmsa$), or choose Local System." />
       </Dialog>
     </UI>
 
