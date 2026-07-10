@@ -105,9 +105,54 @@ already covered the missed time.
 **No duplicate runs.** A per-job, machine-wide run lock guarantees the same job never runs twice at
 once across the app, the service, and the CLI. If a scheduled occurrence comes due while a previous
 run of that job is still active, the occurrence is skipped with a logged reason and the next one
-fires normally. A run whose process dies mid-flight is failed with an explicit
-"interrupted" message on the next app or service start — long-running live runs are never falsely
-marked failed.
+fires normally. Jobs that share one destination repository additionally serialize on a
+per-repository lock (they run back-to-back instead of interleaving git operations in one clone). A
+run whose process dies mid-flight is failed with an explicit "interrupted" message on the next app
+or service start — long-running live runs are never falsely marked failed.
+
+## Reliability & failure policy
+
+**One object never kills a run.** An object that cannot be scripted — encrypted modules, CLR
+modules without definitions, an SMO failure, a reference table over its row cap, a generated-file
+catalog read error — becomes a **reported skip**: it is counted, listed with its reason in the
+run's logs (select the warning row in the Logs tab to expand the per-object list), and its
+previously committed file is retained untouched. The run finishes as **Warning** (partial success)
+with an explanation. Only errors that would make the output wrong fail the run: an unreachable
+server or database, a broken git workspace preparation, a failed commit, or two objects whose names
+differ only by letter case (unsupported — Windows paths are case-insensitive; the error names both
+objects).
+
+**Retries.** Transient SQL errors (deadlocks, timeouts, transport blips) retry up to the job's SQL
+retry count (default 3) with backoff; transient git network failures retry up to the git retry
+count (default 3); GitHub API calls retry on server errors and secondary rate limits. Permanent
+errors — bad credentials, missing permissions, non-fast-forward pushes — are never retried blindly.
+
+**Nothing is silently lost.** Tracked object state advances **only after the changeset is durably
+delivered**: a commit in direct/local modes (a commit whose push failed is re-pushed automatically
+on the next run), an opened pull request in PR mode. If delivery fails, the next run re-detects and
+re-delivers the same changes — including deletions. File writes are atomic (temp + rename), so an
+interrupted run can never leave a truncated script that a later commit would pick up. Incremental
+watermarks never advance past a type that had skips, so a transiently skipped object is always
+re-examined.
+
+**Cancellation.** A running sync can be cancelled from the Job Workspace ("Cancel run") or with
+Ctrl+C in the CLI. The engine stops within seconds, records the run as **Cancelled** with its logs,
+and leaves state untouched — the next run re-detects everything the cancelled run had in flight.
+
+**Known limits.**
+- Two objects whose names differ only by letter case (possible on case-sensitive databases) cannot
+  be versioned as separate files; the run fails with an actionable message naming both.
+- Generated files over ~95 MB are skipped with a warning (GitHub rejects files over 100 MB).
+- GitHub.com only — GitHub Enterprise Server endpoints are not supported yet.
+- Permission- and extended-property-only changes do not bump `modify_date`; with incremental
+  scripting they are captured by the every-run `permissions.sql`/security-review artifacts rather
+  than the object's own file until it next changes.
+- A permanently unscriptable object (e.g. an encrypted procedure) forces a **full scan of its
+  object type every run** — the incremental safety rule cannot tell it apart from a never-scripted
+  object. Add it to `.obsyncignore` to acknowledge it once and restore incremental speed for the
+  type.
+- git itself degrades past roughly a million files in one repository; split very large estates
+  across repositories or destination folders.
 
 ## Read-only by design
 

@@ -2,6 +2,40 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.8.0 — 2026-07-10
+
+- **Nothing is silently lost** — tracked object state (hashes, deletions, incremental watermarks)
+  now advances only after the run's changes are durably delivered: a commit in direct/local modes,
+  an opened pull request in PR mode. A failed commit, push, or PR no longer made later runs report
+  "no changes" while the repository silently missed the work.
+- **Cancel running syncs** — a Cancel button in the Job Workspace and Ctrl+C in the CLI stop a run
+  cleanly within seconds; the run is recorded as Cancelled (not a scary failure) and everything it
+  had in flight is re-detected next run.
+- **Reliability under parallel scripting** — fixed an intermittent whole-run failure caused by a
+  directory-creation race between workers; file writes are now atomic (an interrupted run can never
+  leave a truncated script for a later commit to pick up); interrupted or corrupt git workspaces
+  self-heal by recloning.
+- **Credential hardening** — the GitHub token and proxy credentials no longer appear on the git
+  child-process command line (which Windows process auditing and EDR record); they travel in
+  environment variables instead.
+- **Safer multi-job setups** — jobs sharing one destination repository now run back-to-back on a
+  per-repository lock instead of interleaving git operations in one clone.
+- **Failure-policy fixes** — incremental runs no longer delete committed files of
+  `.obsyncignore`-matched objects; watermarks no longer advance past transiently skipped objects; a
+  failed options/permissions/security-review read is a reported skip instead of a run failure;
+  generated files over ~95 MB are skipped (GitHub rejects them at 100 MB) instead of wedging the
+  branch; case-only name collisions fail with an actionable message.
+- **Clearer errors and truthful UI** — push failures show the explained, actionable reason (raw git
+  output stays in technical details, incl. protected-branch and file-too-large guidance);
+  skip-warnings explain themselves; per-object skip reasons are visible in the run's Logs tab;
+  Dashboard shows action errors; History shows skipped counts and discloses its 100-run window;
+  views refresh when the window activates so service-run results appear; closing the app mid-run
+  asks first; live "N objects processed" progress during scripting.
+- **Upgrades keep the service account** — the MSI remembers the configured service logon account,
+  so a major upgrade no longer silently resets a working service to Local System.
+- Benchmarked: a repeatable real-pipeline benchmark harness ships in `tools/Obsync.Benchmark`;
+  measured results and tested limits are documented in `docs/LAUNCH-READINESS.md`.
+
 ## 0.7.0 — 2026-07-10
 
 - **Reliable scheduling** — the launch-blocking scheduling gaps are closed end-to-end:

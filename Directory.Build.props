@@ -30,7 +30,7 @@
   <PropertyGroup Label="Package / assembly metadata">
     <Product>Obsync</Product>
     <!-- Single source of the product version; surfaced in the UI, support bundle, and CLI. -->
-    <VersionPrefix>0.7.0</VersionPrefix>
+    <VersionPrefix>0.8.0</VersionPrefix>
     <Company>Obsync</Company>
     <Authors>Obsync Contributors</Authors>
     <Copyright>Copyright (c) 2026 Obsync Contributors</Copyright>

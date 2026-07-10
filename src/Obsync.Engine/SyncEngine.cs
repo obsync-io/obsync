@@ -750,14 +750,22 @@ public sealed class SyncEngine : ISyncEngine
         // An object a provider could not script (encrypted/CLR module, SMO failure) is recorded as a
         // skip rather than silently dropped: it is counted, marked "seen" (so it is not deleted), and
         // surfaced as a warning. Runs concurrently, so it only touches thread-safe accumulators.
-        // The type is remembered so the incremental watermark for it does NOT advance this run —
-        // otherwise a transiently skipped object whose change predates the new watermark would never
-        // be re-examined until it changed again.
+        // A skip of an object WITH prior state (a transient failure on something previously scripted)
+        // also blocks that type's watermark from advancing this run — otherwise a change that
+        // predates the new watermark would never be re-examined. Skips of objects with NO prior
+        // state (e.g. permanently unscriptable encrypted modules) are covered by the planner's
+        // no-prior violation rule instead, which forces a full scan of the type every run — gating
+        // the watermark for those too would just keep it stale forever with no added safety.
         var skippedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
         Task RecordSkipAsync(RawScriptedObject raw)
         {
-            seen.TryAdd(StateKey(raw.Identity), 0);
-            skippedTypes.TryAdd(raw.Identity.Type, 0);
+            var key = StateKey(raw.Identity);
+            seen.TryAdd(key, 0);
+            if (prior.ContainsKey(key))
+            {
+                skippedTypes.TryAdd(raw.Identity.Type, 0);
+            }
+
             context.IncrementScanned();
             context.IncrementFailed();
             skipped.Add($"{raw.Identity.Type} {DescribeIdentity(raw.Identity)} — {raw.SkipReason}");
