@@ -2,6 +2,12 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.8.2 — 2026-07-10
+
+- **Modernized installer wizard** — Segoe UI dialog typography, a cleaner brand side panel and
+  banner, product-specific page copy with sentence-cased headers, and a more readable Service
+  Account page. Purely presentational; install behavior is unchanged.
+
 ## 0.8.1 — 2026-07-10
 
 - **Tabbed Settings** — the Settings page is reorganized into categorized tabs (General, Alerts,
