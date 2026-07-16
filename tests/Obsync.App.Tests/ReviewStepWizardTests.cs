@@ -34,7 +34,8 @@ public sealed class ReviewStepWizardTests
         return new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
             Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
-            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>(),
+            Substitute.For<Obsync.App.Services.IJobPreflightService>());
     }
 
     private static string ValueOf(CreateJobViewModel vm, string label) =>

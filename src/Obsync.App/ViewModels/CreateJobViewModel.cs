@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
+using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.Data.Repositories;
@@ -59,8 +62,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
     private readonly IClock _clock;
     private readonly IAuditWriter _audit;
     private readonly Services.ISchedulerHealthService _schedulerHealth;
+    private readonly Services.IJobPreflightService _preflight;
 
     private SyncJob? _editingJob;
+
+    /// <summary>All saved jobs, loaded once per wizard session for the folder-collision warning.</summary>
+    private IReadOnlyList<SyncJob> _existingJobs = [];
 
     [ObservableProperty] private int _currentStep = 1;
     [ObservableProperty] private bool _isEditMode;
@@ -69,6 +76,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private string _tags = string.Empty;
     [ObservableProperty] private SqlConnectionProfile? _selectedConnection;
     [ObservableProperty] private bool _syncAllUserDatabases;
+
+    /// <summary>Live case-insensitive contains-filter over the database checklist.</summary>
+    [ObservableProperty] private string _databaseFilter = string.Empty;
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
     [ObservableProperty] private bool _includeServerObjects;
     [ObservableProperty] private bool _includeReferenceData;
@@ -102,6 +112,15 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private string _windowEnd = "05:00";
     [ObservableProperty] private MaintenanceDayScope _selectedDayScope = MaintenanceDayScope.AnyDay;
 
+    /// <summary>Toggles the Objects step's read-only list of what the selected preset includes.</summary>
+    [ObservableProperty] private bool _showPresetContents;
+
+    /// <summary>
+    /// Warning when another job targets the same repository + effective folder (their runs would
+    /// overwrite each other's files). Advisory only — it never blocks Next or Save.
+    /// </summary>
+    [ObservableProperty] private string? _destinationCollisionWarning;
+
     [ObservableProperty] private bool _showAdvanced;
     [ObservableProperty] private int _maxParallelWorkers;
     [ObservableProperty] private int _queryTimeoutSeconds = 120;
@@ -113,6 +132,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     [ObservableProperty] private string? _statusMessage;
     [ObservableProperty] private bool _isBusy;
+
+    /// <summary>Busy state of the Review step's preflight button (independent of Save's busy state).</summary>
+    [ObservableProperty] private bool _isPreflightRunning;
 
     /// <summary>
     /// Shown on the Schedule step when the background service can't execute schedules right now, so
@@ -128,6 +150,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public ObservableCollection<SelectableObjectType> ServerObjectTypes { get; } = [];
     public ObservableCollection<SelectableTable> ReferenceTables { get; } = [];
     public ObservableCollection<ReviewItem> ReviewItems { get; } = [];
+    public ObservableCollection<Services.DiagnosticResult> PreflightResults { get; } = [];
+
+    /// <summary>The database checklist filtered by <see cref="DatabaseFilter"/> (what the view shows).</summary>
+    public ICollectionView DatabasesView { get; }
 
     public IReadOnlyList<ObjectSelectionPreset> Presets { get; } = Enum.GetValues<ObjectSelectionPreset>();
     public IReadOnlyList<ScheduleKind> ScheduleKinds { get; } = Enum.GetValues<ScheduleKind>();
@@ -144,11 +170,22 @@ public sealed partial class CreateJobViewModel : ObservableObject
     /// <summary>True for the git modes (Direct / PR / Local commit) — shows repository + branch.</summary>
     public bool IsGitMode => !IsExportOnly;
 
+    /// <summary>One-line description of the selected commit mode, shown under the mode combo.</summary>
+    public string CommitModeDescription => SelectedCommitMode switch
+    {
+        CommitMode.PullRequest => "Pull request: each run with changes commits to a new branch and opens a PR into the branch above.",
+        CommitMode.LocalCommitOnly => "Create a local Git commit without pushing to the remote repository.",
+        CommitMode.ExportOnly => "No GitHub is contacted. A path ending in .zip is written as a zip archive.",
+        _ => "Commit and push generated changes directly to the selected branch.",
+    };
+
     partial void OnSelectedCommitModeChanged(CommitMode value)
     {
         OnPropertyChanged(nameof(IsPullRequest));
         OnPropertyChanged(nameof(IsExportOnly));
         OnPropertyChanged(nameof(IsGitMode));
+        OnPropertyChanged(nameof(CommitModeDescription));
+        RefreshDestinationInfo();
     }
 
     public event EventHandler? Saved;
@@ -161,7 +198,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         ICredentialStore credentialStore,
         IClock clock,
         IAuditWriter audit,
-        Services.ISchedulerHealthService schedulerHealth)
+        Services.ISchedulerHealthService schedulerHealth,
+        Services.IJobPreflightService preflight)
     {
         _connections = connections;
         _repositories = repositories;
@@ -171,6 +209,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _clock = clock;
         _audit = audit;
         _schedulerHealth = schedulerHealth;
+        _preflight = preflight;
 
         // The main picker offers database objects; server-scoped types have their own checklist.
         foreach (var descriptor in SqlObjectTypeCatalog.All)
@@ -178,6 +217,13 @@ public sealed partial class CreateJobViewModel : ObservableObject
             (descriptor.IsServerScoped ? ServerObjectTypes : ObjectTypes)
                 .Add(new SelectableObjectType(descriptor.Type, descriptor.DisplayName));
         }
+
+        // Track checklist membership + per-item checks so the folder preview stays live, and expose
+        // a filterable view of the same items (checkbox state lives on the items, so it survives
+        // filtering).
+        Databases.CollectionChanged += OnDatabasesCollectionChanged;
+        DatabasesView = CollectionViewSource.GetDefaultView(Databases);
+        DatabasesView.Filter = item => item is SelectableDatabase database && MatchesDatabaseFilter(database.Name);
     }
 
     // --- Step state surfaced to the view -------------------------------------------------------
@@ -229,16 +275,101 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     /// <summary>One-line explanation of what checking a database does in the current scope.</summary>
     public string DatabasesHint => SyncAllUserDatabases
-        ? "Every online user database is scripted on each run — databases created later are picked up automatically. Check any you want left out."
+        ? "Every online user database is scripted on each run — check any you want left out."
         : "Check the databases to include in this job.";
 
     partial void OnSyncAllUserDatabasesChanged(bool value)
     {
         OnPropertyChanged(nameof(DatabasesHeader));
         OnPropertyChanged(nameof(DatabasesHint));
+        RefreshDestinationInfo();
     }
 
-    partial void OnSelectedPresetChanged(ObjectSelectionPreset value) => OnPropertyChanged(nameof(IsCustomPreset));
+    /// <summary>
+    /// Names the identities the job runs under when the selected connection uses Windows
+    /// authentication — manual runs use the desktop user, scheduled runs the service account.
+    /// </summary>
+    public string? WindowsAuthNotice =>
+        SelectedConnection?.AuthenticationMode == SqlAuthenticationMode.WindowsIntegrated
+            ? $"Manual runs connect as {WindowsIdentityName}. Scheduled runs connect as the Obsync service account."
+            : null;
+
+    private static readonly string WindowsIdentityName = ResolveWindowsIdentity();
+
+    private static string ResolveWindowsIdentity()
+    {
+        try
+        {
+            return System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+        }
+        catch
+        {
+            return $"{Environment.UserDomainName}\\{Environment.UserName}";
+        }
+    }
+
+    partial void OnSelectedConnectionChanged(SqlConnectionProfile? value)
+    {
+        OnPropertyChanged(nameof(WindowsAuthNotice));
+        RefreshDestinationInfo();
+    }
+
+    private bool MatchesDatabaseFilter(string name) =>
+        string.IsNullOrWhiteSpace(DatabaseFilter) || name.Contains(DatabaseFilter.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    partial void OnDatabaseFilterChanged(string value) => DatabasesView.Refresh();
+
+    /// <summary>Checks every database the current filter shows (never the hidden ones).</summary>
+    [RelayCommand]
+    private void SelectAllDatabases()
+    {
+        foreach (var database in Databases.Where(d => MatchesDatabaseFilter(d.Name)))
+        {
+            database.IsSelected = true;
+        }
+    }
+
+    /// <summary>Unchecks every database the current filter shows (never the hidden ones).</summary>
+    [RelayCommand]
+    private void ClearDatabaseSelection()
+    {
+        foreach (var database in Databases.Where(d => MatchesDatabaseFilter(d.Name)))
+        {
+            database.IsSelected = false;
+        }
+    }
+
+    private void OnDatabasesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (SelectableDatabase database in e.NewItems)
+            {
+                database.PropertyChanged += OnDatabaseItemChanged;
+            }
+        }
+
+        RefreshDestinationInfo();
+    }
+
+    private void OnDatabaseItemChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SelectableDatabase.IsSelected))
+        {
+            RefreshDestinationInfo();
+        }
+    }
+
+    /// <summary>What the selected preset actually includes, straight from the runtime expansion.</summary>
+    public string PresetContents => IsCustomPreset
+        ? "Choose object types below."
+        : string.Join(", ", ObjectSelectionPresets.Expand(SelectedPreset).Select(t => SqlObjectTypeCatalog.Get(t).DisplayName));
+
+    partial void OnSelectedPresetChanged(ObjectSelectionPreset value)
+    {
+        OnPropertyChanged(nameof(IsCustomPreset));
+        OnPropertyChanged(nameof(PresetContents));
+    }
 
     partial void OnIncludeServerObjectsChanged(bool value)
     {
@@ -268,6 +399,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowDayTime));
         OnPropertyChanged(nameof(ShowWeekday));
         OnPropertyChanged(nameof(ShowCron));
+        OnPropertyChanged(nameof(ShowOverlapNote));
+        RefreshSchedulePreview();
     }
 
     partial void OnSelectedRepositoryChanged(GitRepositoryProfile? value)
@@ -276,7 +409,79 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             Branch = value.DefaultBranch;
         }
+
+        RefreshDestinationInfo();
     }
+
+    // --- Destination: live folder preview + collision warning ----------------------------------
+
+    /// <summary>
+    /// The folder the run will actually write to — the entered folder, or the computed default when
+    /// the folder box is empty. Same computation the Review step and Save use.
+    /// </summary>
+    public string FolderPreview =>
+        EffectiveDestinationFolder([.. Databases.Where(d => d.IsSelected).Select(d => d.Name)]);
+
+    partial void OnDestinationFolderChanged(string value) => RefreshDestinationInfo();
+
+    private void RefreshDestinationInfo()
+    {
+        OnPropertyChanged(nameof(FolderPreview));
+        DestinationCollisionWarning = IsGitMode && SelectedRepository is { } repository
+            && Services.JobPreflightService.FindFolderCollision(
+                _existingJobs, repository.Id, FolderPreview, _editingJob?.Id) is { } other
+            ? $"Job '{other.Name}' also writes to this folder — runs will overwrite each other's files."
+            : null;
+    }
+
+    // --- Schedule: live next-run preview + banner/caption gating -------------------------------
+
+    /// <summary>
+    /// Live preview of the next scheduled run in local time, driven by the same computation the
+    /// save path stamps. Null while a cron expression is invalid (validation explains why).
+    /// </summary>
+    public string? NextRunPreview
+    {
+        get
+        {
+            if (SelectedScheduleKind == ScheduleKind.Manual)
+            {
+                return "Runs only when you start it manually.";
+            }
+
+            // The zone display name already carries its own parentheses ("(UTC-08:00) Pacific…").
+            return ComputeNextRun(BuildSchedule()) is { } next
+                ? $"Next run: {next.LocalDateTime:g} · {TimeZoneInfo.Local.DisplayName}"
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// The service-readiness banner only matters when the chosen cadence actually needs the
+    /// background service — any non-manual cadence, or run-on-startup.
+    /// </summary>
+    public bool ShowScheduleServiceNotice =>
+        ScheduleServiceNotice is not null && (SelectedScheduleKind != ScheduleKind.Manual || RunOnStartup);
+
+    /// <summary>The overlap-policy caption is only meaningful for scheduled cadences.</summary>
+    public bool ShowOverlapNote => SelectedScheduleKind != ScheduleKind.Manual;
+
+    private void RefreshSchedulePreview()
+    {
+        OnPropertyChanged(nameof(NextRunPreview));
+        OnPropertyChanged(nameof(ShowScheduleServiceNotice));
+    }
+
+    partial void OnScheduleServiceNoticeChanged(string? value) => OnPropertyChanged(nameof(ShowScheduleServiceNotice));
+    partial void OnRunOnStartupChanged(bool value) => OnPropertyChanged(nameof(ShowScheduleServiceNotice));
+    partial void OnIntervalHoursChanged(int value) => RefreshSchedulePreview();
+    partial void OnTimeOfDayChanged(string value) => RefreshSchedulePreview();
+    partial void OnSelectedDayOfWeekChanged(DayOfWeek value) => RefreshSchedulePreview();
+    partial void OnCronExpressionChanged(string value) => RefreshSchedulePreview();
+    partial void OnMaintenanceWindowEnabledChanged(bool value) => RefreshSchedulePreview();
+    partial void OnWindowStartChanged(string value) => RefreshSchedulePreview();
+    partial void OnWindowEndChanged(string value) => RefreshSchedulePreview();
+    partial void OnSelectedDayScopeChanged(MaintenanceDayScope value) => RefreshSchedulePreview();
 
     // --- Loading -------------------------------------------------------------------------------
 
@@ -293,6 +498,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             Repositories.Add(repository);
         }
+
+        // Loaded once per wizard session; drives the Destination step's folder-collision warning.
+        _existingJobs = await _jobs.GetAllAsync();
 
         var health = await _schedulerHealth.GetAsync();
         ScheduleServiceNotice = health is { CanExecuteSchedules: false }
@@ -538,6 +746,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
             "The export destination must be a full path (e.g. D:\\exports or \\\\server\\share\\db.zip) without invalid characters.",
         3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
         3 when IsGitMode && string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
+        3 when IsGitMode && !GitRefName.IsValidBranchName(Branch.Trim()) =>
+            $"\"{Branch.Trim()}\" is not a valid git branch name (no spaces, '..', '~', '^', ':', '?', '*', '[', '\\', '@{{', " +
+            "or leading/trailing '/' or '.').",
         3 when !string.IsNullOrWhiteSpace(DestinationFolder)
             && (HasInvalidPathChars(DestinationFolder) || Path.IsPathRooted(DestinationFolder.Trim()) || HasParentSegment(DestinationFolder)) =>
             "The repository folder must be a relative path inside the repository (no drive letter, no '..', no invalid characters).",
@@ -854,21 +1065,64 @@ public sealed partial class CreateJobViewModel : ObservableObject
     // The provisional next-run stamped at save. Standard cadences come from the profile; Cron is
     // computed here (never the stale pre-edit value — switching Daily→Cron used to freeze the old
     // cadence's next-run forever); Manual and disabled jobs clear it.
-    private DateTimeOffset? ProvisionalNextRun(SyncJob job)
-    {
-        if (!job.Enabled || job.Schedule.Kind == ScheduleKind.Manual)
-        {
-            return null;
-        }
+    private DateTimeOffset? ProvisionalNextRun(SyncJob job) =>
+        !job.Enabled || job.Schedule.Kind == ScheduleKind.Manual ? null : ComputeNextRun(job.Schedule);
 
-        if (job.Schedule.Kind == ScheduleKind.Cron)
+    // One computation drives both the save-time stamp and the Schedule step's live preview, so the
+    // preview can never show a different time than the one that gets saved.
+    private DateTimeOffset? ComputeNextRun(ScheduleProfile schedule)
+    {
+        if (schedule.Kind == ScheduleKind.Cron)
         {
-            var cron = job.Schedule.CronExpression?.Trim();
+            var cron = schedule.CronExpression?.Trim();
             return !string.IsNullOrWhiteSpace(cron) && Quartz.CronExpression.IsValidExpression(cron)
                 ? new Quartz.CronExpression(cron) { TimeZone = TimeZoneInfo.Local }.GetNextValidTimeAfter(_clock.UtcNow)
                 : null;
         }
 
-        return job.Schedule.GetNextRun(_clock.UtcNow);
+        return schedule.GetNextRun(_clock.UtcNow);
+    }
+
+    // --- Review-step preflight -------------------------------------------------------------------
+
+    /// <summary>
+    /// Runs the optional pre-save checks (SQL, repository + branch, export path, credentials, folder
+    /// collision). Advisory only — results never disable Save.
+    /// </summary>
+    [RelayCommand]
+    private async Task RunPreflightAsync()
+    {
+        if (IsPreflightRunning)
+        {
+            return;
+        }
+
+        IsPreflightRunning = true;
+        try
+        {
+            var request = new Services.JobPreflightRequest(
+                SelectedConnection,
+                IsGitMode ? SelectedRepository : null,
+                Branch.Trim(),
+                SelectedCommitMode,
+                IsExportOnly ? ExportPath.Trim() : null,
+                FolderPreview,
+                _editingJob?.Id);
+            var results = await _preflight.RunAsync(request);
+
+            PreflightResults.Clear();
+            foreach (var result in results)
+            {
+                PreflightResults.Add(result);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Preflight could not run — {ex.Message}";
+        }
+        finally
+        {
+            IsPreflightRunning = false;
+        }
     }
 }

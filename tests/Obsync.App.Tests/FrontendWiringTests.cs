@@ -42,7 +42,8 @@ public sealed class FrontendWiringTests
 
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(), Substitute.For<ICredentialStore>(), clock,
-            Substitute.For<IAuditWriter>(), Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
+            Substitute.For<IAuditWriter>(), Substitute.For<Obsync.App.Services.ISchedulerHealthService>(),
+            Substitute.For<Obsync.App.Services.IJobPreflightService>());
         await vm.LoadAsync();
 
         var existing = new SyncJob

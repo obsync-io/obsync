@@ -32,6 +32,8 @@ public static class AppServices
         // "Will my schedules actually run?" — SCM state + service account + scheduler heartbeat.
         services.AddSingleton<ISchedulerHealthService, SchedulerHealthService>();
         services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();
+        // Optional pre-save checks on the wizard's Review step (advisory — never blocks Save).
+        services.AddSingleton<IJobPreflightService, JobPreflightService>();
         services.AddSingleton<IRunReportWriter, RunReportWriter>();
 
         // Reads before/after script content for the diff viewer from the local git workspaces.

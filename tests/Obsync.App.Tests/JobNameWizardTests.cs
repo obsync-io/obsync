@@ -37,7 +37,8 @@ public sealed class JobNameWizardTests
         var vm = new CreateJobViewModel(
             connections, repositories, jobs, Substitute.For<ISqlServerProbe>(),
             Substitute.For<ICredentialStore>(), clock, Substitute.For<IAuditWriter>(),
-            Substitute.For<Obsync.App.Services.ISchedulerHealthService>());
+            Substitute.For<Obsync.App.Services.ISchedulerHealthService>(),
+            Substitute.For<Obsync.App.Services.IJobPreflightService>());
         return (vm, () => saved);
     }
 
