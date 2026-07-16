@@ -51,9 +51,9 @@ public sealed class CreateJobWindowRenderTests
                 // result template (icon + name + detail, one per status) renders too.
                 viewModel.CurrentStep = 4;
                 viewModel.NextCommand.Execute(null);
-                viewModel.PreflightResults.Add(new DiagnosticResult("SQL connection", DiagnosticStatus.Pass, "Enterprise Edition (16.0)"));
-                viewModel.PreflightResults.Add(new DiagnosticResult("Branch 'main'", DiagnosticStatus.Warning, "Not found on the remote."));
-                viewModel.PreflightResults.Add(new DiagnosticResult("Credentials", DiagnosticStatus.Fail, "Missing: GitHub access token."));
+                viewModel.PreflightResults.Add(new DiagnosticResult("SQL connection", DiagnosticStatus.Pass, "Enterprise Edition (16.0)", DateTimeOffset.UtcNow));
+                viewModel.PreflightResults.Add(new DiagnosticResult("Branch 'main'", DiagnosticStatus.Warning, "Not found on the remote.", DateTimeOffset.UtcNow));
+                viewModel.PreflightResults.Add(new DiagnosticResult("Credentials", DiagnosticStatus.Fail, "Missing: GitHub access token.", DateTimeOffset.UtcNow));
                 pngPaths.Add(RenderToPng(content, Path.Combine(directory, "create-job-step5.png")));
             }
             catch (Exception ex)

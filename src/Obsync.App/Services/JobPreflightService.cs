@@ -35,14 +35,19 @@ public sealed class JobPreflightService : IJobPreflightService
     private readonly IGitHubService _gitHub;
     private readonly ICredentialStore _credentials;
     private readonly IJobRepository _jobs;
+    private readonly IClock _clock;
 
-    public JobPreflightService(ISqlServerProbe probe, IGitHubService gitHub, ICredentialStore credentials, IJobRepository jobs)
+    public JobPreflightService(ISqlServerProbe probe, IGitHubService gitHub, ICredentialStore credentials, IJobRepository jobs, IClock clock)
     {
         _probe = probe;
         _gitHub = gitHub;
         _credentials = credentials;
         _jobs = jobs;
+        _clock = clock;
     }
+
+    private DiagnosticResult Result(string name, DiagnosticStatus status, string detail) =>
+        new(name, status, detail, _clock.UtcNow);
 
     /// <summary>
     /// Finds another job that writes to the same repository + effective folder (case-insensitive) —
@@ -86,7 +91,7 @@ public sealed class JobPreflightService : IJobPreflightService
         const string name = "SQL connection";
         if (request.Connection is null)
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Fail, "Select a server on the Source step first.");
+            return Result(name, DiagnosticStatus.Fail, "Select a server on the Source step first.");
         }
 
         try
@@ -96,12 +101,12 @@ public sealed class JobPreflightService : IJobPreflightService
                 : null;
             var result = await _probe.TestConnectionAsync(request.Connection, password, cancellationToken).ConfigureAwait(false);
             return result.IsSuccess
-                ? new DiagnosticResult(name, DiagnosticStatus.Pass, $"{result.Value.Edition} ({result.Value.ProductVersion})")
-                : new DiagnosticResult(name, DiagnosticStatus.Fail, result.Error ?? "Connection failed.");
+                ? Result(name, DiagnosticStatus.Pass, $"{result.Value.Edition} ({result.Value.ProductVersion})")
+                : Result(name, DiagnosticStatus.Fail, result.Error ?? "Connection failed.");
         }
         catch (Exception ex)
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Fail, ex.Message);
+            return Result(name, DiagnosticStatus.Fail, ex.Message);
         }
     }
 
@@ -111,13 +116,13 @@ public sealed class JobPreflightService : IJobPreflightService
         const string name = "Repository access";
         if (request.Repository is null)
         {
-            return [new DiagnosticResult(name, DiagnosticStatus.Fail, "Select a destination repository on the Destination step first.")];
+            return [Result(name, DiagnosticStatus.Fail, "Select a destination repository on the Destination step first.")];
         }
 
         var token = _credentials.Retrieve(CredentialKeys.GitHubToken(request.Repository.Id));
         if (string.IsNullOrEmpty(token))
         {
-            return [new DiagnosticResult(name, DiagnosticStatus.Warning, "Skipped — no GitHub token stored for this repository.")];
+            return [Result(name, DiagnosticStatus.Warning, "Skipped — no GitHub token stored for this repository.")];
         }
 
         try
@@ -126,33 +131,33 @@ public sealed class JobPreflightService : IJobPreflightService
                 token, request.Repository.Owner, request.Repository.RepositoryName, cancellationToken).ConfigureAwait(false);
             if (access.IsFailure)
             {
-                return [new DiagnosticResult(name, DiagnosticStatus.Fail, access.Error ?? "The GitHub check could not run.")];
+                return [Result(name, DiagnosticStatus.Fail, access.Error ?? "The GitHub check could not run.")];
             }
 
             var report = access.Value;
             if (!report.TokenValid)
             {
-                return [new DiagnosticResult(name, DiagnosticStatus.Fail, report.Detail ?? "The token is invalid.")];
+                return [Result(name, DiagnosticStatus.Fail, report.Detail ?? "The token is invalid.")];
             }
 
             if (!report.RepositoryFound)
             {
-                return [new DiagnosticResult(name, DiagnosticStatus.Fail, report.Detail ?? "The repository is not accessible.")];
+                return [Result(name, DiagnosticStatus.Fail, report.Detail ?? "The repository is not accessible.")];
             }
 
             // Mode-aware verdict: Local Commit Only never pushes, so a read-only token is fine there.
             var accessResult = report switch
             {
-                { CanWrite: true } => new DiagnosticResult(name, DiagnosticStatus.Pass, $"Read + write (as {report.Login})."),
+                { CanWrite: true } => Result(name, DiagnosticStatus.Pass, $"Read + write (as {report.Login})."),
                 _ when request.CommitMode == CommitMode.LocalCommitOnly =>
-                    new DiagnosticResult(name, DiagnosticStatus.Pass, $"Read-only (as {report.Login}) — sufficient for local commits."),
-                _ => new DiagnosticResult(name, DiagnosticStatus.Warning, "Read-only token — pushes will fail (needs Contents: write)."),
+                    Result(name, DiagnosticStatus.Pass, $"Read-only (as {report.Login}) — sufficient for local commits."),
+                _ => Result(name, DiagnosticStatus.Warning, "Read-only token — pushes will fail (needs Contents: write)."),
             };
             return [accessResult, await CheckBranchAsync(token, request, cancellationToken).ConfigureAwait(false)];
         }
         catch (Exception ex)
         {
-            return [new DiagnosticResult(name, DiagnosticStatus.Fail, ex.Message)];
+            return [Result(name, DiagnosticStatus.Fail, ex.Message)];
         }
     }
 
@@ -166,32 +171,32 @@ public sealed class JobPreflightService : IJobPreflightService
                 token, request.Repository!.Owner, request.Repository.RepositoryName, cancellationToken).ConfigureAwait(false);
             if (branches.IsFailure)
             {
-                return new DiagnosticResult(name, DiagnosticStatus.Warning, branches.Error ?? "Could not list the remote branches.");
+                return Result(name, DiagnosticStatus.Warning, branches.Error ?? "Could not list the remote branches.");
             }
 
             if (branches.Value.Contains(request.Branch, StringComparer.Ordinal))
             {
-                return new DiagnosticResult(name, DiagnosticStatus.Pass, "The branch exists on the remote.");
+                return Result(name, DiagnosticStatus.Pass, "The branch exists on the remote.");
             }
 
             // A missing branch is fatal only for PR mode (the engine refuses a missing base branch);
             // direct/local commits create it with checkout -B and it appears on the first push.
             return request.CommitMode == CommitMode.PullRequest
-                ? new DiagnosticResult(name, DiagnosticStatus.Fail, "The pull-request base branch does not exist on the remote.")
-                : new DiagnosticResult(name, DiagnosticStatus.Warning, "Not found on the remote — it is created on the first push.");
+                ? Result(name, DiagnosticStatus.Fail, "The pull-request base branch does not exist on the remote.")
+                : Result(name, DiagnosticStatus.Warning, "Not found on the remote — it is created on the first push.");
         }
         catch (Exception ex)
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Warning, ex.Message);
+            return Result(name, DiagnosticStatus.Warning, ex.Message);
         }
     }
 
-    private static DiagnosticResult CheckExportDestination(string? exportPath)
+    private DiagnosticResult CheckExportDestination(string? exportPath)
     {
         const string name = "Export destination";
         if (string.IsNullOrWhiteSpace(exportPath))
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Fail, "Enter an export destination on the Destination step first.");
+            return Result(name, DiagnosticStatus.Fail, "Enter an export destination on the Destination step first.");
         }
 
         try
@@ -202,18 +207,18 @@ public sealed class JobPreflightService : IJobPreflightService
                 : exportPath;
             if (string.IsNullOrEmpty(directory))
             {
-                return new DiagnosticResult(name, DiagnosticStatus.Fail, "The export destination has no parent folder.");
+                return Result(name, DiagnosticStatus.Fail, "The export destination has no parent folder.");
             }
 
             Directory.CreateDirectory(directory);
             var probeFile = Path.Combine(directory, $".obsync-preflight-{Guid.NewGuid():N}.tmp");
             File.WriteAllText(probeFile, "probe");
             File.Delete(probeFile);
-            return new DiagnosticResult(name, DiagnosticStatus.Pass, $"{directory} is writable.");
+            return Result(name, DiagnosticStatus.Pass, $"{directory} is writable.");
         }
         catch (Exception ex)
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Fail, $"Not writable — {ex.Message}");
+            return Result(name, DiagnosticStatus.Fail, $"Not writable — {ex.Message}");
         }
     }
 
@@ -236,12 +241,12 @@ public sealed class JobPreflightService : IJobPreflightService
             }
 
             return missing.Count == 0
-                ? new DiagnosticResult(name, DiagnosticStatus.Pass, "All required secrets are stored in Windows Credential Manager.")
-                : new DiagnosticResult(name, DiagnosticStatus.Fail, $"Missing from Windows Credential Manager: {string.Join(", ", missing)}.");
+                ? Result(name, DiagnosticStatus.Pass, "All required secrets are stored in Windows Credential Manager.")
+                : Result(name, DiagnosticStatus.Fail, $"Missing from Windows Credential Manager: {string.Join(", ", missing)}.");
         }
         catch (Exception ex)
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Warning, ex.Message);
+            return Result(name, DiagnosticStatus.Warning, ex.Message);
         }
     }
 
@@ -254,13 +259,13 @@ public sealed class JobPreflightService : IJobPreflightService
             var jobs = await _jobs.GetAllAsync(cancellationToken).ConfigureAwait(false);
             var other = FindFolderCollision(jobs, request.Repository!.Id, request.EffectiveFolder, request.EditingJobId);
             return other is null
-                ? new DiagnosticResult(name, DiagnosticStatus.Pass, "No other job writes to this repository folder.")
-                : new DiagnosticResult(name, DiagnosticStatus.Warning,
+                ? Result(name, DiagnosticStatus.Pass, "No other job writes to this repository folder.")
+                : Result(name, DiagnosticStatus.Warning,
                     $"Job '{other.Name}' also writes to this folder — runs will overwrite each other's files.");
         }
         catch (Exception ex)
         {
-            return new DiagnosticResult(name, DiagnosticStatus.Warning, ex.Message);
+            return Result(name, DiagnosticStatus.Warning, ex.Message);
         }
     }
 }

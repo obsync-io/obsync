@@ -334,7 +334,7 @@ public sealed class WizardClarityTests
         JobPreflightRequest? seen = null;
         preflight.RunAsync(Arg.Do<JobPreflightRequest>(r => seen = r), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<DiagnosticResult>>(
-                [new DiagnosticResult("SQL connection", DiagnosticStatus.Pass, "ok")]));
+                [new DiagnosticResult("SQL connection", DiagnosticStatus.Pass, "ok", DateTimeOffset.UtcNow)]));
         await vm.LoadAsync();
         vm.SelectedConnection = vm.Connections[0];
         vm.SyncAllUserDatabases = true;

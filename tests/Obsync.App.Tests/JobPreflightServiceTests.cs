@@ -27,7 +27,7 @@ public sealed class JobPreflightServiceTests
     private readonly SqlConnectionProfile _connection = new() { Name = "Prod", ServerName = "SVR" };
     private readonly GitRepositoryProfile _repository = new() { Name = "R", Owner = "o", RepositoryName = "r", DefaultBranch = "main" };
 
-    private JobPreflightService Build() => new(_probe, _gitHub, _credentials, _jobs);
+    private JobPreflightService Build() => new(_probe, _gitHub, _credentials, _jobs, new SystemClock());
 
     private JobPreflightRequest GitRequest(CommitMode mode = CommitMode.DirectCommit, string branch = "main") =>
         new(_connection, _repository, branch, mode, ExportPath: null, "environments/SVR/db1", EditingJobId: null);
