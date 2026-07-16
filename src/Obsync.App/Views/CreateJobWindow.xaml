@@ -361,21 +361,47 @@
 
                         <TextBlock Text="SERVER" Style="{StaticResource Caption}" />
                         <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding SelectedConnection}"
-                                  DisplayMemberPath="Name" Margin="0,4,0,10" />
+                                  DisplayMemberPath="Name" Margin="0,4,0,2" />
+                        <TextBlock Text="{Binding WindowsAuthNotice}" Style="{StaticResource Caption}"
+                                   TextWrapping="Wrap" Margin="0,0,0,8"
+                                   Visibility="{Binding WindowsAuthNotice, Converter={StaticResource NullToVisibility}}" />
                         <Button Content="Load databases" Style="{StaticResource SecondaryButton}"
-                                HorizontalAlignment="Left" Command="{Binding LoadDatabasesCommand}" Margin="0,0,0,16"
+                                HorizontalAlignment="Left" Command="{Binding LoadDatabasesCommand}" Margin="0,8,0,16"
                                 IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
 
                         <TextBlock Text="DATABASE SCOPE" Style="{StaticResource Caption}" />
                         <CheckBox Content="Sync all user databases on this server"
                                   IsChecked="{Binding SyncAllUserDatabases}" Margin="0,6,0,2" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,4"
+                                   Visibility="{Binding SyncAllUserDatabases, Converter={StaticResource BoolToVisibility}}"
+                                   Text="Databases created later are included automatically. System databases are always excluded. A database that is offline or inaccessible is skipped with a warning; it does not fail the run." />
                         <TextBlock Text="{Binding DatabasesHint}" Style="{StaticResource Caption}"
                                    TextWrapping="Wrap" Margin="0,0,0,14" />
 
                         <TextBlock Text="{Binding DatabasesHeader}" Style="{StaticResource Caption}" />
-                        <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,4,0,0">
+                        <Grid Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" Text="{Binding DatabaseFilter, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Filter the database list (contains, case-insensitive)"
+                                     AutomationProperties.Name="Filter databases" />
+                            <Button Grid.Column="1" Content="Select all" Style="{StaticResource LinkButton}"
+                                    Margin="12,0,0,0" VerticalAlignment="Center"
+                                    Command="{Binding SelectAllDatabasesCommand}"
+                                    ToolTip="Check every database the filter currently shows"
+                                    AutomationProperties.Name="Select all filtered databases" />
+                            <Button Grid.Column="2" Content="Clear" Style="{StaticResource LinkButton}"
+                                    Margin="12,0,0,0" VerticalAlignment="Center"
+                                    Command="{Binding ClearDatabaseSelectionCommand}"
+                                    ToolTip="Uncheck every database the filter currently shows"
+                                    AutomationProperties.Name="Clear filtered database selection" />
+                        </Grid>
+                        <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,6,0,0">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{Binding Databases}">
+                                <ItemsControl ItemsSource="{Binding DatabasesView}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}" Margin="0,4" />
@@ -401,6 +427,10 @@
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
+
+                        <CheckBox Content="View included object types" IsChecked="{Binding ShowPresetContents}" Margin="0,10,0,0" />
+                        <TextBlock Text="{Binding PresetContents}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                                   Visibility="{Binding ShowPresetContents, Converter={StaticResource BoolToVisibility}}" />
 
                         <StackPanel Visibility="{Binding IsCustomPreset, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="OBJECT TYPES" Style="{StaticResource Caption}" Margin="0,18,0,0" />
@@ -515,13 +545,15 @@
                         <TextBlock Text="How and where the scripted objects are delivered." Style="{StaticResource Caption}" Margin="0,0,0,18" />
 
                         <TextBlock Text="COMMIT MODE" Style="{StaticResource Caption}" />
-                        <ComboBox ItemsSource="{Binding CommitModes}" SelectedItem="{Binding SelectedCommitMode}" Margin="0,4,0,16">
+                        <ComboBox ItemsSource="{Binding CommitModes}" SelectedItem="{Binding SelectedCommitMode}" Margin="0,4,0,4">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
+                        <TextBlock Text="{Binding CommitModeDescription}" Style="{StaticResource Caption}"
+                                   TextWrapping="Wrap" Margin="0,0,0,16" />
 
                         <!-- Git modes (Direct / Pull request / Local commit): repository + branch -->
                         <StackPanel Visibility="{Binding IsGitMode, Converter={StaticResource BoolToVisibility}}">
@@ -534,8 +566,6 @@
                         </StackPanel>
 
                         <StackPanel Visibility="{Binding IsPullRequest, Converter={StaticResource BoolToVisibility}}">
-                            <TextBlock Text="Pull request: each run with changes commits to a new branch and opens a PR into the branch above."
-                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,8" />
                             <TextBlock Text="REVIEWERS (OPTIONAL, COMMA-SEPARATED GITHUB USERNAMES)" Style="{StaticResource Caption}" />
                             <TextBox Text="{Binding Reviewers, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
                         </StackPanel>
@@ -543,16 +573,20 @@
                         <!-- Export Only: a folder or .zip destination, no GitHub -->
                         <StackPanel Visibility="{Binding IsExportOnly, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="EXPORT DESTINATION (FOLDER OR .ZIP; A UNC PATH IS A NETWORK SHARE)" Style="{StaticResource Caption}" />
-                            <TextBox Text="{Binding ExportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4" />
-                            <TextBlock Text="No GitHub is contacted. A path ending in .zip is written as a zip archive."
-                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16" />
+                            <TextBox Text="{Binding ExportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
                         </StackPanel>
 
                         <TextBlock Text="DESTINATION FOLDER" Style="{StaticResource Caption}" />
                         <TextBlock Text="Blank = environments/&lt;server&gt;/&lt;database&gt;" Style="{StaticResource Caption}" Margin="0,2,0,0" />
-                        <TextBox Text="{Binding DestinationFolder, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
+                        <TextBox Text="{Binding DestinationFolder, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,4">
+                            <Run Text="Files will be written to:" /><Run Text=" " /><Run Text="{Binding FolderPreview, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding DestinationCollisionWarning}" Style="{StaticResource Caption}"
+                                   Foreground="{StaticResource WarningBrush}" TextWrapping="Wrap" Margin="0,0,0,4"
+                                   Visibility="{Binding DestinationCollisionWarning, Converter={StaticResource NullToVisibility}}" />
 
-                        <TextBlock Text="LOCAL EXPORT PATH (OPTIONAL)" Style="{StaticResource Caption}" />
+                        <TextBlock Text="LOCAL EXPORT PATH (OPTIONAL)" Style="{StaticResource Caption}" Margin="0,12,0,0" />
                         <TextBox Text="{Binding LocalExportPath, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,0" />
                     </StackPanel>
                 </Border>
@@ -563,10 +597,11 @@
                         <TextBlock Text="Schedule" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
                         <TextBlock Text="How often this job runs." Style="{StaticResource Caption}" Margin="0,0,0,18" />
 
-                        <!-- The background service isn't currently able to execute schedules -->
+                        <!-- The background service isn't currently able to execute schedules; only shown
+                             when the chosen cadence actually needs the service (non-manual or startup). -->
                         <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
                                 Padding="12,10" Margin="0,0,0,16"
-                                Visibility="{Binding ScheduleServiceNotice, Converter={StaticResource NullToVisibility}}">
+                                Visibility="{Binding ShowScheduleServiceNotice, Converter={StaticResource BoolToVisibility}}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
                                            Foreground="{StaticResource WarningBrush}" FontSize="14" VerticalAlignment="Top" Margin="0,1,8,0" />
@@ -610,6 +645,12 @@
                             <TextBlock Text="CRON EXPRESSION (QUARTZ 7-FIELD)" Style="{StaticResource Caption}" />
                             <TextBox Text="{Binding CronExpression, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
                         </StackPanel>
+
+                        <TextBlock Text="{Binding NextRunPreview}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,4"
+                                   Visibility="{Binding NextRunPreview, Converter={StaticResource NullToVisibility}}" />
+                        <TextBlock Text="If a scheduled run is still in progress when the next one is due, the new run is skipped."
+                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,4"
+                                   Visibility="{Binding ShowOverlapNote, Converter={StaticResource BoolToVisibility}}" />
 
                         <Border Style="{StaticResource Divider}" />
                         <CheckBox Content="Also run once on app/service startup" IsChecked="{Binding RunOnStartup}" Margin="0,2,0,8" />
@@ -689,6 +730,54 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </Border>
+
+                        <!-- Optional preflight: advisory checks that never block Save -->
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <Button Content="Run preflight checks" Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding RunPreflightCommand}"
+                                    ToolTip="Test the SQL connection, repository access, branch, credentials, and destination"
+                                    AutomationProperties.Name="Run preflight checks"
+                                    IsEnabled="{Binding IsPreflightRunning, Converter={StaticResource InverseBool}}" />
+                            <TextBlock Text="Checking…" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       Visibility="{Binding IsPreflightRunning, Converter={StaticResource BoolToVisibility}}" />
+                        </StackPanel>
+                        <TextBlock Text="Optional — verifies the connection, repository, branch, credentials, and folder. Results never block saving."
+                                   Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                        <ItemsControl ItemsSource="{Binding PreflightResults}" Margin="0,10,0,0"
+                                      Visibility="{Binding PreflightResults.Count, Converter={StaticResource CountToVisibility}}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20" />
+                                            <ColumnDefinition Width="Auto" MinWidth="140" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" FontWeight="Bold" VerticalAlignment="Top">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="&#x2715;" />
+                                                    <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Pass">
+                                                            <Setter Property="Text" Value="&#x2713;" />
+                                                            <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Warning">
+                                                            <Setter Property="Text" Value="!" />
+                                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource BodyStrong}" Margin="0,0,12,0" TextWrapping="Wrap" />
+                                        <TextBlock Grid.Column="2" Text="{Binding Detail}" Style="{StaticResource Muted}" TextWrapping="Wrap" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
                 </Border>
             </Grid>
