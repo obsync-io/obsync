@@ -22,11 +22,20 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     /// user pauses instead of scanning the whole list on every keystroke.</summary>
     private static readonly TimeSpan FilterDebounce = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>How long the "copied" confirmation stays on screen.</summary>
+    private static readonly TimeSpan CopyStatusDuration = TimeSpan.FromSeconds(2);
+
     private readonly IScriptHistoryService _scriptHistory;
     private GitRepositoryProfile? _repository;
     private string? _commitUrl;
     private CancellationTokenSource? _diffCts;
     private CancellationTokenSource? _filterCts;
+    private int _addedCount;
+    private int _modifiedCount;
+    private int _deletedCount;
+    private int _copyStatusVersion;
+    private IReadOnlyList<int> _findMatches = [];
+    private int _findPosition = -1;
 
     /// <summary>The in-flight diff load; awaited by <see cref="LoadAsync"/> so the dialog opens with
     /// the first diff already computed instead of flashing a loading state.</summary>
@@ -36,6 +45,28 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     [ObservableProperty] private ObjectChange? _selectedChange;
     [ObservableProperty] private bool _isSplitView = true;
     [ObservableProperty] private bool _isLoading;
+
+    /// <summary>The change-type chip filter over the change list; null shows all types.</summary>
+    [ObservableProperty] private ChangeType? _typeFilter;
+
+    /// <summary>Wraps long diff lines instead of scrolling them horizontally.</summary>
+    [ObservableProperty] private bool _isWordWrap;
+
+    /// <summary>Transient "copied" confirmation shown in the diff header; clears itself.</summary>
+    [ObservableProperty] private string? _copyStatus;
+
+    /// <summary>The script text a copy targets: the new side for added/modified (and historical
+    /// versions), the old content for deleted. Null while loading or when the diff is unavailable.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CopyScriptCommand))]
+    private string? _viewedScriptText;
+
+    // --- Find within the viewed script (row-level; matches the visible side) -------------------
+
+    [ObservableProperty] private string _findText = string.Empty;
+
+    /// <summary>The row the find is currently on; the window scrolls/selects it in the visible pane.</summary>
+    [ObservableProperty] private DiffRow? _findCurrentRow;
 
     // --- Object history (every committed version of the selected file, from the local clone) ----
 
@@ -100,11 +131,28 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         ShortSha = run.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : "—";
         RunTimestampText = run.StartedAt.LocalDateTime.ToString("g");
 
+        _addedCount = changes.Count(c => c.ChangeType == ChangeType.Added);
+        _modifiedCount = changes.Count(c => c.ChangeType == ChangeType.Modified);
+        _deletedCount = changes.Count(c => c.ChangeType == ChangeType.Deleted);
+        OnPropertyChanged(nameof(AllChipLabel));
+        OnPropertyChanged(nameof(AddedChipLabel));
+        OnPropertyChanged(nameof(ModifiedChipLabel));
+        OnPropertyChanged(nameof(DeletedChipLabel));
+
         ChangesView = CreateChangesView([.. changes]);
 
         SelectedChange = preselect is not null && changes.Contains(preselect) ? preselect : changes.FirstOrDefault();
         await _diffLoad;
     }
+
+    // Chip captions carry the run's per-type totals (not the filtered view's) so the counts stay
+    // stable while the user filters.
+    public string AllChipLabel => $"All {_addedCount + _modifiedCount + _deletedCount:N0}";
+    public string AddedChipLabel => $"Added {_addedCount:N0}";
+    public string ModifiedChipLabel => $"Modified {_modifiedCount:N0}";
+    public string DeletedChipLabel => $"Deleted {_deletedCount:N0}";
+
+    partial void OnTypeFilterChanged(ChangeType? value) => ChangesView.Refresh();
 
     private ListCollectionView CreateChangesView(List<ObjectChange> changes) =>
         new(changes) { Filter = FilterChange };
@@ -194,7 +242,11 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         }
     }
 
-    partial void OnIsSplitViewChanged(bool value) => RaiseViewStateChanged();
+    partial void OnIsSplitViewChanged(bool value)
+    {
+        RaiseViewStateChanged();
+        RefreshFind(); // the searchable rows switch between the new-side pane and the unified view
+    }
 
     partial void OnIsLoadingChanged(bool value) => RaiseViewStateChanged();
 
@@ -240,6 +292,7 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         OldRows = [];
         NewRows = [];
         SingleRows = [];
+        ViewedScriptText = null;
         ErrorMessage = null;
         if (change is null)
         {
@@ -273,6 +326,9 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
                 ErrorMessage = result.UnavailableReason;
                 return;
             }
+
+            // What "Copy script" copies: the script as shown — the old side only for deletions.
+            ViewedScriptText = changeType == ChangeType.Deleted ? result.OldContent : result.NewContent;
 
             // Diffing thousands of lines is CPU work; keep it off the UI thread.
             switch (changeType)
@@ -316,27 +372,92 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
             if (ReferenceEquals(_diffCts, cts))
             {
                 IsLoading = false;
+                RefreshFind(); // the searchable rows just changed
             }
         }
     }
 
     [RelayCommand]
-    private void CopySha()
-    {
+    private void CopySha() =>
         // Copies what is on screen: the viewed version's commit, or the run's.
-        if ((SelectedVersion?.Sha ?? FullSha) is not { } sha)
+        CopyToClipboard(SelectedVersion?.Sha ?? FullSha, "Commit SHA copied");
+
+    [RelayCommand]
+    private void CopyObjectName(ObjectChange? change) => CopyToClipboard(change?.QualifiedName, "Object name copied");
+
+    [RelayCommand]
+    private void CopyPath(ObjectChange? change) => CopyToClipboard(change?.RelativePath, "Path copied");
+
+    private bool CanCopyScript() => !string.IsNullOrEmpty(ViewedScriptText);
+
+    [RelayCommand(CanExecute = nameof(CanCopyScript))]
+    private void CopyScript() => CopyToClipboard(ViewedScriptText, "Script copied");
+
+    private void CopyToClipboard(string? text, string confirmation)
+    {
+        if (string.IsNullOrEmpty(text))
         {
             return;
         }
 
         try
         {
-            Clipboard.SetText(sha);
+            Clipboard.SetText(text);
         }
         catch (ExternalException)
         {
             // The clipboard was briefly locked by another process; a copy is not worth crashing over.
+            return;
         }
+
+        _ = ShowCopyStatusAsync(confirmation);
+    }
+
+    // Confirmation lingers briefly, then clears — unless a newer copy has replaced it meanwhile.
+    private async Task ShowCopyStatusAsync(string confirmation)
+    {
+        var version = ++_copyStatusVersion;
+        CopyStatus = confirmation;
+        await Task.Delay(CopyStatusDuration);
+        if (version == _copyStatusVersion)
+        {
+            CopyStatus = null;
+        }
+    }
+
+    // ------------------------------- Find within the viewed script ------------------------------
+
+    /// <summary>The rows the find runs over: the new-side pane in split view, the single pane otherwise.</summary>
+    private IReadOnlyList<DiffRow> SearchRows => ShowSplit ? NewRows : SingleRows;
+
+    /// <summary>"3/17" while there are matches, "0/0" for a fruitless query, null with no query.</summary>
+    public string? FindCounter => FindText.Length == 0
+        ? null
+        : _findMatches.Count == 0 ? "0/0" : $"{_findPosition + 1}/{_findMatches.Count}";
+
+    partial void OnFindTextChanged(string value) => RefreshFind();
+
+    /// <summary>Recomputes the matches (query or rows changed) and lands on the first one.</summary>
+    private void RefreshFind()
+    {
+        _findMatches = DiffTextSearch.FindMatches(SearchRows, FindText);
+        MoveFind(_findMatches.Count > 0 ? 0 : -1);
+    }
+
+    [RelayCommand]
+    private void FindNext() => MoveFind(DiffTextSearch.NextPosition(_findMatches.Count, _findPosition));
+
+    [RelayCommand]
+    private void FindPrevious() => MoveFind(DiffTextSearch.PreviousPosition(_findMatches.Count, _findPosition));
+
+    [RelayCommand]
+    private void ClearFind() => FindText = string.Empty;
+
+    private void MoveFind(int position)
+    {
+        _findPosition = position;
+        FindCurrentRow = position >= 0 ? SearchRows[_findMatches[position]] : null;
+        OnPropertyChanged(nameof(FindCounter));
     }
 
     [RelayCommand]
@@ -365,6 +486,11 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     private bool FilterChange(object item)
     {
         if (item is not ObjectChange change)
+        {
+            return false;
+        }
+
+        if (TypeFilter is { } type && change.ChangeType != type)
         {
             return false;
         }

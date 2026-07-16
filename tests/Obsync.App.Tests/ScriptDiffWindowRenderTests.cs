@@ -83,6 +83,13 @@ public sealed class ScriptDiffWindowRenderTests
                 content.Arrange(new Rect(0, 0, 1220, 760));
                 content.UpdateLayout();
 
+                // Exercise the header/rail additions: type-filter chip, word wrap, and an active
+                // find (which drives the select-and-scroll wiring through the window).
+                viewModel.TypeFilter = ChangeType.Modified;
+                viewModel.IsWordWrap = true;
+                viewModel.FindText = "Orders";
+                content.UpdateLayout();
+
                 var bitmap = new RenderTargetBitmap(1220, 760, 96, 96, PixelFormats.Pbgra32);
                 bitmap.Render(content);
 

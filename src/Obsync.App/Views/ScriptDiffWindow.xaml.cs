@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -17,6 +18,7 @@ public partial class ScriptDiffWindow : Window
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        DataContextChanged += OnDataContextChanged;
     }
 
     /// <summary>
@@ -32,6 +34,36 @@ public partial class ScriptDiffWindow : Window
 
         var window = new ScriptDiffWindow { DataContext = viewModel, Owner = owner };
         window.ShowDialog();
+    }
+
+    // Find-in-script raises FindCurrentRow; selecting + scrolling a virtualized ListBox is view
+    // work, so the window listens rather than the view model touching controls.
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.OldValue is ScriptDiffViewModel old)
+        {
+            old.PropertyChanged -= OnViewModelPropertyChanged;
+        }
+
+        if (e.NewValue is ScriptDiffViewModel next)
+        {
+            next.PropertyChanged += OnViewModelPropertyChanged;
+        }
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(ScriptDiffViewModel.FindCurrentRow)
+            || DataContext is not ScriptDiffViewModel viewModel
+            || viewModel.FindCurrentRow is not { } row)
+        {
+            return;
+        }
+
+        // The searched rows belong to the new-side pane in split view, the single pane otherwise.
+        var pane = viewModel.ShowSplit ? NewPane : SinglePane;
+        pane.SelectedItem = row;
+        pane.ScrollIntoView(row);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)

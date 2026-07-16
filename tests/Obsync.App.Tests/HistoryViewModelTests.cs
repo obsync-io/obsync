@@ -144,6 +144,48 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task HasActiveFilters_TracksEachFilter_AndClearFiltersResetsAllThree()
+    {
+        var vm = NewViewModel(RepositoryWith(NewRun("Prod Sync", changed: 2), NewRun("Dev Sync")));
+        await vm.LoadAsync();
+
+        // Defaults: nothing active, so the "Clear filters" action stays hidden.
+        Assert.False(vm.HasActiveFilters);
+
+        vm.SelectedJob = "Prod Sync";
+        Assert.True(vm.HasActiveFilters);
+
+        vm.SelectedStatus = vm.StatusOptions.Single(o => o.Status == RunStatus.NoChanges);
+        vm.SearchText = "dev";
+        Assert.True(vm.HasActiveFilters);
+        Assert.Empty(vm.RunsView.Cast<SyncRun>()); // the combined filters match nothing
+
+        vm.ClearFiltersCommand.Execute(null);
+
+        Assert.False(vm.HasActiveFilters);
+        Assert.Equal("All jobs", vm.SelectedJob);
+        Assert.Null(vm.SelectedStatus.Status);
+        Assert.Equal(string.Empty, vm.SearchText);
+        Assert.Equal(2, vm.RunsView.Cast<SyncRun>().Count());
+    }
+
+    [Fact]
+    public async Task HasActiveFilters_IsTrue_ForEachSingleNonDefaultFilter()
+    {
+        var vm = NewViewModel(RepositoryWith(NewRun("Prod Sync")));
+        await vm.LoadAsync();
+
+        vm.SelectedStatus = vm.StatusOptions.Single(o => o.Status == RunStatus.Failed);
+        Assert.True(vm.HasActiveFilters);
+        vm.ClearFiltersCommand.Execute(null);
+
+        vm.SearchText = "abc";
+        Assert.True(vm.HasActiveFilters);
+        vm.ClearFiltersCommand.Execute(null);
+        Assert.False(vm.HasActiveFilters);
+    }
+
+    [Fact]
     public async Task SelectingARun_HighlightsItsTimelineEntry_InBothDirections()
     {
         var first = NewRun("Prod Sync", changed: 1);

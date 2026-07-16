@@ -48,10 +48,8 @@ public sealed class TimelineBuilderTests
         ], Today);
 
         var day = Assert.Single(days);
-        Assert.Equal(5, day.Added);
-        Assert.Equal(5, day.Modified);
-        Assert.Equal(1, day.Deleted);
-        Assert.False(day.HasNoChanges);
+        Assert.Equal(new ChangeSplit(Added: 5, Modified: 5, Deleted: 1), day.Split);
+        Assert.False(day.Split.HasNoChanges);
         Assert.Equal("2 runs", day.RunsLabel);
     }
 
@@ -61,7 +59,7 @@ public sealed class TimelineBuilderTests
         var days = TimelineBuilder.Build([NewRun(Today.AddHours(9))], Today);
 
         var day = Assert.Single(days);
-        Assert.True(day.HasNoChanges);
+        Assert.True(day.Split.HasNoChanges);
         Assert.Equal("1 run", day.RunsLabel);
     }
 
