@@ -121,17 +121,20 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
     [Fact]
     public async Task NarrowingTheSchemaFilter_RetainsOutOfFilterFiles()
     {
-        _scripts.Items = [Proc("dbo", "P1"), Proc("sales", "P2")];
+        _job.Selection.CustomTypes.Add(SqlObjectType.Schema);
+        await SaveJobAsync();
+        _scripts.Items = [Proc("dbo", "P1"), Proc("sales", "P2"), Schema("sales")];
         Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
-        Assert.Equal(2, (await StatesAsync()).Count);
+        Assert.Equal(3, (await StatesAsync()).Count);
 
-        // Narrow the filter to dbo: sales.P2 is out of SCOPE, not dropped — its file must stay.
+        // Narrow the filter to dbo: sales.P2 AND the sales schema's own DDL file are out of
+        // SCOPE, not dropped — both must stay.
         _job.Selection.SchemaFilter.Add("dbo");
         await SaveJobAsync();
         var run = await RunAsync();
 
         Assert.Equal(0, run.ObjectsDeleted);
-        Assert.Equal(2, (await StatesAsync()).Count);
+        Assert.Equal(3, (await StatesAsync()).Count);
     }
 
     [Fact]
@@ -235,6 +238,11 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
             new ScriptedObjectIdentity(SqlObjectType.View, schema, name),
             $"CREATE VIEW {schema}.{name} AS SELECT 1 AS One;");
 
+    private static RawScriptedObject Schema(string name) =>
+        RawScriptedObject.Scripted(
+            new ScriptedObjectIdentity(SqlObjectType.Schema, string.Empty, name),
+            $"CREATE SCHEMA [{name}];");
+
     /// <summary>Honors the schema filter server-side, exactly like the real providers do.</summary>
     private sealed class FilteringScriptProvider : IObjectScriptProvider
     {
@@ -247,9 +255,12 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
         {
             await Task.Yield();
             var filter = request.Selection.SchemaFilter;
+            // Schema objects carry their name in Name (schema attribute empty) — the real provider
+            // filters them by name, like everything else is filtered by schema.
             foreach (var item in Items.Where(i =>
                 request.Types.Contains(i.Identity.Type)
-                && (filter.Count == 0 || filter.Contains(i.Identity.Schema))))
+                && (filter.Count == 0 || filter.Contains(
+                    i.Identity.Type == SqlObjectType.Schema ? i.Identity.Name : i.Identity.Schema))))
             {
                 yield return item;
             }

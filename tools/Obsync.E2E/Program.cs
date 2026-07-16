@@ -58,7 +58,7 @@ if (seedServiceRoot is not null)
         Name = "svc-e2e-cron",
         ConnectionProfileId = seedConnection.Id,
         RepositoryProfileId = null,
-        Databases = [SqlSeeder.MainDb],
+        Databases = ["ObsyncSvcE2E"], // a tiny dedicated DB — the main battery drops its own DBs
         CommitMode = CommitMode.ExportOnly,
         ExportPath = exportTarget,
         DestinationFolder = string.Empty,

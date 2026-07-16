@@ -914,7 +914,10 @@ public sealed class SyncEngine : ISyncEngine
         {
             foreach (var (key, state) in prior)
             {
-                if (state.SchemaName.Length > 0 && !schemaFilter.Contains(state.SchemaName))
+                // A schema OBJECT carries its name in ObjectName (its schema attribute is empty) —
+                // an out-of-filter schema's own DDL file is out of scope exactly like its contents.
+                var effectiveSchema = state.ObjectType == SqlObjectType.Schema ? state.ObjectName : state.SchemaName;
+                if (effectiveSchema.Length > 0 && !schemaFilter.Contains(effectiveSchema))
                 {
                     seen.TryAdd(key, 0);
                 }
