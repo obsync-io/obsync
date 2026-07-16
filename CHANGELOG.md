@@ -2,6 +2,54 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.8.3 — 2026-07-15
+
+**Critical fix — upgrade required.** In 0.8.0–0.8.2 the Windows Service crashed on every plain
+scheduled (cron) fire before the run started, so **scheduled syncs never executed** — while the
+scheduler heartbeat stayed healthy and "Next Run" kept advancing. Startup and catch-up runs were
+unaffected, which masked the breakage. This release fixes it; after upgrading, your schedules run
+at their advertised times. (If you want confirmation your install was affected, the Windows
+Application event log will contain `Key trigger not found` errors from source "Obsync".)
+
+This release also carries the fixes from a full production-readiness audit
+(`docs/quality-audit/` in the repository has the complete reports):
+
+- **Databases with user-defined types no longer fail** — any database containing an alias type,
+  table type, XML schema collection, CLR type, or aggregate previously failed its entire run.
+- **Scope changes never delete your history** — narrowing a schema filter or deselecting object
+  types now retains the committed files of out-of-scope objects instead of committing their
+  deletion; and if most tracked objects vanish at once on an unattended run (the signature of lost
+  SQL metadata visibility, not a real mass drop), deletions are suspended with a Warning — a manual
+  Run Now confirms and applies them.
+- **CLR modules are reported, not silently omitted** — they now surface as explicit skips like
+  encrypted modules (previously they were invisible and could be misreported as deletions).
+- **Git workspaces self-heal more** — a stale `index.lock` left by a crash or cancel no longer
+  wedges every later run; editing a repository's owner/name now re-points the existing clone
+  (pushes previously kept going to the old repository); leftover files from an interrupted run are
+  cleaned instead of leaking into the next commit or blocking checkout.
+- **Scheduler resilience** — one invalid or never-firing cron expression no longer takes down the
+  whole scheduler; the wizard now validates cron expressions (including "will it ever fire") and
+  rejects Daily/Weekly times that can never intersect an enabled maintenance window (previously
+  such jobs silently never ran); saving a job no longer triggers an immediate unattended run when
+  "run on service startup" is enabled; disabled jobs can no longer slip through a scheduling race.
+- **Settings honesty** — switching away from the app no longer wipes unsaved Settings input (or
+  clears typed passwords); disabling email alerts or the proxy keeps the stored password as the
+  label promises; a manual proxy now requires a valid URL instead of silently connecting direct;
+  "Trust server certificate" defaults off for new servers, with a caution.
+- **Correctness hardening** — case-only object renames no longer brick a job; reference-data
+  values containing line breaks are exported corruption-proof; zip exports are built atomically
+  (a failure can no longer destroy the previous good export); a disk-full at the end of a run can
+  no longer leave a phantom "Running" row; pull-request mode no longer pushes zero-diff branches
+  in a loop when the base branch already has the content.
+- **Smaller fixes** — GitHub tokens are trimmed (pasted trailing newlines broke PR mode only);
+  HTTP 401/403/404 from git are no longer retried as transient; persisted git errors redact any
+  embedded proxy credentials; the Dashboard "Latest Commit" no longer blanks when the newest run
+  had no commit; duplicate job names are rejected; destination paths are validated; the CLI
+  returns exit code 3 for Warning runs; crash-recovered failed runs now send the configured
+  alerts; the review step shows every option it previously omitted.
+- **New:** the `OBSYNC_DATA_ROOT` environment variable relocates the data root (state database,
+  workspaces, logs, locks) for test harnesses and managed deployments.
+
 ## 0.8.2 — 2026-07-10
 
 - **Modernized installer wizard** — Segoe UI dialog typography, a cleaner brand side panel and
