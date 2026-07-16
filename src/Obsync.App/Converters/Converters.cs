@@ -236,6 +236,22 @@ public sealed class LocalDateTimeConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Builds the tooltip for an "Overdue" next-run indicator from the job's cached next-run
+/// time (<see cref="DateTimeOffset"/>): the scheduled local time plus the corrective hint. Kept as
+/// a converter so the tables and the Job Workspace header phrase the explanation identically.</summary>
+public sealed class OverdueDetailConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        DateTimeOffset dto =>
+            $"Scheduled for {dto.LocalDateTime.ToString("g", culture)} — the run has not started. Check the Obsync service.",
+        _ => string.Empty,
+    };
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>Maps a collection count to visibility: a positive count is Visible, zero/null Collapsed.
 /// Used to hide a DataGrid (and its header row) when the list is empty so the empty-state panel is
 /// the only thing shown.</summary>

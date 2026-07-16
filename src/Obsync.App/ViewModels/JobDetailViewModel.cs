@@ -7,6 +7,7 @@ using Obsync.App.Services;
 using Obsync.Data.Repositories;
 using Obsync.GitHub;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
@@ -31,6 +32,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
     private readonly IAppSettingsRepository _settings;
     private readonly IJobConfigPorter _porter;
     private readonly ISchedulerHealthService _schedulerHealth;
+    private readonly IAuditWriter _audit;
+    private readonly IClock _clock;
 
     /// <summary>The Dependencies tab's own state (object picker + live dependency lookups).</summary>
     public DependencyExplorerViewModel Dependencies { get; }
@@ -78,6 +81,10 @@ public sealed partial class JobDetailViewModel : ObservableObject
     /// <summary>Set when this job has an active schedule the background service cannot execute.</summary>
     [ObservableProperty] private string? _schedulerWarning;
 
+    /// <summary>True when the schedule is overdue (see <see cref="SyncJob.IsScheduleOverdue"/>) —
+    /// renders the amber "Overdue" indicator on the header meta line.</summary>
+    [ObservableProperty] private bool _isOverdue;
+
     /// <summary>True when the last run reported an error or warning worth surfacing.</summary>
     public bool HasError => !string.IsNullOrEmpty(LastError);
 
@@ -108,6 +115,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         IAppSettingsRepository settings,
         IJobConfigPorter porter,
         ISchedulerHealthService schedulerHealth,
+        IAuditWriter audit,
+        IClock clock,
         DependencyExplorerViewModel dependencies)
     {
         _jobs = jobs;
@@ -120,6 +129,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         _settings = settings;
         _porter = porter;
         _schedulerHealth = schedulerHealth;
+        _audit = audit;
+        _clock = clock;
         Dependencies = dependencies;
     }
 
@@ -132,28 +143,10 @@ public sealed partial class JobDetailViewModel : ObservableObject
             return;
         }
 
-        var invalid = System.IO.Path.GetInvalidFileNameChars();
-        var stem = new string([.. Job.Name.Select(ch => invalid.Contains(ch) ? '_' : ch)]);
-        var dialog = new Microsoft.Win32.SaveFileDialog
+        var message = await JobConfigExport.PromptAndWriteAsync(_porter, _audit, Job);
+        if (message is not null)
         {
-            FileName = $"{stem}.obsync-job.json",
-            Filter = "Obsync job export (*.obsync-job.json)|*.obsync-job.json|All files (*.*)|*.*",
-            DefaultExt = ".json",
-        };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-
-        try
-        {
-            var json = await _porter.ExportAsync(Job);
-            await System.IO.File.WriteAllTextAsync(dialog.FileName, json);
-            StatusMessage = $"Configuration exported to {dialog.FileName}. Passwords and tokens are never included.";
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Export failed — {ex.Message}";
+            StatusMessage = message;
         }
     }
 
@@ -225,6 +218,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
         Status = job.RunSummary.LastStatus;
         LastRunText = job.RunSummary.LastRunAt is { } at ? at.LocalDateTime.ToString("g") : "Never run";
         NextRunText = job.RunSummary.NextRunAt is { } next ? next.LocalDateTime.ToString("g") : "—";
+        job.IsRunning = _coordinator.IsRunning(job.Id);
+        IsOverdue = job.IsScheduleOverdue(_clock.UtcNow);
 
         // Never show a schedule (or next-run time) as live when the background service can't run it.
         var health = SchedulerHealthService.NeedsScheduler(job) ? await _schedulerHealth.GetAsync() : null;
@@ -359,7 +354,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
     // Fire-and-forget by design: the engine winds down asynchronously and the run-state subscription
     // reports "Cancelling…" and then the final (Cancelled) result.
     [RelayCommand(CanExecute = nameof(CanCancelRun))]
-    private void CancelRun()
+    private async Task CancelRunAsync()
     {
         if (Job is null)
         {
@@ -368,6 +363,9 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
         IsCancelling = true;
         _coordinator.Cancel(Job.Id);
+        // Audit the REQUEST (the engine separately records the run's final Cancelled outcome) so
+        // the trail shows who asked for the stop, not just that the run ended early.
+        await _audit.WriteAsync(AuditAction.RunCancelled, "Run", Job.Id.ToString(), Job.Name);
     }
 
     partial void OnIsBusyChanged(bool value)

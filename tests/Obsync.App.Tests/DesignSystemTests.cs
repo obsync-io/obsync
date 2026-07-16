@@ -26,6 +26,7 @@ public sealed class DesignSystemTests
         "IconButton", "LinkButton", "NavButton",
         // App-level resources (converters + reusable templates)
         "StatusToBrush", "MsToDuration", "StatusBadgeTemplate", "ChangeBadgeTemplate",
+        "OverdueDetail", "JobStatusBadgeTemplate", "NextRunCellTemplate", "IconPause", "IconMore",
     ];
 
     [Fact]

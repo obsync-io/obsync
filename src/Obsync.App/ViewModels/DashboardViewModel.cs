@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using Obsync.App.Services;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
@@ -20,6 +21,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     private readonly IShellNavigator _navigator;
     private readonly IAppSettingsRepository _settings;
     private readonly ISchedulerHealthService _schedulerHealth;
+    private readonly IClock _clock;
 
     private bool _reloading;
 
@@ -33,13 +35,20 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
     /// <summary>Set when jobs have active schedules the background service cannot execute.</summary>
     [ObservableProperty] private string? _schedulerWarning;
 
+    /// <summary>"+N more" line under the attention rows when the list is capped; null otherwise.</summary>
+    [ObservableProperty] private string? _attentionOverflow;
+
     public ObservableCollection<SyncJob> Jobs { get; } = [];
+
+    /// <summary>Rows of the "Needs attention" card (capped at <see cref="AttentionModel.MaxRows"/>);
+    /// the card is absent when this is empty.</summary>
+    public ObservableCollection<AttentionItem> AttentionItems { get; } = [];
 
     public DashboardViewModel(
         IJobRepository jobs, IConnectionProfileRepository connections, IRepositoryProfileRepository repositories,
         IRunRepository runs, IObjectStateRepository objectStates,
         IJobRunCoordinator coordinator, IShellNavigator navigator,
-        IAppSettingsRepository settings, ISchedulerHealthService schedulerHealth)
+        IAppSettingsRepository settings, ISchedulerHealthService schedulerHealth, IClock clock)
     {
         _jobs = jobs;
         _connections = connections;
@@ -50,6 +59,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         _navigator = navigator;
         _settings = settings;
         _schedulerHealth = schedulerHealth;
+        _clock = clock;
         _coordinator.RunStateChanged += OnRunStateChanged;
     }
 
@@ -85,6 +95,26 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         }
     }
 
+    /// <summary>Corrective action of a "Needs attention" row: drill into the job, or open the
+    /// Servers section for server rows (which carry no job id).</summary>
+    [RelayCommand]
+    private async Task OpenAttentionAsync(AttentionItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        if (item.JobId is { } jobId)
+        {
+            await _navigator.ShowJobDetailAsync(jobId, "Dashboard");
+        }
+        else
+        {
+            await _navigator.ShowSectionAsync("Servers");
+        }
+    }
+
     // AllowConcurrentExecutions so different jobs can run at once; CanRun blocks a second run of the
     // SAME job, and the coordinator is the authoritative guard even if a click slips through.
     [RelayCommand(CanExecute = nameof(CanRun), AllowConcurrentExecutions = true)]
@@ -117,6 +147,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         // A stale action message must not outlive a reload (e.g. navigating away and back).
         StatusMessage = null;
 
+        var now = _clock.UtcNow;
         var jobs = await _jobs.GetAllAsync();
         var markers = await _settings.GetProductionTagsAsync();
         await JobDisplay.PopulateAsync(jobs, _connections, _repositories, markers);
@@ -124,6 +155,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         foreach (var job in jobs)
         {
             job.IsRunning = _coordinator.IsRunning(job.Id);
+            job.IsOverdue = job.IsScheduleOverdue(now);
             Jobs.Add(job);
         }
 
@@ -137,6 +169,23 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         var recent = await _runs.GetRecentAsync(20);
         var latest = recent.FirstOrDefault(r => r.CommitSha is not null);
         LatestCommit = latest?.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : "—";
+
+        // "Needs attention": everything already loaded for the cards feeds it — the recent-run
+        // window doubles as the error-quote source, and the server list is one local read.
+        var servers = await _connections.GetAllAsync();
+        var runErrors = recent
+            .Where(r => !string.IsNullOrEmpty(r.ErrorMessage))
+            .ToDictionary(r => r.Id, r => r.ErrorMessage!);
+        var attention = AttentionModel.Build(jobs, servers, runErrors, now);
+        AttentionItems.Clear();
+        foreach (var item in attention.Take(AttentionModel.MaxRows))
+        {
+            AttentionItems.Add(item);
+        }
+
+        AttentionOverflow = attention.Count > AttentionModel.MaxRows
+            ? $"+{attention.Count - AttentionModel.MaxRows} more"
+            : null;
 
         // Warn when a schedule exists that the background service cannot execute — otherwise the
         // "Next Run" column would quietly promise runs that will never happen.

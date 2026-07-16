@@ -33,6 +33,35 @@ public partial class JobsView : UserControl
         }
     }
 
+    // Opens the row's overflow ("⋯") menu on left click, anchored under the button. The menu
+    // inherits the row's SyncJob DataContext through its PlacementTarget.
+    private void OnRowMenu(object sender, RoutedEventArgs e)
+    {
+        var button = (Button)sender;
+        if (button.ContextMenu is { } menu)
+        {
+            menu.PlacementTarget = button;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+    }
+
+    private void OnDuplicateJob(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SyncJob job && DataContext is JobsViewModel jobs)
+        {
+            jobs.DuplicateCommand.Execute(job);
+        }
+    }
+
+    private void OnExportJob(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SyncJob job && DataContext is JobsViewModel jobs)
+        {
+            jobs.ExportConfigCommand.Execute(job);
+        }
+    }
+
     private void OnDeleteJob(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is SyncJob job && DataContext is JobsViewModel jobs)
