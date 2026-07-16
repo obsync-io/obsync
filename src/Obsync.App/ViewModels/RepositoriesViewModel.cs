@@ -19,6 +19,7 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
     private readonly IRepositoryProfileRepository _repository;
     private readonly IGitHubService _gitHub;
     private readonly ICredentialStore _credentialStore;
+    private readonly IClock _clock;
     private readonly IAuditWriter _audit;
 
     [ObservableProperty] private bool _isBusy;
@@ -28,11 +29,12 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
 
     public RepositoriesViewModel(
         IRepositoryProfileRepository repository, IGitHubService gitHub, ICredentialStore credentialStore,
-        IAuditWriter audit)
+        IClock clock, IAuditWriter audit)
     {
         _repository = repository;
         _gitHub = gitHub;
         _credentialStore = credentialStore;
+        _clock = clock;
         _audit = audit;
     }
 
@@ -46,7 +48,12 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
         }
     }
 
-    /// <summary>Re-runs the token permission check against GitHub using the SAVED token.</summary>
+    /// <summary>
+    /// Re-runs the validation (token permissions + default-branch existence) against GitHub using
+    /// the SAVED token, and persists the outcome so the Status badge survives restarts. A check that
+    /// could not run at all (e.g. GitHub unreachable) says nothing about the repository, so the
+    /// stored outcome is left untouched.
+    /// </summary>
     [RelayCommand]
     private async Task CheckTokenAsync(GitRepositoryProfile? repository)
     {
@@ -66,10 +73,20 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
                 return;
             }
 
-            var result = await _gitHub.CheckRepositoryAccessAsync(token, repository.Owner, repository.RepositoryName);
-            StatusMessage = result.IsSuccess
-                ? $"{repository.Name}: {RepositoryDialogViewModel.SummarizeTokenReport(result.Value)}"
-                : $"{repository.Name}: {result.Error}";
+            var result = await RepositoryDialogViewModel.ValidateRepositoryAsync(
+                _gitHub, token, repository.Owner, repository.RepositoryName, repository.DefaultBranch);
+            if (result.IsFailure)
+            {
+                StatusMessage = $"{repository.Name}: {result.Error}";
+                return;
+            }
+
+            var outcome = result.Value;
+            await _repository.UpdateValidationStatusAsync(repository.Id, outcome.Status, _clock.UtcNow, outcome.Detail);
+            StatusMessage = outcome.BranchWarning is null
+                ? $"{repository.Name}: {outcome.Detail}"
+                : $"{repository.Name}: {outcome.Detail} {outcome.BranchWarning}";
+            await LoadAsync();
         }
         catch (Exception ex)
         {

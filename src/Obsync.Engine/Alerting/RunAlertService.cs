@@ -11,10 +11,13 @@ using Obsync.Shared.Results;
 namespace Obsync.Engine.Alerting;
 
 /// <inheritdoc cref="IRunAlertService" />
-public sealed class RunAlertService : IRunAlertService
+public class RunAlertService : IRunAlertService
 {
-    /// <summary>Hard cap per channel so an unreachable relay or endpoint never stalls a run.</summary>
+    /// <summary>Hard cap per attempt so an unreachable relay or endpoint never stalls a run.</summary>
     private static readonly TimeSpan SendTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>Pause before the single per-channel retry; virtual so tests can collapse it.</summary>
+    protected virtual TimeSpan RetryDelay => TimeSpan.FromSeconds(5);
 
     private readonly IAppSettingsRepository _settings;
     private readonly ICredentialStore _credentials;
@@ -40,27 +43,52 @@ public sealed class RunAlertService : IRunAlertService
 
         if (settings.EmailEnabled)
         {
-            try
-            {
-                await SendEmailAsync(
-                    settings, RunAlertPayload.BuildEmailSubject(run), RunAlertPayload.BuildEmailBody(run), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Email alert for run {RunKey} ({JobName}) failed.", run.RunKey, run.JobName);
-            }
+            await SendWithOneRetryAsync(
+                "Email", ct => SendEmailAsync(settings, RunAlertPayload.BuildEmailSubject(run), RunAlertPayload.BuildEmailBody(run), ct),
+                run, cancellationToken).ConfigureAwait(false);
         }
 
         if (settings.WebhookEnabled)
         {
+            await SendWithOneRetryAsync(
+                "Webhook", ct => PostWebhookAsync(settings, RunAlertPayload.BuildWebhookJson(run), ct),
+                run, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Sends on one channel with a single retry after <see cref="RetryDelay"/>. Delivery failures
+    /// are logged and swallowed — an alert must never fail or delay a run beyond the bounded
+    /// timeout+retry — and only host cancellation skips the retry (a per-attempt timeout is an
+    /// ordinary failure, so it IS retried).
+    /// </summary>
+    private async Task SendWithOneRetryAsync(
+        string channel, Func<CancellationToken, Task> send, SyncRun run, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await send(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The host is shutting down — nothing to retry, nothing to log.
+        }
+        catch (Exception)
+        {
             try
             {
-                await PostWebhookAsync(settings, RunAlertPayload.BuildWebhookJson(run), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
+                await send(cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning(ex, "Webhook alert for run {RunKey} ({JobName}) failed.", run.RunKey, run.JobName);
+                // The host is shutting down mid-retry.
+            }
+            catch (Exception retryEx)
+            {
+                _logger.LogWarning(
+                    retryEx, "{Channel} alert for run {RunKey} ({JobName}) failed after one retry.",
+                    channel, run.RunKey, run.JobName);
             }
         }
     }
@@ -107,7 +135,8 @@ public sealed class RunAlertService : IRunAlertService
         return firstError is null ? Result.Success() : Result.Failure(firstError);
     }
 
-    private async Task SendEmailAsync(AlertSettings settings, string subject, string body, CancellationToken cancellationToken)
+    /// <summary>One email delivery attempt; virtual so tests can fake the transport.</summary>
+    protected virtual async Task SendEmailAsync(AlertSettings settings, string subject, string body, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(settings.SmtpHost)
             || string.IsNullOrWhiteSpace(settings.FromAddress)
@@ -144,7 +173,8 @@ public sealed class RunAlertService : IRunAlertService
         await client.SendMailAsync(message, timeout.Token).ConfigureAwait(false);
     }
 
-    private async Task PostWebhookAsync(AlertSettings settings, string json, CancellationToken cancellationToken)
+    /// <summary>One webhook delivery attempt; virtual so tests can fake the transport.</summary>
+    protected virtual async Task PostWebhookAsync(AlertSettings settings, string json, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(settings.WebhookUrl, UriKind.Absolute, out var url)
             || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))

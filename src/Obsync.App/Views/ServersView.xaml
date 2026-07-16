@@ -31,28 +31,76 @@
                 <DataGrid ItemsSource="{Binding Servers}" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                           Visibility="{Binding Servers.Count, Converter={StaticResource CountToVisibility}}">
                     <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="Name" Width="1.4*" MinWidth="90">
+                        <DataGridTemplateColumn Header="Name" Width="1.2*" MinWidth="90">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Server / instance" Width="2*" MinWidth="110">
+                        <DataGridTemplateColumn Header="Server / instance" Width="1.8*" MinWidth="110">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <TextBlock Text="{Binding ServerName}" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding ServerName}" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <Button Grid.Column="1" Style="{StaticResource IconButton}" Width="24" Height="24" Margin="4,0,0,0"
+                                                VerticalAlignment="Center" ToolTip="Copy server name" AutomationProperties.Name="Copy server name"
+                                                Click="OnCopyServerName">
+                                            <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconCopy}" FontSize="12" />
+                                        </Button>
+                                    </Grid>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Authentication" Width="1.2*" MinWidth="90">
+                        <DataGridTemplateColumn Header="Authentication" Width="1*" MinWidth="90">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding AuthenticationMode, Converter={StaticResource EnumDisplay}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Status" Width="1.3*" MinWidth="100">
+                        <DataGridTemplateColumn Header="SQL Server" Width="1.6*" MinWidth="100">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <!-- Edition · version, captured at test time; empty until the first successful test. -->
+                                    <TextBlock Text="{Binding ServerProductDisplay}" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding ServerProductDisplay}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ServerProductDisplay}" Value="">
+                                                        <Setter Property="ToolTipService.IsEnabled" Value="False" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Last checked" Width="1.1*" MinWidth="95">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Muted}">
+                                                <Setter Property="Text" Value="{Binding LastTestedAt, Converter={StaticResource LocalDateTime}}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding LastTestedAt}" Value="{x:Null}">
+                                                        <Setter Property="Text" Value="—" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="Status" Width="1.2*" MinWidth="100">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <!-- Clean single badge; the tested time + server detail live in a hover tooltip. -->

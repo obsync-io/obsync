@@ -22,6 +22,8 @@ public sealed partial class ServerDialogViewModel : ObservableObject
 
     private Guid? _editingId;
     private DateTimeOffset _editingCreatedAt;
+    private string? _editingServerEdition;
+    private string? _editingServerVersion;
 
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private string _serverName = string.Empty;
@@ -79,6 +81,8 @@ public sealed partial class ServerDialogViewModel : ObservableObject
         IsEditMode = true;
         _editingId = server.Id;
         _editingCreatedAt = server.CreatedAt;
+        _editingServerEdition = server.ServerEdition;
+        _editingServerVersion = server.ServerVersion;
         Name = server.Name;
         ServerName = server.ServerName;
         AuthenticationMode = server.AuthenticationMode;
@@ -148,6 +152,10 @@ public sealed partial class ServerDialogViewModel : ObservableObject
             profile.LastTestDetail = test.IsSuccess
                 ? $"SQL Server {test.Value.Edition} ({test.Value.ProductVersion})"
                 : test.Error;
+
+            // A failed test says nothing about the server's edition/version — keep the last known values.
+            profile.ServerEdition = test.IsSuccess ? test.Value.Edition : _editingServerEdition;
+            profile.ServerVersion = test.IsSuccess ? test.Value.ProductVersion : _editingServerVersion;
 
             await _repository.UpsertAsync(profile);
 
