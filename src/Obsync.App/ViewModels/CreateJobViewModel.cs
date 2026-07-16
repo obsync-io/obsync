@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.Data.Repositories;
@@ -533,15 +534,77 @@ public sealed partial class CreateJobViewModel : ObservableObject
             "Select at least one reference table, or turn reference data off.",
         2 when IncludeReferenceData && ReferenceDataMaxRows < 1 => "The reference-data row cap must be at least 1.",
         3 when IsExportOnly && string.IsNullOrWhiteSpace(ExportPath) => "Enter an export destination (a folder or .zip path).",
+        3 when IsExportOnly && (HasInvalidPathChars(ExportPath) || !Path.IsPathRooted(ExportPath.Trim())) =>
+            "The export destination must be a full path (e.g. D:\\exports or \\\\server\\share\\db.zip) without invalid characters.",
         3 when IsGitMode && SelectedRepository is null => "Select a destination repository.",
         3 when IsGitMode && string.IsNullOrWhiteSpace(Branch) => "Enter a branch.",
+        3 when !string.IsNullOrWhiteSpace(DestinationFolder)
+            && (HasInvalidPathChars(DestinationFolder) || Path.IsPathRooted(DestinationFolder.Trim()) || HasParentSegment(DestinationFolder)) =>
+            "The repository folder must be a relative path inside the repository (no drive letter, no '..', no invalid characters).",
+        3 when !string.IsNullOrWhiteSpace(LocalExportPath)
+            && (HasInvalidPathChars(LocalExportPath) || !Path.IsPathRooted(LocalExportPath.Trim())) =>
+            "The local export path must be a full path (e.g. D:\\exports) without invalid characters.",
         4 when SelectedScheduleKind == ScheduleKind.Cron && string.IsNullOrWhiteSpace(CronExpression) => "Enter a cron expression.",
+        4 when SelectedScheduleKind == ScheduleKind.Cron && !Quartz.CronExpression.IsValidExpression(CronExpression.Trim()) =>
+            "The cron expression is not valid Quartz syntax (seconds minutes hours day-of-month month day-of-week [year]).",
+        4 when SelectedScheduleKind == ScheduleKind.Cron && CronNeverFires(CronExpression.Trim()) =>
+            "The cron expression never matches a future time, so the job would never run. Check the day/month/year fields.",
         4 when SelectedScheduleKind is ScheduleKind.Daily or ScheduleKind.Weekly
             && !TimeOnly.TryParseExact(TimeOfDay, "HH:mm", out _) => "Enter a valid time of day (HH:mm).",
         4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowStart, "HH:mm", out _) => "Enter a valid window start time (HH:mm).",
         4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowEnd, "HH:mm", out _) => "Enter a valid window end time (HH:mm).",
+        4 when ValidateScheduleAgainstWindow() is { } windowError => windowError,
         _ => null,
     };
+
+    private static bool HasInvalidPathChars(string path) => path.IndexOfAny(Path.GetInvalidPathChars()) >= 0;
+
+    // '..' segments would let a repo-relative destination escape the repository working tree.
+    private static bool HasParentSegment(string path) => path.Split('/', '\\').Any(segment => segment.Trim() == "..");
+
+    // Quartz throws for a trigger that never fires (e.g. Feb 31, a past year), which would take the
+    // scheduler down — reject the expression here instead.
+    private static bool CronNeverFires(string cron) =>
+        new Quartz.CronExpression(cron) { TimeZone = TimeZoneInfo.Local }.GetNextValidTimeAfter(DateTimeOffset.Now) is null;
+
+    /// <summary>
+    /// A Daily/Weekly fire time that never lands inside an enabled maintenance window means the engine
+    /// skips every scheduled run and the job silently never runs — reject the combination up front.
+    /// </summary>
+    private string? ValidateScheduleAgainstWindow()
+    {
+        if (!MaintenanceWindowEnabled || SelectedScheduleKind is not (ScheduleKind.Daily or ScheduleKind.Weekly))
+        {
+            return null;
+        }
+
+        var schedule = BuildSchedule();
+        // Probe one calendar week (2024-01-01 is a Monday) so overnight windows attribute the fire to
+        // the day the window opened, exactly as the engine's window check does at run time.
+        var monday = new DateTime(2024, 1, 1);
+        bool FiresOn(DayOfWeek day) => schedule.IsWithinMaintenanceWindow(new DateTimeOffset(
+            monday.AddDays(((int)day - (int)DayOfWeek.Monday + 7) % 7) + schedule.TimeOfDay.ToTimeSpan(), TimeSpan.Zero));
+
+        var days = SelectedDayScope switch
+        {
+            MaintenanceDayScope.WeekdaysOnly => ", weekdays",
+            MaintenanceDayScope.WeekendsOnly => ", weekends",
+            _ => string.Empty,
+        };
+
+        if (SelectedScheduleKind == ScheduleKind.Weekly)
+        {
+            return FiresOn(SelectedDayOfWeek)
+                ? null
+                : $"Weekly on {SelectedDayOfWeek} at {schedule.TimeOfDay:HH:mm} never falls inside the maintenance window " +
+                  $"({schedule.WindowStart:HH:mm}–{schedule.WindowEnd:HH:mm}{days}), so the job would never run. Change the schedule or the window.";
+        }
+
+        return Enum.GetValues<DayOfWeek>().Any(FiresOn)
+            ? null
+            : $"Daily at {schedule.TimeOfDay:HH:mm} never falls inside the maintenance window " +
+              $"({schedule.WindowStart:HH:mm}–{schedule.WindowEnd:HH:mm}), so the job would never run. Change the time or the window.";
+    }
 
     private void BuildReview()
     {
@@ -578,6 +641,16 @@ public sealed partial class CreateJobViewModel : ObservableObject
             ReviewItems.Add(new ReviewItem("Reference data",
                 $"{string.Join(", ", tables)} · cap {ReferenceDataMaxRows:N0} rows/table"));
         }
+        var generatedFiles = new[]
+        {
+            (IncludeObjectInventory, "inventory"),
+            (IncludeDatabaseOptions, "database options"),
+            (IncludePermissionsFile, "permissions"),
+            (IncludeDocumentation, "documentation"),
+            (IncludeSecurityReview, "security review"),
+        }.Where(f => f.Item1).Select(f => f.Item2).ToList();
+        ReviewItems.Add(new ReviewItem("Generated files",
+            generatedFiles.Count == 0 ? "None" : string.Join(", ", generatedFiles)));
         if (IsExportOnly)
         {
             ReviewItems.Add(new ReviewItem("Export to", string.IsNullOrWhiteSpace(ExportPath) ? "—" : ExportPath.Trim()));
@@ -589,7 +662,15 @@ public sealed partial class CreateJobViewModel : ObservableObject
         }
 
         ReviewItems.Add(new ReviewItem("Folder", EffectiveDestinationFolder(databases)));
+        if (!string.IsNullOrWhiteSpace(LocalExportPath))
+        {
+            ReviewItems.Add(new ReviewItem("Local export path", LocalExportPath.Trim()));
+        }
         ReviewItems.Add(new ReviewItem("Schedule", BuildSchedule().Describe()));
+        if (RunOnStartup)
+        {
+            ReviewItems.Add(new ReviewItem("Run on service startup", "Yes"));
+        }
         if (MaxParallelWorkers != 0 || LockTimeoutSeconds != 0 || QueryTimeoutSeconds != 120 || !IncrementalScripting)
         {
             var workers = MaxParallelWorkers == 0 ? "auto" : MaxParallelWorkers.ToString();
@@ -597,7 +678,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
             var incremental = IncrementalScripting ? string.Empty : " · incremental scripting off";
             ReviewItems.Add(new ReviewItem("Advanced", $"{workers} workers · query {QueryTimeoutSeconds}s · lock {lockText}{incremental}"));
         }
-        ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges ? "Commit only when changes are detected" : "Always create a run"));
+        ReviewItems.Add(new ReviewItem("On changes", RunOnlyIfChanges
+            ? "Commit only when changes are detected"
+            : "Commit even when nothing changed (empty heartbeat commit)"));
         ReviewItems.Add(new ReviewItem("Commit mode", SelectedCommitMode switch
         {
             CommitMode.PullRequest => $"Pull request → {Branch}",
@@ -677,6 +760,18 @@ public sealed partial class CreateJobViewModel : ObservableObject
             }
         }
 
+        // Job names must be unique (case-insensitively): History's job filter matches by name, so two
+        // same-named jobs would have their runs conflated. Excludes the job being edited.
+        var trimmedName = Name.Trim();
+        var editingId = IsEditMode ? _editingJob?.Id : null;
+        var existingJobs = await _jobs.GetAllAsync();
+        if (existingJobs.Any(j => j.Id != editingId && string.Equals(j.Name, trimmedName, StringComparison.OrdinalIgnoreCase)))
+        {
+            CurrentStep = 1;
+            StatusMessage = $"A job named \"{trimmedName}\" already exists — choose a different name.";
+            return;
+        }
+
         var selectedDatabases = Databases.Where(d => d.IsSelected).Select(d => d.Name).ToList();
 
         // When editing, mutate the existing job so fields the wizard does not surface
@@ -738,15 +833,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
             // jobs on demand via Run Now.
             await _jobs.UpsertAsync(job);
 
-            // Stamp the intended next run so the UI shows it immediately. Standard cadences compute
-            // it here; a cron schedule's exact fire time is written by the scheduler (which owns the
-            // cron engine) on its next reconcile, and the scheduler refines all of them with the
-            // Quartz-precise time. Manual schedules clear any leftover value.
-            await _jobs.UpdateNextRunAtAsync(
-                job.Id,
-                job.Enabled && job.Schedule.Kind != ScheduleKind.Manual
-                    ? job.Schedule.GetNextRun(_clock.UtcNow) ?? job.RunSummary.NextRunAt
-                    : null);
+            // Stamp the intended next run so the UI shows it immediately; the scheduler refines it
+            // with the Quartz-precise time on its next reconcile. Manual clears any leftover value.
+            await _jobs.UpdateNextRunAtAsync(job.Id, ProvisionalNextRun(job));
 
             await _audit.WriteAsync(
                 IsEditMode ? AuditAction.JobEdited : AuditAction.JobCreated, "Job", job.Id.ToString(), job.Name);
@@ -760,5 +849,26 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    // The provisional next-run stamped at save. Standard cadences come from the profile; Cron is
+    // computed here (never the stale pre-edit value — switching Daily→Cron used to freeze the old
+    // cadence's next-run forever); Manual and disabled jobs clear it.
+    private DateTimeOffset? ProvisionalNextRun(SyncJob job)
+    {
+        if (!job.Enabled || job.Schedule.Kind == ScheduleKind.Manual)
+        {
+            return null;
+        }
+
+        if (job.Schedule.Kind == ScheduleKind.Cron)
+        {
+            var cron = job.Schedule.CronExpression?.Trim();
+            return !string.IsNullOrWhiteSpace(cron) && Quartz.CronExpression.IsValidExpression(cron)
+                ? new Quartz.CronExpression(cron) { TimeZone = TimeZoneInfo.Local }.GetNextValidTimeAfter(_clock.UtcNow)
+                : null;
+        }
+
+        return job.Schedule.GetNextRun(_clock.UtcNow);
     }
 }

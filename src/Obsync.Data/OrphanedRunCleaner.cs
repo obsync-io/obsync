@@ -1,5 +1,6 @@
 using Obsync.Data.Repositories;
 using Obsync.Shared;
+using Obsync.Shared.Models;
 
 namespace Obsync.Data;
 
@@ -12,11 +13,14 @@ namespace Obsync.Data;
 /// </summary>
 public static class OrphanedRunCleaner
 {
-    /// <summary>Fails orphaned Running rows; returns how many were reconciled.</summary>
-    public static async Task<int> CleanAsync(
+    /// <summary>Fails orphaned Running rows; returns the runs it failed (mirroring the persisted
+    /// state) so the caller can alert on them — the process that ran them died before it could.</summary>
+    public static async Task<IReadOnlyList<SyncRun>> CleanAsync(
         IRunRepository runs, string locksRoot, DateTimeOffset nowUtc, CancellationToken cancellationToken = default)
     {
-        var cleaned = 0;
+        const string reason = "Run interrupted — the process running it exited before it finished.";
+
+        var cleaned = new List<SyncRun>();
         foreach (var run in await runs.GetRunningAsync(cancellationToken).ConfigureAwait(false))
         {
             if (JobRunLock.IsHeld(locksRoot, run.JobId))
@@ -24,11 +28,11 @@ public static class OrphanedRunCleaner
                 continue; // genuinely in progress in some Obsync process
             }
 
-            await runs.FailRunAsync(
-                run.Id, nowUtc,
-                "Run interrupted — the process running it exited before it finished.",
-                cancellationToken).ConfigureAwait(false);
-            cleaned++;
+            await runs.FailRunAsync(run.Id, nowUtc, reason, cancellationToken).ConfigureAwait(false);
+            run.Status = RunStatus.Failed;
+            run.CompletedAt = nowUtc;
+            run.ErrorMessage = reason;
+            cleaned.Add(run);
         }
 
         return cleaned;

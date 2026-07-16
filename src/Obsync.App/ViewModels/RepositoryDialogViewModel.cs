@@ -160,9 +160,11 @@ public sealed partial class RepositoryDialogViewModel : ObservableObject
             };
             await _repository.UpsertAsync(profile);
 
-            if (!string.IsNullOrEmpty(Token))
+            // Trimmed: a pasted token often carries a trailing newline, which the Octokit path
+            // sends verbatim (the git path already trims).
+            if (Token.Trim() is { Length: > 0 } token)
             {
-                _credentialStore.Store(CredentialKeys.GitHubToken(profile.Id), Token);
+                _credentialStore.Store(CredentialKeys.GitHubToken(profile.Id), token);
             }
 
             await _audit.WriteAsync(
@@ -180,13 +182,14 @@ public sealed partial class RepositoryDialogViewModel : ObservableObject
         }
     }
 
-    // The typed token wins; when editing with the box left blank, fall back to the saved one so a
-    // stored token can be re-checked without re-pasting it.
+    // The typed token wins (trimmed — pasted tokens carry trailing newlines); when editing with the
+    // box left blank, fall back to the saved one so a stored token can be re-checked without
+    // re-pasting it.
     private string? ResolveToken()
     {
-        if (!string.IsNullOrEmpty(Token))
+        if (Token.Trim() is { Length: > 0 } token)
         {
-            return Token;
+            return token;
         }
 
         return _editingId is { } id ? _credentialStore.Retrieve(CredentialKeys.GitHubToken(id)) : null;

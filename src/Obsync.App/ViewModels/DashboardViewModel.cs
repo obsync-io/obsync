@@ -114,6 +114,9 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
 
     public async Task LoadAsync()
     {
+        // A stale action message must not outlive a reload (e.g. navigating away and back).
+        StatusMessage = null;
+
         var jobs = await _jobs.GetAllAsync();
         var markers = await _settings.GetProductionTagsAsync();
         await JobDisplay.PopulateAsync(jobs, _connections, _repositories, markers);
@@ -129,7 +132,9 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         FailedJobs = jobs.Count(j => j.RunSummary.LastStatus is RunStatus.Failed);
         ObjectsTracked = await _objectStates.CountAllAsync();
 
-        var recent = await _runs.GetRecentAsync(1);
+        // A window, not just the newest run: the most recent run often has no commit (failed,
+        // no-changes, export-only) and the card should still show the latest commit that exists.
+        var recent = await _runs.GetRecentAsync(20);
         var latest = recent.FirstOrDefault(r => r.CommitSha is not null);
         LatestCommit = latest?.CommitSha is { } sha ? sha[..Math.Min(7, sha.Length)] : "—";
 

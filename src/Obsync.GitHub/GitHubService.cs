@@ -104,6 +104,15 @@ public sealed class GitHubService : IGitHubService
             _logger.LogWarning("GitHub permission check failed: {Message}", ex.Message);
             return Result.Failure<TokenPermissionReport>($"GitHub error: {ex.Message}");
         }
+        catch (HttpRequestException ex)
+        {
+            return Result.Failure<TokenPermissionReport>($"Could not reach GitHub: {ex.Message}");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An HttpClient timeout, not user cancellation (which must propagate).
+            return Result.Failure<TokenPermissionReport>("The request to GitHub timed out.");
+        }
     }
 
     public async Task<Result<IReadOnlyList<GitHubRepository>>> GetRepositoriesAsync(
@@ -125,6 +134,15 @@ public sealed class GitHubService : IGitHubService
         {
             return Result.Failure<IReadOnlyList<GitHubRepository>>($"GitHub error: {ex.Message}");
         }
+        catch (HttpRequestException ex)
+        {
+            return Result.Failure<IReadOnlyList<GitHubRepository>>($"Could not reach GitHub: {ex.Message}");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An HttpClient timeout, not user cancellation (which must propagate).
+            return Result.Failure<IReadOnlyList<GitHubRepository>>("The request to GitHub timed out.");
+        }
     }
 
     public async Task<Result<IReadOnlyList<string>>> GetBranchesAsync(
@@ -139,6 +157,15 @@ public sealed class GitHubService : IGitHubService
         catch (ApiException ex)
         {
             return Result.Failure<IReadOnlyList<string>>($"GitHub error: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            return Result.Failure<IReadOnlyList<string>>($"Could not reach GitHub: {ex.Message}");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An HttpClient timeout, not user cancellation (which must propagate).
+            return Result.Failure<IReadOnlyList<string>>("The request to GitHub timed out.");
         }
     }
 
@@ -162,9 +189,10 @@ public sealed class GitHubService : IGitHubService
                         () => client.PullRequest.ReviewRequest.Create(owner, name, pr.Number, new PullRequestReviewRequest(reviewers, [])),
                         cancellationToken).ConfigureAwait(false);
                 }
-                catch (ApiException ex)
+                catch (Exception ex) when (ex is ApiException or HttpRequestException
+                    || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
                 {
-                    // The PR is already open; a bad/unknown reviewer must not fail it.
+                    // The PR is already open; a bad/unknown reviewer or a network blip must not fail it.
                     reviewerWarning = $"The pull request opened, but requesting reviewers failed: {ex.Message}";
                     _logger.LogWarning("Requesting reviewers for PR #{Number} failed: {Message}", pr.Number, ex.Message);
                 }
@@ -180,6 +208,16 @@ public sealed class GitHubService : IGitHubService
         {
             _logger.LogWarning("Opening the pull request failed: {Message}", ex.Message);
             return Result.Failure<PullRequestInfo>(ExplainPullRequestFailure(ex));
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning("Opening the pull request failed: {Message}", ex.Message);
+            return Result.Failure<PullRequestInfo>($"Could not reach GitHub: {ex.Message}");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // An HttpClient timeout, not user cancellation (which must propagate).
+            return Result.Failure<PullRequestInfo>("The request to GitHub timed out.");
         }
     }
 
@@ -201,7 +239,9 @@ public sealed class GitHubService : IGitHubService
             Proxy = resolution?.WebProxy,
             UseProxy = resolution is not null,
         });
-        return new GitHubClient(new Connection(Product, adapter)) { Credentials = new Credentials(token) };
+        // Trim mirrors BuildAuthorizationHeader: tokens are often pasted with a trailing
+        // newline/space, which GitHub rejects as an invalid credential.
+        return new GitHubClient(new Connection(Product, adapter)) { Credentials = new Credentials(token.Trim()) };
     }
 
     /// <summary>
@@ -221,7 +261,13 @@ public sealed class GitHubService : IGitHubService
             }
             catch (Exception ex) when (attempt < maxAttempts && IsTransient(ex))
             {
-                await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken).ConfigureAwait(false);
+                // The secondary rate limit says exactly how long to back off; retrying sooner just
+                // trips it again. Capped at 120s because Retry-After is server-supplied input and
+                // must not be able to stall a run indefinitely.
+                var delay = ex is AbuseException { RetryAfterSeconds: { } retryAfterSeconds }
+                    ? TimeSpan.FromSeconds(Math.Min(retryAfterSeconds, 120))
+                    : TimeSpan.FromSeconds(attempt);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
     }

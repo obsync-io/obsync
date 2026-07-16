@@ -41,6 +41,14 @@ public static class CronTranslator
         return !string.IsNullOrWhiteSpace(cron) && CronExpression.IsValidExpression(cron);
     }
 
+    /// <summary>
+    /// Next fire time (UTC) of a raw cron expression after <paramref name="afterUtc"/>, or null when it
+    /// never fires again (e.g. a past year, Feb 31). Quartz throws for a trigger that never fires, so
+    /// callers must check this before handing the expression to the scheduler.
+    /// </summary>
+    public static DateTimeOffset? NextFire(string cron, DateTimeOffset afterUtc) =>
+        new CronExpression(cron) { TimeZone = TimeZoneInfo.Local }.GetNextValidTimeAfter(afterUtc);
+
     // Quartz day-of-week is 1=Sunday .. 7=Saturday; .NET DayOfWeek is 0=Sunday.
     private static int QuartzDayOfWeek(DayOfWeek day) => (int)day + 1;
 }

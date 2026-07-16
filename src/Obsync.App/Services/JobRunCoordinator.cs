@@ -34,6 +34,9 @@ public enum RunRequestStatus
 
     /// <summary>The user declined the production-run confirmation; nothing was started.</summary>
     Declined,
+
+    /// <summary>The run was cancelled before the engine recorded a result (pre-run wait phase).</summary>
+    Cancelled,
 }
 
 /// <summary>The outcome of a run request. <see cref="Run"/> is set only for <see cref="RunRequestStatus.Started"/>.</summary>
@@ -41,6 +44,7 @@ public sealed record RunRequestOutcome(RunRequestStatus Status, SyncRun? Run = n
 {
     public static readonly RunRequestOutcome AlreadyRunning = new(RunRequestStatus.AlreadyRunning);
     public static readonly RunRequestOutcome Declined = new(RunRequestStatus.Declined);
+    public static readonly RunRequestOutcome Cancelled = new(RunRequestStatus.Cancelled);
     public static RunRequestOutcome Started(SyncRun run) => new(RunRequestStatus.Started, run);
 }
 
@@ -213,6 +217,13 @@ public sealed class JobRunCoordinator : IJobRunCoordinator
             }
 
             return RunRequestOutcome.Started(run);
+        }
+        catch (OperationCanceledException)
+        {
+            // The engine usually honors cancellation by recording a Cancelled run, but a cancel
+            // during a pre-run wait (e.g. on the shared-repository lock) throws instead — the
+            // user's own Cancel click must not surface as an unhandled-exception dialog.
+            return RunRequestOutcome.Cancelled;
         }
         finally
         {

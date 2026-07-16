@@ -113,14 +113,36 @@ public sealed class ScheduleProfile
             case ScheduleKind.Daily:
             {
                 var candidate = At(now.Date, TimeOfDay);
-                return Local(candidate <= now.DateTime ? candidate.AddDays(1) : candidate);
+                if (candidate <= now.DateTime)
+                {
+                    candidate = candidate.AddDays(1);
+                }
+
+                // Same window-advance as Hourly: a day-scoped window (e.g. weekdays-only) skips some
+                // daily fires, so walk to the first day that will actually run. Bounded to ~2 months.
+                for (var i = 0; MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(Local(candidate)) && i < 60; i++)
+                {
+                    candidate = candidate.AddDays(1);
+                }
+
+                return Local(candidate);
             }
 
             case ScheduleKind.Weekly:
             {
                 var daysUntil = ((int)DayOfWeek - (int)now.DayOfWeek + 7) % 7;
                 var candidate = At(now.Date.AddDays(daysUntil), TimeOfDay);
-                return Local(candidate <= now.DateTime ? candidate.AddDays(7) : candidate);
+                if (candidate <= now.DateTime)
+                {
+                    candidate = candidate.AddDays(7);
+                }
+
+                for (var i = 0; MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(Local(candidate)) && i < 60; i++)
+                {
+                    candidate = candidate.AddDays(7);
+                }
+
+                return Local(candidate);
             }
 
             default:

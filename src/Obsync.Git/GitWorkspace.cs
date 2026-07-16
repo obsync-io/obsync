@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Obsync.Shared.Results;
 
@@ -31,7 +32,8 @@ public sealed class GitWorkspaceContext
 
     /// <summary>
     /// HTTP/HTTPS proxy URL for network operations (may embed credentials); null for a direct
-    /// connection. Injected per-command via <c>-c http.proxy=…</c>, never written to <c>.git/config</c>.
+    /// connection. Injected per-command via <c>GIT_CONFIG_*</c> environment variables, never
+    /// written to <c>.git/config</c>.
     /// </summary>
     public string? ProxyUrl { get; init; }
 }
@@ -62,7 +64,7 @@ public interface IGitWorkspace
 }
 
 /// <inheritdoc cref="IGitWorkspace" />
-public sealed class GitWorkspace : IGitWorkspace
+public sealed partial class GitWorkspace : IGitWorkspace
 {
     private readonly IGitCommandRunner _git;
     private readonly ILogger<GitWorkspace> _logger;
@@ -86,6 +88,23 @@ public sealed class GitWorkspace : IGitWorkspace
         }
         else
         {
+            // A cancellation kills the git process tree mid-command; a kill during add/commit
+            // strands .git/index.lock and every later index operation fails with "File exists".
+            // Obsync serializes all workspace access via a cross-process per-repository lock, so
+            // any lock file that exists here is stale by construction and safe to delete.
+            var indexLock = Path.Combine(gitDir, "index.lock");
+            if (File.Exists(indexLock))
+            {
+                _logger.LogWarning("Removing a stale git index.lock left by an interrupted run: {Path}", indexLock);
+                File.Delete(indexLock);
+            }
+
+            // Only clone consumes RemoteUrl, so an edited repository profile would keep pushing to
+            // the old remote forever. Idempotent and local. Best-effort: on a corrupt workspace
+            // this fails, and the fetch below detects and heals the corruption.
+            _ = await _git.RunAsync(
+                context.LocalPath, ["remote", "set-url", "origin", context.RemoteUrl], cancellationToken).ConfigureAwait(false);
+
             var fetch = await RunNetworkAsync(context.LocalPath, context, ["fetch", "origin"], cancellationToken).ConfigureAwait(false);
             if (!fetch.Success)
             {
@@ -151,15 +170,34 @@ public sealed class GitWorkspace : IGitWorkspace
                 : Result.Failure($"git checkout failed: {Summarize(stay.StandardError)}");
         }
 
-        // Otherwise sync the local branch to origin (picking up any remote changes and healing drift).
-        var checkoutArgs = remoteBranchExists
-            ? new[] { "checkout", "-B", context.Branch, $"origin/{context.Branch}" }
-            : ["checkout", "-B", context.Branch];
+        // Otherwise sync the local branch to origin (picking up any remote changes and healing
+        // drift). Nothing local is precious on this path — no unpushed commits, and the working
+        // tree is regenerated from SQL Server every run — so sync forcefully: a crashed run can
+        // leave modified tracked files that a plain checkout refuses to overwrite when the remote
+        // advanced ("would be overwritten"), and untracked residue that would otherwise leak into
+        // the next commit.
+        if (remoteBranchExists)
+        {
+            var checkout = await _git.RunAsync(
+                context.LocalPath, ["checkout", "-f", "-B", context.Branch, $"origin/{context.Branch}"], cancellationToken)
+                .ConfigureAwait(false);
+            if (!checkout.Success)
+            {
+                return Result.Failure($"git checkout failed: {Summarize(checkout.StandardError)}");
+            }
 
-        var checkout = await _git.RunAsync(context.LocalPath, checkoutArgs, cancellationToken).ConfigureAwait(false);
-        return checkout.Success
+            var clean = await _git.RunAsync(context.LocalPath, ["clean", "-fd"], cancellationToken).ConfigureAwait(false);
+            return clean.Success
+                ? Result.Success()
+                : Result.Failure($"git clean failed: {Summarize(clean.StandardError)}");
+        }
+
+        // No remote branch yet (first run against an empty remote): HEAD may be unborn, so a
+        // forced checkout/clean has nothing to sync against.
+        var create = await _git.RunAsync(context.LocalPath, ["checkout", "-B", context.Branch], cancellationToken).ConfigureAwait(false);
+        return create.Success
             ? Result.Success()
-            : Result.Failure($"git checkout failed: {Summarize(checkout.StandardError)}");
+            : Result.Failure($"git checkout failed: {Summarize(create.StandardError)}");
     }
 
     /// <summary>
@@ -338,9 +376,18 @@ public sealed class GitWorkspace : IGitWorkspace
         }
     }
 
-    private static string Summarize(string error)
+    /// <summary>
+    /// Condenses git stderr into persistable failure text. These strings outlive the run
+    /// (runs.error_message, run logs, reports, support bundles), and git/curl echo URLs verbatim —
+    /// a manual proxy URL may embed <c>user:password@host</c> — so URL userinfo is redacted first.
+    /// Internal for tests.
+    /// </summary>
+    internal static string Summarize(string error)
     {
-        var trimmed = error.Trim();
-        return trimmed.Length <= 500 ? trimmed : trimmed[..500] + "…";
+        var redacted = UrlCredentials().Replace(error.Trim(), "://***@");
+        return redacted.Length <= 500 ? redacted : redacted[..500] + "…";
     }
+
+    [GeneratedRegex(@"://[^/:@\s]+:[^/@\s]+@", RegexOptions.IgnoreCase)]
+    private static partial Regex UrlCredentials();
 }

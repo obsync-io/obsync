@@ -67,7 +67,13 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
 
         var cleaned = await OrphanedRunCleaner.CleanAsync(runs, _locksRoot, DateTimeOffset.UtcNow);
 
-        Assert.Equal(1, cleaned);
+        // The failed run is returned mirroring its persisted state, so hosts can alert on it.
+        var recovered = Assert.Single(cleaned);
+        Assert.Equal(run.Id, recovered.Id);
+        Assert.Equal(RunStatus.Failed, recovered.Status);
+        Assert.NotNull(recovered.CompletedAt);
+        Assert.Contains("interrupted", recovered.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
         var reloaded = await runs.GetAsync(run.Id);
         Assert.Equal(RunStatus.Failed, reloaded!.Status);
         Assert.NotNull(reloaded.CompletedAt);
@@ -86,7 +92,7 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
 
         var cleaned = await OrphanedRunCleaner.CleanAsync(runs, _locksRoot, DateTimeOffset.UtcNow);
 
-        Assert.Equal(0, cleaned);
+        Assert.Empty(cleaned);
         var reloaded = await runs.GetAsync(run.Id);
         Assert.Equal(RunStatus.Running, reloaded!.Status);
     }
@@ -102,7 +108,7 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
 
         var cleaned = await OrphanedRunCleaner.CleanAsync(runs, _locksRoot, DateTimeOffset.UtcNow);
 
-        Assert.Equal(0, cleaned);
+        Assert.Empty(cleaned);
         Assert.Equal(RunStatus.Succeeded, (await runs.GetAsync(run.Id))!.Status);
     }
 }

@@ -234,6 +234,157 @@ public sealed class GitWorkspaceTests : IDisposable
         Assert.True(File.Exists(Path.Combine(workPath, ".git", "HEAD"))); // a real clone now
     }
 
+    [Fact]
+    public async Task Prepare_RemovesAStaleIndexLock()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "first.sql"), "CREATE SCHEMA [a];");
+        Assert.True((await _workspace.CommitAllAsync(context, "first", "body")).Success);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        // A kill during add/commit strands .git/index.lock; fetch and rev-parse still succeed, so
+        // without explicit removal every later run fails with "index.lock: File exists".
+        await File.WriteAllTextAsync(Path.Combine(workPath, ".git", "index.lock"), "");
+
+        var prepared = await _workspace.PrepareAsync(context);
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.False(File.Exists(Path.Combine(workPath, ".git", "index.lock")));
+
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "second.sql"), "CREATE SCHEMA [b];");
+        var commit = await _workspace.CommitAllAsync(context, "second", "body");
+        Assert.True(commit.Success, commit.Error);
+    }
+
+    [Fact]
+    public async Task Prepare_PointsOriginAtTheProfileRemoteUrl()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remoteA = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var contextA = NewContext(remoteA, workPath);
+        Assert.True((await _workspace.PrepareAsync(contextA)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "a.sql"), "CREATE SCHEMA [a];");
+        Assert.True((await _workspace.CommitAllAsync(contextA, "a", "body")).Success);
+        Assert.True((await _workspace.PushAsync(contextA)).IsSuccess);
+
+        // The repository profile is edited to point at a new remote (seeded from A, as after a
+        // repository migration). Only clone used to consume RemoteUrl, so the existing clone kept
+        // pushing to the old remote forever.
+        var remoteB = Path.Combine(_root, "remote-b.git");
+        Assert.True((await _runner.RunAsync(_root, ["clone", "--bare", remoteA, remoteB])).Success);
+        var contextB = NewContext(remoteB, workPath);
+
+        Assert.True((await _workspace.PrepareAsync(contextB)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "b.sql"), "CREATE SCHEMA [b];");
+        Assert.True((await _workspace.CommitAllAsync(contextB, "b", "body")).Success);
+        Assert.True((await _workspace.PushAsync(contextB)).IsSuccess);
+
+        var verifyB = Path.Combine(_root, "verify-b");
+        Assert.True((await _runner.RunAsync(_root, ["clone", remoteB, verifyB])).Success);
+        Assert.True(File.Exists(Path.Combine(verifyB, "schemas", "b.sql")));
+
+        var verifyA = Path.Combine(_root, "verify-a");
+        Assert.True((await _runner.RunAsync(_root, ["clone", remoteA, verifyA])).Success);
+        Assert.False(File.Exists(Path.Combine(verifyA, "schemas", "b.sql")));
+    }
+
+    [Fact]
+    public async Task Prepare_ForceSyncsADirtyTreeWhenTheRemoteAdvanced()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "test.sql"), "CREATE SCHEMA [app];");
+        Assert.True((await _workspace.CommitAllAsync(context, "app", "body")).Success);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        // Advance the remote from a second clone while the first workspace holds a crashed run's
+        // modified tracked file — a plain `checkout -B` aborts with "would be overwritten".
+        var otherPath = Path.Combine(_root, "other");
+        var other = NewContext(remote, otherPath);
+        Assert.True((await _workspace.PrepareAsync(other)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(otherPath, "schemas", "advanced.sql"), "CREATE SCHEMA [adv];");
+        Assert.True((await _workspace.CommitAllAsync(other, "advanced", "body")).Success);
+        Assert.True((await _workspace.PushAsync(other)).IsSuccess);
+
+        await File.WriteAllTextAsync(Path.Combine(workPath, "schemas", "test.sql"), "-- crash residue");
+
+        var prepared = await _workspace.PrepareAsync(context);
+
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.Equal("CREATE SCHEMA [app];", await File.ReadAllTextAsync(Path.Combine(workPath, "schemas", "test.sql")));
+        Assert.True(File.Exists(Path.Combine(workPath, "schemas", "advanced.sql")));
+    }
+
+    [Fact]
+    public async Task Prepare_DropsCrashResidueSoItNeverReachesALaterCommit()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "test.sql"), "CREATE SCHEMA [app];");
+        Assert.True((await _workspace.CommitAllAsync(context, "app", "body")).Success);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        // A crashed run left a modified tracked file and an untracked leftover; no remote advance.
+        await File.WriteAllTextAsync(Path.Combine(workPath, "schemas", "test.sql"), "-- crash residue");
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "leftover.sql"), "-- orphan");
+
+        var prepared = await _workspace.PrepareAsync(context);
+
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.Equal("CREATE SCHEMA [app];", await File.ReadAllTextAsync(Path.Combine(workPath, "schemas", "test.sql")));
+        Assert.False(File.Exists(Path.Combine(workPath, "schemas", "leftover.sql")));
+
+        // The next unrelated commit must carry only its own change, not the residue.
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "unrelated.sql"), "CREATE SCHEMA [u];");
+        Assert.True((await _workspace.CommitAllAsync(context, "unrelated", "body")).Success);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        var verifyPath = Path.Combine(_root, "verify");
+        Assert.True((await _runner.RunAsync(_root, ["clone", remote, verifyPath])).Success);
+        Assert.Equal("CREATE SCHEMA [app];", await File.ReadAllTextAsync(Path.Combine(verifyPath, "schemas", "test.sql")));
+        Assert.False(File.Exists(Path.Combine(verifyPath, "schemas", "leftover.sql")));
+        Assert.True(File.Exists(Path.Combine(verifyPath, "schemas", "unrelated.sql")));
+    }
+
+    [Fact]
+    public void Summarize_RedactsCredentialsEmbeddedInUrls()
+    {
+        // Summarize output is persisted (run history, reports, support bundles); a manual proxy
+        // URL embeds user:password@host and git/curl echo it verbatim in stderr.
+        var summarized = GitWorkspace.Summarize(
+            "fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to http://alice:s3cret@proxy:8080/");
+
+        Assert.DoesNotContain("s3cret", summarized);
+        Assert.DoesNotContain("alice", summarized);
+        Assert.Contains("http://***@proxy:8080/", summarized);
+    }
+
     private static GitWorkspaceContext NewContext(string remote, string localPath) => new()
     {
         RemoteUrl = remote,
