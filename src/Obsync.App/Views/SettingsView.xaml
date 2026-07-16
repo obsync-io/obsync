@@ -13,8 +13,10 @@
         </StackPanel>
 
         <!-- Categorized settings: the same underline tabs the Job Workspace uses. Each tab scrolls
-             independently; cards keep a readable measure instead of stretching across the window. -->
-        <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0">
+             independently; cards keep a readable measure instead of stretching across the window.
+             SelectionChanged lazily loads the storage sizes, logs panel, and support info. -->
+        <TabControl x:Name="SettingsTabs" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                    SelectionChanged="OnTabSelectionChanged">
 
             <!-- ================================ General ================================ -->
             <TabItem Header="General">
@@ -161,7 +163,7 @@
             </TabItem>
 
             <!-- ============================ Network &amp; storage ============================ -->
-            <TabItem Header="Network &amp; storage">
+            <TabItem x:Name="NetworkTab" Header="Network &amp; storage">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                     <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
 
@@ -195,8 +197,10 @@
                                     <TextBox Text="{Binding ProxyBypass, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16" />
                                 </StackPanel>
 
-                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12"
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,6"
                                            Text="For scheduled runs the Windows Service account often has no OS proxy — use Manual for reliable service operation." />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,12"
+                                           Text="Email (SMTP) alerts connect directly and do not use the proxy." />
 
                                 <StackPanel Orientation="Horizontal">
                                     <Button Content="Save proxy" Style="{StaticResource PrimaryButton}" Command="{Binding SaveProxyCommand}" Margin="0,0,8,0"
@@ -214,15 +218,32 @@
                         <!-- Data locations -->
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Text="Data locations" Style="{StaticResource SectionTitle}" Margin="0,0,0,16" />
+                                <Grid Margin="0,0,0,16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Data locations" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                            ToolTip="Refresh sizes" AutomationProperties.Name="Refresh sizes"
+                                            Command="{Binding RefreshStorageCommand}">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRefresh}" />
+                                    </Button>
+                                </Grid>
 
                                 <Grid Margin="0,0,0,12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Data folder" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                    <TextBlock Grid.Column="1" Text="{Binding DataRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                    <TextBlock Grid.Column="1" Text="{Binding DataRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <Button Grid.Column="2" Style="{StaticResource IconButton}" Margin="8,0,0,0" VerticalAlignment="Top"
+                                            ToolTip="Open folder" AutomationProperties.Name="Open data folder"
+                                            Command="{Binding OpenFolderCommand}" CommandParameter="{Binding DataRoot}">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconFolder}" />
+                                    </Button>
                                 </Grid>
 
                                 <Grid Margin="0,0,0,12">
@@ -231,7 +252,11 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="State database" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                    <TextBlock Grid.Column="1" Text="{Binding DatabasePath}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding DatabasePath}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding DatabaseSizeText}" Style="{StaticResource Muted}" Margin="0,2,0,0"
+                                                   Visibility="{Binding DatabaseSizeText, Converter={StaticResource NullToVisibility}}" />
+                                    </StackPanel>
                                 </Grid>
 
                                 <Grid Margin="0,0,0,12">
@@ -244,18 +269,26 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="8" />
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="8" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <TextBox Text="{Binding WorkspacesRootText, UpdateSourceTrigger=PropertyChanged}" />
-                                            <Button Grid.Column="2" Content="Browse…" Style="{StaticResource SecondaryButton}"
+                                            <Button Grid.Column="1" Style="{StaticResource IconButton}" Margin="4,0,0,0"
+                                                    ToolTip="Open folder" AutomationProperties.Name="Open workspaces folder"
+                                                    Command="{Binding OpenFolderCommand}" CommandParameter="{Binding WorkspacesRootText}">
+                                                <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconFolder}" />
+                                            </Button>
+                                            <Button Grid.Column="3" Content="Browse…" Style="{StaticResource SecondaryButton}"
                                                     Command="{Binding BrowseWorkspacesRootCommand}" />
-                                            <Button Grid.Column="4" Content="Save" Style="{StaticResource PrimaryButton}"
+                                            <Button Grid.Column="5" Content="Save" Style="{StaticResource PrimaryButton}"
                                                     Command="{Binding SaveWorkspacesRootCommand}"
                                                     IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
                                         </Grid>
+                                        <TextBlock Text="{Binding WorkspacesSizeText}" Style="{StaticResource Muted}" Margin="0,6,0,0"
+                                                   Visibility="{Binding WorkspacesSizeText, Converter={StaticResource NullToVisibility}}" />
                                         <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0"
                                                    Text="Where repository clones live. Changing it takes effect on each job's next run; clear the field and save to go back to the default." />
                                         <TextBlock Text="{Binding WorkspacesStatus}" Style="{StaticResource Muted}" Margin="0,6,0,0" TextWrapping="Wrap"
@@ -263,13 +296,32 @@
                                     </StackPanel>
                                 </Grid>
 
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="170" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Logs" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding LogsRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding LogsSizeText}" Style="{StaticResource Muted}" Margin="0,2,0,0"
+                                                   Visibility="{Binding LogsSizeText, Converter={StaticResource NullToVisibility}}" />
+                                    </StackPanel>
+                                    <Button Grid.Column="2" Style="{StaticResource IconButton}" Margin="8,0,0,0" VerticalAlignment="Top"
+                                            ToolTip="Open folder" AutomationProperties.Name="Open logs folder"
+                                            Command="{Binding OpenFolderCommand}" CommandParameter="{Binding LogsRoot}">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconFolder}" />
+                                    </Button>
+                                </Grid>
+
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="170" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Logs" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
-                                    <TextBlock Grid.Column="1" Text="{Binding LogsRoot}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                    <TextBlock Grid.Column="0" Text="Disk space" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                    <TextBlock Grid.Column="1" Text="{Binding FreeDiskText}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -297,15 +349,23 @@
                                          AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="64"
                                          VerticalScrollBarVisibility="Auto" Margin="0,4,0,16" />
 
+                                <CheckBox Content="Include server-level permissions (server object scripting + SQL Agent jobs)"
+                                          IsChecked="{Binding IncludeServerObjects}" Margin="0,0,0,16" />
+
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
                                     <Button Content="Generate permission script" Style="{StaticResource PrimaryButton}"
                                             Command="{Binding GeneratePermissionScriptCommand}" Margin="0,0,8,0" />
+                                    <Button Content="Generate revoke script" Style="{StaticResource SecondaryButton}"
+                                            ToolTip="The exact inverse of the grants — for offboarding the account"
+                                            Command="{Binding GenerateRevokeScriptCommand}" Margin="0,0,8,0" />
                                     <Button Content="Copy" Style="{StaticResource SecondaryButton}"
                                             Command="{Binding CopyPermissionScriptCommand}" Margin="0,0,8,0" />
                                     <Button Content="Save as .sql" Style="{StaticResource SecondaryButton}"
                                             Command="{Binding SavePermissionScriptCommand}" />
                                 </StackPanel>
 
+                                <TextBlock Text="{Binding PermissionScriptLabel}" Style="{StaticResource Caption}" Margin="0,0,0,4"
+                                           Visibility="{Binding PermissionScriptLabel, Converter={StaticResource NullToVisibility}}" />
                                 <Border Style="{StaticResource Panel}"
                                         Visibility="{Binding PermissionScript, Converter={StaticResource NullToVisibility}}">
                                     <TextBox Text="{Binding PermissionScript, Mode=OneWay}" IsReadOnly="True"
@@ -376,7 +436,7 @@
             </TabItem>
 
             <!-- =============================== Diagnostics =============================== -->
-            <TabItem Header="Diagnostics">
+            <TabItem x:Name="DiagnosticsTab" Header="Diagnostics">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                     <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
                         <Border Style="{StaticResource Card}">
@@ -389,6 +449,8 @@
                                     <Button Content="Run diagnostics" Style="{StaticResource PrimaryButton}"
                                             Command="{Binding RunDiagnosticsCommand}" Margin="0,0,8,0"
                                             IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                    <Button Content="Copy results" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding CopyDiagnosticsResultsCommand}" Margin="0,0,8,0" />
                                     <Button Content="Export support bundle" Style="{StaticResource SecondaryButton}"
                                             Command="{Binding ExportSupportBundleCommand}"
                                             IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
@@ -403,6 +465,7 @@
                                                     <ColumnDefinition Width="20" />
                                                     <ColumnDefinition Width="Auto" MinWidth="150" />
                                                     <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0" FontWeight="Bold" VerticalAlignment="Top">
                                                     <TextBlock.Style>
@@ -424,6 +487,9 @@
                                                 </TextBlock>
                                                 <TextBlock Grid.Column="1" Text="{Binding Name}" Style="{StaticResource BodyStrong}" Margin="0,0,12,0" TextWrapping="Wrap" />
                                                 <TextBlock Grid.Column="2" Text="{Binding Detail}" Style="{StaticResource Muted}" TextWrapping="Wrap" />
+                                                <TextBlock Grid.Column="3" Margin="12,0,0,0" VerticalAlignment="Top"
+                                                           Text="{Binding CheckedAt, Converter={StaticResource LocalDateTime}}"
+                                                           Style="{StaticResource Caption}" />
                                             </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -435,12 +501,114 @@
                                            Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,10,0,0" />
                             </StackPanel>
                         </Border>
+
+                        <!-- Recent logs -->
+                        <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Recent logs" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                                    <Button Grid.Column="1" Style="{StaticResource IconButton}"
+                                            ToolTip="Refresh logs" AutomationProperties.Name="Refresh logs"
+                                            Command="{Binding RefreshLogsCommand}">
+                                        <TextBlock Style="{StaticResource Icon}" Text="{StaticResource IconRefresh}" />
+                                    </Button>
+                                </Grid>
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,12"
+                                           Text="The newest entries from the app and service log files — what just happened, without leaving Obsync." />
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Grid.Column="0" ItemsSource="{Binding LogSeverityFilters}"
+                                              SelectedItem="{Binding SelectedLogSeverity}"
+                                              ToolTip="Severity filter" AutomationProperties.Name="Severity filter" />
+                                    <TextBox Grid.Column="2" Text="{Binding LogSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="Search the log messages" AutomationProperties.Name="Search logs" />
+                                    <Button Grid.Column="4" Content="Open logs folder" Style="{StaticResource SecondaryButton}"
+                                            Command="{Binding OpenFolderCommand}" CommandParameter="{Binding LogsRoot}" />
+                                </Grid>
+
+                                <ListBox ItemsSource="{Binding FilteredLogEntries}" SelectedItem="{Binding SelectedLogEntry}"
+                                         MaxHeight="340" BorderThickness="0" Background="Transparent"
+                                         HorizontalContentAlignment="Stretch"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         VirtualizingPanel.VirtualizationMode="Recycling"
+                                         Visibility="{Binding FilteredLogEntries.Count, Converter={StaticResource CountToVisibility}}">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Copy" Command="{Binding CopySelectedLogEntryCommand}" />
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,2,0,2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Margin="0,1,10,0" VerticalAlignment="Top"
+                                                           FontFamily="{StaticResource MonoFontFamily}" FontSize="11"
+                                                           Foreground="{StaticResource TextMutedBrush}"
+                                                           Text="{Binding Timestamp, Converter={StaticResource LocalDateTime}}" />
+                                                <Border Grid.Column="1" CornerRadius="{StaticResource RadiusPill}"
+                                                        Padding="6,1" Margin="0,0,10,0" VerticalAlignment="Top">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Background" Value="{StaticResource NeutralSoftBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                                                    <Setter Property="Background" Value="{StaticResource WarningSoftBrush}" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                                                    <Setter Property="Background" Value="{StaticResource ErrorSoftBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding Level}" FontFamily="{StaticResource MonoFontFamily}"
+                                                               FontSize="10" FontWeight="SemiBold">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                                                        <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </Border>
+                                                <TextBlock Grid.Column="2" Text="{Binding Message}" Style="{StaticResource Body}"
+                                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding Message}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <TextBlock Text="{Binding LogsStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding LogsStatus, Converter={StaticResource NullToVisibility}}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
             <!-- ================================= About ================================= -->
-            <TabItem Header="About">
+            <TabItem x:Name="AboutTab" Header="About">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
                     <StackPanel MaxWidth="720" HorizontalAlignment="Left" Margin="0,4,0,24">
                         <Border Style="{StaticResource Card}">
@@ -487,6 +655,44 @@
                                                    Style="{StaticResource Body}" Foreground="{StaticResource TextPrimaryBrush}" TextWrapping="Wrap" />
                                     </StackPanel>
                                 </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Support information -->
+                        <Border Style="{StaticResource Card}" Margin="0,18,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Support information" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="The component versions and environment facts a support thread asks for first — copy them in one click." />
+
+                                <ItemsControl ItemsSource="{Binding SupportInfoRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,0,0,8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="170" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Key}" Style="{StaticResource Caption}" VerticalAlignment="Top" Margin="0,1,0,0" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource BodyStrong}" TextWrapping="Wrap" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Button Content="Copy support info" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
+                                        Margin="0,4,0,0" Command="{Binding CopySupportInfoCommand}" />
+                                <TextBlock Text="{Binding SupportInfoStatus}" Style="{StaticResource Muted}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding SupportInfoStatus, Converter={StaticResource NullToVisibility}}" />
+
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                    <Button Style="{StaticResource LinkButton}" Content="Project on GitHub"
+                                            Command="{Binding OpenLinkCommand}" CommandParameter="https://github.com/obsync-io/obsync" />
+                                    <Button Style="{StaticResource LinkButton}" Content="Report an issue" Margin="20,0,0,0"
+                                            Command="{Binding OpenLinkCommand}" CommandParameter="https://github.com/obsync-io/obsync/issues" />
+                                    <Button Style="{StaticResource LinkButton}" Content="Documentation" Margin="20,0,0,0"
+                                            Command="{Binding OpenLinkCommand}" CommandParameter="https://obsync.io" />
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>

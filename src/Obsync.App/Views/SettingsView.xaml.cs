@@ -46,6 +46,29 @@ public partial class SettingsView : UserControl
         }
     }
 
+    // Lazy per-tab loads: sizes, logs, and support info are only gathered when their tab is opened,
+    // so navigating to Settings never pays for a workspace walk or a log-file read up front.
+    private void OnTabSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, SettingsTabs) || DataContext is not SettingsViewModel viewModel)
+        {
+            return;
+        }
+
+        if (NetworkTab.IsSelected)
+        {
+            _ = viewModel.EnsureStorageAsync();
+        }
+        else if (DiagnosticsTab.IsSelected)
+        {
+            _ = viewModel.EnsureLogsLoadedAsync();
+        }
+        else if (AboutTab.IsSelected)
+        {
+            _ = viewModel.EnsureSupportInfoAsync();
+        }
+    }
+
     private void OnProxyPasswordShouldClear(object? sender, EventArgs e) => ProxyPasswordBox.Clear();
 
     private void OnProxyPasswordChanged(object sender, RoutedEventArgs e)

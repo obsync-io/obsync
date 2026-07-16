@@ -23,7 +23,9 @@ public sealed class MainViewModelActivationTests
         Substitute.For<ICredentialStore>(),
         Substitute.For<IProxyProvider>(),
         Substitute.For<IRunAlertService>(),
-        Substitute.For<IUpdateChecker>());
+        Substitute.For<IUpdateChecker>(),
+        Substitute.For<ILogFileReader>(),
+        Substitute.For<ISupportInfoService>());
 
     [Fact]
     public async Task RefreshOnActivation_SkipsTheSettingsSection()

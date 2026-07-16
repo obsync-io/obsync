@@ -13,6 +13,7 @@ namespace Obsync.Metadata;
 ///   <item><c>VIEW DATABASE STATE</c> — read database metadata used during scripting.</item>
 /// </list>
 /// Output is deterministic (stable ordering, LF line endings) so a DBA reviewing it sees no churn.
+/// <see cref="BuildRevoke"/> produces the matching inverse script for offboarding the account.
 /// </summary>
 public static class SqlPermissionScriptBuilder
 {
@@ -45,8 +46,7 @@ public static class SqlPermissionScriptBuilder
             return Normalize(builder);
         }
 
-        // Stable ordering keeps the script identical run-to-run for the same inputs.
-        foreach (var database in databases.Select(d => d.Trim()).Where(d => d.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        foreach (var database in NormalizedDatabases(databases))
         {
             var db = Quote(database);
             builder.Append('\n');
@@ -63,6 +63,56 @@ public static class SqlPermissionScriptBuilder
 
         return Normalize(builder);
     }
+
+    /// <summary>
+    /// Builds the exact inverse of <see cref="Build"/>: a REVOKE for every grant, in the same
+    /// deterministic order, plus commented (never executable) DROP USER guidance. DROP statements
+    /// are deliberately left commented — the account may be shared with other tools, so removal
+    /// needs a human decision.
+    /// </summary>
+    public static string BuildRevoke(string accountName, IReadOnlyList<string> databases, bool includeServerObjects = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+
+        var account = accountName.Trim();
+        var user = Quote(account);
+
+        var builder = new StringBuilder();
+        builder.Append(RevokeHeader(account.Replace("'", "''")));
+
+        if (includeServerObjects)
+        {
+            AppendServerObjectRevokes(builder, user);
+        }
+
+        if (databases.Count == 0)
+        {
+            builder.Append("\n-- Specify at least one database to generate REVOKE statements.\n");
+            return Normalize(builder);
+        }
+
+        foreach (var database in NormalizedDatabases(databases))
+        {
+            var db = Quote(database);
+            builder.Append('\n');
+            builder.Append("USE ").Append(db).Append(";\n");
+            builder.Append("GO\n\n");
+            builder.Append("REVOKE CONNECT FROM ").Append(user).Append(";\n");
+            builder.Append("REVOKE VIEW DEFINITION FROM ").Append(user).Append(";\n");
+            builder.Append("REVOKE VIEW DATABASE STATE FROM ").Append(user).Append(";\n");
+            builder.Append("GO\n\n");
+            AppendDropUserGuidance(builder, user);
+        }
+
+        return Normalize(builder);
+    }
+
+    // Stable ordering keeps both scripts identical run-to-run for the same inputs.
+    private static IEnumerable<string> NormalizedDatabases(IReadOnlyList<string> databases) => databases
+        .Select(d => d.Trim())
+        .Where(d => d.Length > 0)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(d => d, StringComparer.OrdinalIgnoreCase);
 
     // Server-level object scripting (logins, server roles, credentials, linked servers) reads
     // instance metadata, and SQL Agent jobs/operators/alerts live in msdb — readable via the
@@ -84,6 +134,31 @@ public static class SqlPermissionScriptBuilder
         builder.Append("GO\n\n");
         builder.Append("ALTER ROLE [SQLAgentReaderRole] ADD MEMBER ").Append(user).Append(";\n");
         builder.Append("GO\n");
+    }
+
+    // Mirrors AppendServerObjectGrants statement-for-statement with the inverse operations.
+    private static void AppendServerObjectRevokes(StringBuilder builder, string user)
+    {
+        builder.Append('\n');
+        builder.Append("-- Reverses the server-level object-scripting grants.\n");
+        builder.Append("USE [master];\n");
+        builder.Append("GO\n\n");
+        builder.Append("REVOKE VIEW ANY DEFINITION FROM ").Append(user).Append(";\n");
+        builder.Append("REVOKE VIEW SERVER STATE FROM ").Append(user).Append(";\n");
+        builder.Append("GO\n\n");
+        builder.Append("-- Reverses the msdb SQL Agent read access.\n");
+        builder.Append("USE [msdb];\n");
+        builder.Append("GO\n\n");
+        builder.Append("ALTER ROLE [SQLAgentReaderRole] DROP MEMBER ").Append(user).Append(";\n");
+        builder.Append("GO\n\n");
+        AppendDropUserGuidance(builder, user);
+    }
+
+    private static void AppendDropUserGuidance(StringBuilder builder, string user)
+    {
+        builder.Append("-- To remove the user from this database entirely, verify nothing else uses the\n");
+        builder.Append("-- account first, then uncomment:\n");
+        builder.Append("--     DROP USER ").Append(user).Append(";\n");
     }
 
     // The header uses a raw string literal, whose newlines follow the source file's encoding.
@@ -110,6 +185,25 @@ public static class SqlPermissionScriptBuilder
 
                GRANT VIEW ANY DEFINITION TO [{literal}];
                GRANT VIEW SERVER STATE   TO [{literal}];
+
+           Generated by Obsync.
+           ----------------------------------------------------------------------------- */
+
+        """;
+
+    private static string RevokeHeader(string literal) =>
+        $"""
+        /* -----------------------------------------------------------------------------
+           Obsync — revoke of the least-privilege SQL permissions
+
+           Reverses the grants produced by the Obsync permission script for this
+           account. Run it when the account no longer needs to be scripted by Obsync.
+
+           CAUTION: the drop-user guidance below is commented out on purpose. Only
+           remove the user — or the login itself — after confirming nothing else
+           (other tools, other Obsync jobs) uses the account:
+
+               -- DROP LOGIN [{literal}];   -- run once, in master, after all users are dropped
 
            Generated by Obsync.
            ----------------------------------------------------------------------------- */

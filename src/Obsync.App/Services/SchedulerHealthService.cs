@@ -56,8 +56,9 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
 
     private const string ServiceName = "Obsync";
 
-    /// <summary>The service heartbeats every 30s; anything older than this is treated as dead.</summary>
-    private static readonly TimeSpan HeartbeatFreshness = TimeSpan.FromSeconds(90);
+    /// <summary>The service heartbeats every 30s; anything older than this is treated as dead.
+    /// Shared with <see cref="SupportInfoService"/> so "is the service running" has one definition.</summary>
+    internal static readonly TimeSpan HeartbeatFreshness = TimeSpan.FromSeconds(90);
 
     private readonly IAppSettingsRepository _settings;
     private readonly IClock _clock;
