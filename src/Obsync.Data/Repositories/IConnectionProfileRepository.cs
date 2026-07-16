@@ -10,10 +10,15 @@ public interface IConnectionProfileRepository
     Task<SqlConnectionProfile?> GetAsync(Guid id, CancellationToken cancellationToken = default);
     Task UpsertAsync(SqlConnectionProfile profile, CancellationToken cancellationToken = default);
 
-    /// <summary>Records the outcome of a connectivity test without touching the rest of the profile.</summary>
+    /// <summary>
+    /// Records the outcome of a connectivity test without touching the rest of the profile.
+    /// <paramref name="serverEdition"/>/<paramref name="serverVersion"/> are the structured server
+    /// info captured by a successful test; pass the previously known values on failure so a blip
+    /// does not erase them.
+    /// </summary>
     Task UpdateTestStatusAsync(
         Guid id, ConnectionTestStatus status, DateTimeOffset testedAt, string? detail,
-        CancellationToken cancellationToken = default);
+        string? serverEdition, string? serverVersion, CancellationToken cancellationToken = default);
 
     Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }

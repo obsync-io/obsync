@@ -38,12 +38,15 @@ public sealed class RepositoriesPageRenderTests
                 // Page, with rows present so the grid path (not just the empty state) is exercised.
                 var pageVm = new RepositoriesViewModel(
                     Substitute.For<IRepositoryProfileRepository>(), Substitute.For<IGitHubService>(),
-                    Substitute.For<ICredentialStore>(), Substitute.For<IAuditWriter>());
+                    Substitute.For<ICredentialStore>(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
                 pageVm.Repositories.Add(new GitRepositoryProfile
                 {
                     Name = "SQLTest", Owner = "acme", RepositoryName = "sql-history", DefaultBranch = "main",
+                    LastValidationStatus = RepositoryValidationStatus.Valid,
+                    LastValidatedAt = DateTimeOffset.UtcNow,
+                    LastValidationDetail = "Read and write access verified — authenticated as alice.",
                 });
-                pageVm.StatusMessage = "SQLTest: All checks passed — authenticated as alice.";
+                pageVm.StatusMessage = "SQLTest: Read and write access verified — authenticated as alice.";
                 pagePng = Render(new RepositoriesView { DataContext = pageVm }, 1220, 760, "repositories-page.png");
 
                 // Dialog, in edit mode with the permission checklist showing.
@@ -58,7 +61,10 @@ public sealed class RepositoriesPageRenderTests
                 dialogVm.PermissionChecks.Add(new PermissionCheckLine("Repository access — acme/sql-history", true));
                 dialogVm.PermissionChecks.Add(new PermissionCheckLine("Read (pull)", true));
                 dialogVm.PermissionChecks.Add(new PermissionCheckLine("Write / push — Contents", false));
-                dialogVm.ValidationResult = "The token can read but NOT write. Pushes will fail — grant it Contents: write.";
+                dialogVm.PermissionChecks.Add(new PermissionCheckLine("Branch 'main' exists", true));
+                dialogVm.ValidationResult =
+                    "Read-only access — Direct Commit and Pull Request jobs will fail to push; "
+                    + "Local Commit Only and Export Only are unaffected.";
 
                 // A never-shown Window builds no visual tree — probe its Content instead.
                 var window = new AddRepositoryWindow { DataContext = dialogVm };

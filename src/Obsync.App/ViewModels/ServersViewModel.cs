@@ -68,7 +68,10 @@ public sealed partial class ServersViewModel : ObservableObject, IAsyncViewModel
                 ? $"SQL Server {result.Value.Edition} ({result.Value.ProductVersion})"
                 : result.Error;
 
-            await _repository.UpdateTestStatusAsync(server.Id, status, _clock.UtcNow, detail);
+            // A failed test says nothing about the server's edition/version — keep the last known values.
+            var edition = result.IsSuccess ? result.Value.Edition : server.ServerEdition;
+            var version = result.IsSuccess ? result.Value.ProductVersion : server.ServerVersion;
+            await _repository.UpdateTestStatusAsync(server.Id, status, _clock.UtcNow, detail, edition, version);
             StatusMessage = result.IsSuccess ? $"{server.Name}: connected." : $"{server.Name}: {result.Error}";
             await LoadAsync();
         }

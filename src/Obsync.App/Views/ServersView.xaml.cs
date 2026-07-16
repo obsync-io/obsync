@@ -24,6 +24,23 @@ public partial class ServersView : UserControl
         }
     }
 
+    private void OnCopyServerName(object sender, RoutedEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is SqlConnectionProfile server && DataContext is ServersViewModel viewModel)
+        {
+            try
+            {
+                Clipboard.SetText(server.ServerName);
+                viewModel.StatusMessage = $"Copied “{server.ServerName}” to the clipboard.";
+            }
+            catch (System.Runtime.InteropServices.ExternalException)
+            {
+                // Another process is holding the clipboard open — a transient Windows condition.
+                viewModel.StatusMessage = "Could not access the clipboard — try again.";
+            }
+        }
+    }
+
     private void OnDeleteServer(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is SqlConnectionProfile server && DataContext is ServersViewModel viewModel)
