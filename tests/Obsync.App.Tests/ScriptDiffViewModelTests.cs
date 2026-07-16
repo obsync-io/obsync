@@ -248,6 +248,8 @@ public sealed class ScriptDiffViewModelTests
             Substitute.For<IRunReportWriter>(), Substitute.For<IAppSettingsRepository>(),
             Substitute.For<IJobConfigPorter>(),
             Substitute.For<Obsync.App.Services.ISchedulerHealthService>(),
+            Substitute.For<Obsync.Shared.Abstractions.IAuditWriter>(),
+            Substitute.For<Obsync.Shared.Abstractions.IClock>(),
             new DependencyExplorerViewModel(
                 Substitute.For<IObjectStateRepository>(), Substitute.For<Obsync.Metadata.ISqlServerProbe>(),
                 Substitute.For<Obsync.Shared.Abstractions.ICredentialStore>()));

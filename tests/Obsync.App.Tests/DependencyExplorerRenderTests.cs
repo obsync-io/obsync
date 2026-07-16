@@ -80,7 +80,8 @@ public sealed class DependencyExplorerRenderTests
                     Substitute.For<IJobRunCoordinator>(), Substitute.For<IShellNavigator>(),
                     Substitute.For<IRunReportWriter>(), Substitute.For<IAppSettingsRepository>(),
                     Substitute.For<IJobConfigPorter>(),
-                    Substitute.For<Obsync.App.Services.ISchedulerHealthService>(), explorer);
+                    Substitute.For<Obsync.App.Services.ISchedulerHealthService>(),
+                    Substitute.For<IAuditWriter>(), Substitute.For<IClock>(), explorer);
 
                 var view = new JobDetailView { DataContext = viewModel };
                 view.Measure(new Size(1220, 900));

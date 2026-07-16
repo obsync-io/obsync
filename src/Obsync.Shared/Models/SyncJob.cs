@@ -161,4 +161,33 @@ public sealed class SyncJob
     /// status. Keeps the running indicator visible everywhere and across navigation. Not persisted.
     /// </summary>
     public RunStatus? DisplayStatus => IsRunning ? RunStatus.Running : RunSummary.LastStatus;
+
+    /// <summary>
+    /// True when the status badge should read "Paused" instead of the last run's status: the
+    /// schedule is disabled and no run is in progress. A presentation concept, not a
+    /// <see cref="RunStatus"/> — pausing never rewrites run history. Not persisted.
+    /// </summary>
+    public bool IsPaused => !Enabled && !IsRunning;
+
+    /// <summary>
+    /// Result of <see cref="IsScheduleOverdue"/> at the time the owning list was loaded, cached so
+    /// views can bind it without reading a clock per cell. Not persisted.
+    /// </summary>
+    public bool IsOverdue { get; set; }
+
+    /// <summary>How far past its cached next-run time a schedule may drift before it counts as
+    /// overdue — absorbs scheduler startup, reconcile latency, and run-lock waits.</summary>
+    public static readonly TimeSpan ScheduleOverdueGrace = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Whether this job's schedule has visibly stalled at <paramref name="now"/>: it is enabled and
+    /// scheduled, its cached next-run time passed more than <see cref="ScheduleOverdueGrace"/> ago,
+    /// and no run is in progress. Takes the clock as a parameter so the rule is deterministic.
+    /// </summary>
+    public bool IsScheduleOverdue(DateTimeOffset now) =>
+        Enabled
+        && Schedule.Kind != ScheduleKind.Manual
+        && !IsRunning
+        && RunSummary.NextRunAt is { } next
+        && next < now - ScheduleOverdueGrace;
 }

@@ -118,6 +118,16 @@
                 <TextBlock Style="{StaticResource Body}" Text="{Binding LastRunText}" VerticalAlignment="Center" />
                 <TextBlock Style="{StaticResource Muted}" Text="  ·  Next run " VerticalAlignment="Center" />
                 <TextBlock Style="{StaticResource Body}" Text="{Binding NextRunText}" VerticalAlignment="Center" />
+                <!-- Overdue indicator (amber dot + text, never colour alone); the tooltip explains
+                     the scheduled time and points at the service. -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0"
+                            Visibility="{Binding IsOverdue, Converter={StaticResource BoolToVisibility}}"
+                            ToolTip="{Binding Job.RunSummary.NextRunAt, Converter={StaticResource OverdueDetail}}">
+                    <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                             Fill="{StaticResource WarningBrush}" />
+                    <TextBlock Text="Overdue" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}"
+                               VerticalAlignment="Center" />
+                </StackPanel>
                 <TextBlock Style="{StaticResource Muted}" Text="  ·  Last commit " VerticalAlignment="Center"
                            Visibility="{Binding HasCommit, Converter={StaticResource BoolToVisibility}}" />
                 <!-- Link when a commit URL exists; otherwise the SHA as plain text so a run with a

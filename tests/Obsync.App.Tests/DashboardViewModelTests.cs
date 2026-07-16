@@ -31,7 +31,8 @@ public sealed class DashboardViewModelTests
             Substitute.For<IJobRunCoordinator>(),
             Substitute.For<IShellNavigator>(),
             settings,
-            Substitute.For<ISchedulerHealthService>());
+            Substitute.For<ISchedulerHealthService>(),
+            Substitute.For<Obsync.Shared.Abstractions.IClock>());
     }
 
     private static IRunRepository RepositoryWith(params SyncRun[] runs)

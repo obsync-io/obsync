@@ -4,6 +4,7 @@
              xmlns:vm="clr-namespace:Obsync.App.ViewModels"
              xmlns:views="clr-namespace:Obsync.App.Views"
              xmlns:conv="clr-namespace:Obsync.App.Converters"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              DispatcherUnhandledException="OnDispatcherUnhandledException">
     <Application.Resources>
         <ResourceDictionary>
@@ -28,6 +29,11 @@
             <conv:ConnectionStatusToTextConverter x:Key="ConnectionStatusToText" />
             <conv:ConnectionStatusToBrushConverter x:Key="ConnectionStatusToBrush" />
             <conv:ConnectionStatusToBadgeBackgroundConverter x:Key="ConnectionStatusToBadgeBackground" />
+            <conv:OverdueDetailConverter x:Key="OverdueDetail" />
+
+            <!-- Job-list action glyphs (same Fluent set as Themes/Icons.xaml). -->
+            <sys:String x:Key="IconPause">&#xE769;</sys:String>
+            <sys:String x:Key="IconMore">&#xE712;</sys:String>
 
             <!-- Reusable small status badge (DataContext = RunStatus, or null for a never-run job).
                  FallbackValue covers the null-content case, where the empty-path binding yields
@@ -42,6 +48,56 @@
                                    FontWeight="SemiBold" Foreground="{Binding Converter={StaticResource StatusToBrush}, FallbackValue={StaticResource TextMutedBrush}}" />
                     </StackPanel>
                 </Border>
+            </DataTemplate>
+
+            <!-- Job status badge for the Dashboard/Jobs tables (DataContext = SyncJob): the last
+                 run's status via StatusBadgeTemplate, or a neutral "Paused" badge when the schedule
+                 is disabled and no run is in progress — pausing must read as deliberate, not as an
+                 outcome, so it never reuses a RunStatus colour. -->
+            <DataTemplate x:Key="JobStatusBadgeTemplate">
+                <Grid>
+                    <ContentControl x:Name="RunBadge" Content="{Binding DisplayStatus}"
+                                    ContentTemplate="{StaticResource StatusBadgeTemplate}" />
+                    <Border x:Name="PausedBadge" Visibility="Collapsed" CornerRadius="{StaticResource RadiusPill}"
+                            Padding="9,3" HorizontalAlignment="Left" Background="{StaticResource NeutralSoftBrush}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                     Fill="{StaticResource TextMutedBrush}" />
+                            <TextBlock Text="Paused" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextMutedBrush}" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+                <DataTemplate.Triggers>
+                    <DataTrigger Binding="{Binding IsPaused}" Value="True">
+                        <Setter TargetName="RunBadge" Property="Visibility" Value="Collapsed" />
+                        <Setter TargetName="PausedBadge" Property="Visibility" Value="Visible" />
+                    </DataTrigger>
+                </DataTemplate.Triggers>
+            </DataTemplate>
+
+            <!-- Next-run cell for the Dashboard/Jobs tables (DataContext = SyncJob): the plain local
+                 timestamp, replaced by an amber dot + "Overdue" (text, never colour alone) with the
+                 scheduled time and corrective hint in the tooltip when the run has not started. -->
+            <DataTemplate x:Key="NextRunCellTemplate">
+                <Grid>
+                    <TextBlock x:Name="Stamp" Text="{Binding RunSummary.NextRunAt, Converter={StaticResource LocalDateTime}}"
+                               Style="{StaticResource Muted}" VerticalAlignment="Center" TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis" />
+                    <StackPanel x:Name="Overdue" Orientation="Horizontal" Visibility="Collapsed"
+                                ToolTip="{Binding RunSummary.NextRunAt, Converter={StaticResource OverdueDetail}}">
+                        <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                 Fill="{StaticResource WarningBrush}" />
+                        <TextBlock Text="Overdue" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
+                <DataTemplate.Triggers>
+                    <DataTrigger Binding="{Binding IsOverdue}" Value="True">
+                        <Setter TargetName="Stamp" Property="Visibility" Value="Collapsed" />
+                        <Setter TargetName="Overdue" Property="Visibility" Value="Visible" />
+                    </DataTrigger>
+                </DataTemplate.Triggers>
             </DataTemplate>
 
             <!-- Reusable change-type badge (DataContext = ChangeType). -->
@@ -79,7 +135,8 @@
                             </Style.Triggers>
                         </Style>
                     </Border.Style>
-                    <TextBlock Text="{Binding Text}" FontSize="11" FontWeight="SemiBold">
+                    <!-- Trim rather than clip when a narrow tags column constrains the chip. -->
+                    <TextBlock Text="{Binding Text}" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />

@@ -20,6 +20,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     private readonly IAppSettingsRepository _settings;
     private readonly IJobConfigPorter _porter;
     private readonly ISchedulerHealthService _schedulerHealth;
+    private readonly IClock _clock;
 
     private bool _reloading;
 
@@ -38,7 +39,8 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         IAuditWriter audit,
         IAppSettingsRepository settings,
         IJobConfigPorter porter,
-        ISchedulerHealthService schedulerHealth)
+        ISchedulerHealthService schedulerHealth,
+        IClock clock)
     {
         _jobs = jobs;
         _connections = connections;
@@ -48,6 +50,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         _settings = settings;
         _porter = porter;
         _schedulerHealth = schedulerHealth;
+        _clock = clock;
         _coordinator.RunStateChanged += OnRunStateChanged;
     }
 
@@ -112,6 +115,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         // A stale action message must not outlive a reload (e.g. navigating away and back).
         StatusMessage = null;
 
+        var now = _clock.UtcNow;
         var jobs = await _jobs.GetAllAsync();
         var markers = await _settings.GetProductionTagsAsync();
         await JobDisplay.PopulateAsync(jobs, _connections, _repositories, markers);
@@ -119,6 +123,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         foreach (var job in jobs)
         {
             job.IsRunning = _coordinator.IsRunning(job.Id);
+            job.IsOverdue = job.IsScheduleOverdue(now);
             Jobs.Add(job);
         }
 
@@ -156,6 +161,103 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     }
 
     private bool CanRun(SyncJob? job) => job is not null && !_coordinator.IsRunning(job.Id);
+
+    /// <summary>
+    /// Pauses (disables) or resumes a job's schedule. Pausing clears the cached next-run time
+    /// immediately so the table never advertises a run that will not happen; resuming previews the
+    /// next occurrence (null for cron, whose exact fire time only the scheduler computes) — the
+    /// service replaces the preview with the authoritative value on its next reconcile tick.
+    /// </summary>
+    [RelayCommand]
+    private async Task TogglePauseAsync(SyncJob? job)
+    {
+        if (job is null)
+        {
+            return;
+        }
+
+        var pausing = job.Enabled;
+        job.Enabled = !pausing;
+        job.UpdatedAt = _clock.UtcNow;
+        job.RunSummary.NextRunAt = pausing ? null : job.Schedule.GetNextRun(_clock.UtcNow);
+        await _jobs.UpsertAsync(job);
+        // UpsertAsync deliberately never touches the run summary — patch the cached next-run field
+        // explicitly so the cleared (or previewed) value survives the reload below.
+        await _jobs.UpdateNextRunAtAsync(job.Id, job.RunSummary.NextRunAt);
+        await _audit.WriteAsync(
+            pausing ? AuditAction.JobPaused : AuditAction.JobResumed, "Job", job.Id.ToString(), job.Name);
+        await LoadAsync();
+        StatusMessage = pausing
+            ? $"{job.Name}: schedule paused — the job now runs only when you start it."
+            : $"{job.Name}: schedule resumed.";
+    }
+
+    /// <summary>
+    /// Creates a deep copy of a job under a unique "<c>name (copy)</c>" name. The copy starts
+    /// paused with a blank run history so it can neither fire nor look like it already ran before
+    /// the user reviews its schedule and destination.
+    /// </summary>
+    [RelayCommand]
+    private async Task DuplicateAsync(SyncJob? job)
+    {
+        if (job is null)
+        {
+            return;
+        }
+
+        var copy = Clone(job);
+        copy.Id = Guid.NewGuid();
+        copy.Name = DuplicateName(job.Name, Jobs.Select(j => j.Name));
+        copy.Enabled = false;
+        copy.RunSummary = new JobRunSummary();
+        copy.CreatedAt = copy.UpdatedAt = _clock.UtcNow;
+        await _jobs.UpsertAsync(copy);
+        await _audit.WriteAsync(AuditAction.JobDuplicated, "Job", copy.Id.ToString(), copy.Name, $"Copied from “{job.Name}”");
+        await LoadAsync();
+        StatusMessage = $"Created “{copy.Name}” — paused until you review its schedule.";
+    }
+
+    /// <summary>Exports a job's configuration as portable, secret-free JSON (the same flow as the
+    /// Job Workspace's Configuration tab).</summary>
+    [RelayCommand]
+    private async Task ExportConfigAsync(SyncJob? job)
+    {
+        if (job is null)
+        {
+            return;
+        }
+
+        var message = await JobConfigExport.PromptAndWriteAsync(_porter, _audit, job);
+        if (message is not null)
+        {
+            StatusMessage = message;
+        }
+    }
+
+    /// <summary>A JSON round-trip clones every persisted field — including ones added later —
+    /// without a hand-written copy that could silently miss additions.</summary>
+    private static SyncJob Clone(SyncJob job)
+    {
+        var copy = System.Text.Json.JsonSerializer.Deserialize<SyncJob>(System.Text.Json.JsonSerializer.Serialize(job))!;
+        // System.Text.Json rebuilds the HashSet with the default (ordinal) comparer; restore
+        // case-insensitivity the same way JobRepository does on read.
+        copy.Selection.SchemaFilter = new HashSet<string>(copy.Selection.SchemaFilter, StringComparer.OrdinalIgnoreCase);
+        return copy;
+    }
+
+    /// <summary>"name (copy)", or "name (copy N)" for the first N ≥ 2 whose result is not already
+    /// taken (compared case-insensitively, matching SQL-side name semantics).</summary>
+    internal static string DuplicateName(string name, IEnumerable<string> existingNames)
+    {
+        var taken = new HashSet<string>(existingNames, StringComparer.OrdinalIgnoreCase);
+        var candidate = $"{name} (copy)";
+        for (var n = 2; taken.Contains(candidate); n++)
+        {
+            candidate = $"{name} (copy {n})";
+        }
+
+        return candidate;
+    }
 
     [RelayCommand]
     private async Task DeleteAsync(SyncJob? job)

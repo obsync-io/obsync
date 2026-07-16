@@ -108,6 +108,51 @@
                 </Border>
             </WrapPanel>
 
+            <!-- Needs attention: one calm card listing exactly what requires action (failed or
+                 warning last runs, overdue schedules, failed server tests) with a corrective
+                 action per row. Absent entirely — not an empty shell — when everything is healthy. -->
+            <Border Style="{StaticResource Card}" Margin="0,4,0,0"
+                    Visibility="{Binding AttentionItems.Count, Converter={StaticResource CountToVisibility}}">
+                <StackPanel>
+                    <TextBlock Text="Needs attention" Style="{StaticResource SectionTitle}" />
+                    <ItemsControl ItemsSource="{Binding AttentionItems}" Margin="0,4,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Severity dot only accents the row — the text states the problem. -->
+                                    <Ellipse Grid.Column="0" Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,10,0">
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                                        <Setter Property="Fill" Value="{StaticResource ErrorBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                    <TextBlock Grid.Column="1" Text="{Binding Text}" Style="{StaticResource Body}"
+                                               VerticalAlignment="Center" TextWrapping="NoWrap"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Text}" />
+                                    <Button Grid.Column="2" Style="{StaticResource LinkButton}" Content="{Binding ActionLabel}"
+                                            AutomationProperties.Name="{Binding ActionLabel}" Margin="14,0,0,0" VerticalAlignment="Center"
+                                            Command="{Binding DataContext.OpenAttentionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding AttentionOverflow}" Style="{StaticResource Muted}" Margin="17,8,0,0"
+                               Visibility="{Binding AttentionOverflow, Converter={StaticResource NullToVisibility}}" />
+                </StackPanel>
+            </Border>
+
             <!-- Getting started (shown only when there are no jobs yet) -->
             <Border Margin="0,20,0,0">
                 <Border.Style>
@@ -200,66 +245,69 @@
                     <!-- Run progress/status is shown in the job's Overview tab, not as a floating line here. -->
                     <!-- Bounded height so DataGrid row virtualization works (the grid scrolls
                          internally rather than realizing every row inside the page ScrollViewer). -->
+                    <!-- Column budget mirrors JobsView: fixed widths fit their widest content and
+                         flexible MinWidths fit their headers, so nothing clips or truncates down
+                         to a 960-wide content area (verified by TableLayoutTests). -->
                     <DataGrid ItemsSource="{Binding Jobs}" Margin="0,8,0,0" MaxHeight="520"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Job Name" Width="1.8*" MinWidth="110">
+                            <DataGridTemplateColumn Header="Job Name" Width="1.6*" MinWidth="86">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Source" Width="1.8*" MinWidth="100">
+                            <DataGridTemplateColumn Header="Source" Width="1.6*" MinWidth="66">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding SourceDisplay}" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding SourceDisplay}" Style="{StaticResource Body}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Destination" Width="1.8*" MinWidth="110">
+                            <DataGridTemplateColumn Header="Destination" Width="1.8*" MinWidth="94">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding DestinationDisplay}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding DestinationDisplay}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Tags" Width="1.3*" MinWidth="80">
+                            <DataGridTemplateColumn Header="Tags" Width="1.1*" MinWidth="54">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <ItemsControl ItemsSource="{Binding TagChips}" Style="{StaticResource TagChipsList}" VerticalAlignment="Center" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Status" Width="Auto" MinWidth="90">
+                            <DataGridTemplateColumn Header="Status" Width="Auto" MinWidth="122">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ContentControl Content="{Binding DisplayStatus}" ContentTemplate="{StaticResource StatusBadgeTemplate}" VerticalAlignment="Center" />
+                                        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource JobStatusBadgeTemplate}" VerticalAlignment="Center" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Last Run" Width="1.3*" MinWidth="90">
+                            <DataGridTemplateColumn Header="Last Run" Width="1.2*" MinWidth="78">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding RunSummary.LastRunAt, Converter={StaticResource LocalDateTime}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding RunSummary.LastRunAt, Converter={StaticResource LocalDateTime}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Changes" Width="0.8*" MinWidth="64">
+                            <DataGridTemplateColumn Header="Changes" Width="78">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding RunSummary.LastChangeCount}" Style="{StaticResource Body}" VerticalAlignment="Center" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Next Run" Width="1.3*" MinWidth="90">
+                            <DataGridTemplateColumn Header="Next Run" Width="1.2*" MinWidth="92">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding RunSummary.NextRunAt, Converter={StaticResource LocalDateTime}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <ContentControl Content="{Binding}" ContentTemplate="{StaticResource NextRunCellTemplate}" VerticalAlignment="Center" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Actions" Width="84">
+                            <DataGridTemplateColumn Header="Actions" Width="92">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

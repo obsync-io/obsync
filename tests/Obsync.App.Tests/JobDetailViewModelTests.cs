@@ -17,7 +17,9 @@ namespace Obsync.App.Tests;
 /// </summary>
 public sealed class JobDetailViewModelTests
 {
-    private static JobDetailViewModel NewViewModel(IJobRepository jobs, IRepositoryProfileRepository repositories)
+    private static JobDetailViewModel NewViewModel(
+        IJobRepository jobs, IRepositoryProfileRepository repositories,
+        IJobRunCoordinator? coordinator = null, IAuditWriter? audit = null)
     {
         var settings = Substitute.For<IAppSettingsRepository>();
         settings.GetProductionTagsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
@@ -27,8 +29,11 @@ public sealed class JobDetailViewModelTests
             .Returns(Task.FromResult<IReadOnlyList<SyncRun>>([]));
 
         // The detail page binds to the coordinator's shared per-job run state on load.
-        var coordinator = Substitute.For<IJobRunCoordinator>();
-        coordinator.GetState(Arg.Any<Guid>()).Returns(call => new JobRunState(call.Arg<Guid>()));
+        if (coordinator is null)
+        {
+            coordinator = Substitute.For<IJobRunCoordinator>();
+            coordinator.GetState(Arg.Any<Guid>()).Returns(call => new JobRunState(call.Arg<Guid>()));
+        }
 
         var dependencies = new DependencyExplorerViewModel(
             Substitute.For<IObjectStateRepository>(), Substitute.For<ISqlServerProbe>(), Substitute.For<ICredentialStore>());
@@ -44,6 +49,8 @@ public sealed class JobDetailViewModelTests
             settings,
             Substitute.For<IJobConfigPorter>(),
             Substitute.For<ISchedulerHealthService>(),
+            audit ?? Substitute.For<IAuditWriter>(),
+            Substitute.For<IClock>(),
             dependencies);
     }
 
@@ -121,5 +128,24 @@ public sealed class JobDetailViewModelTests
         await vm.LoadAsync(job.Id);
 
         Assert.False(vm.CanOpenChangesInGitHub);
+    }
+
+    [Fact]
+    public async Task CancelRun_RequestsCancellation_AndAuditsWhoAskedForIt()
+    {
+        var job = new SyncJob { Name = "Long runner", Databases = ["db"] };
+        var (jobs, repositories) = RepositoriesFor(job);
+        var coordinator = Substitute.For<IJobRunCoordinator>();
+        coordinator.GetState(Arg.Any<Guid>()).Returns(call => new JobRunState(call.Arg<Guid>()));
+        var audit = Substitute.For<IAuditWriter>();
+
+        var vm = NewViewModel(jobs, repositories, coordinator, audit);
+        await vm.LoadAsync(job.Id);
+
+        await vm.CancelRunCommand.ExecuteAsync(null);
+
+        coordinator.Received(1).Cancel(job.Id);
+        await audit.Received(1).WriteAsync(
+            AuditAction.RunCancelled, "Run", job.Id.ToString(), "Long runner", Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
 }
