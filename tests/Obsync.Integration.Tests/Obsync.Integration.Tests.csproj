@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Obsync.Engine\Obsync.Engine.csproj" />
     <ProjectReference Include="..\..\src\Obsync.Data\Obsync.Data.csproj" />
+    <ProjectReference Include="..\..\src\Obsync.Scheduler\Obsync.Scheduler.csproj" />
     <ProjectReference Include="..\..\src\Obsync.Shared\Obsync.Shared.csproj" />
   </ItemGroup>
 

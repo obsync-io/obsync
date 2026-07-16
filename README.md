@@ -92,8 +92,9 @@ heartbeat into the job database every 30 seconds, so "healthy" means a scheduler
 executing *your* jobs, not merely that a process is running.
 
 **How changes apply.** The service reconciles its live schedule against the database every
-30 seconds, so creating, editing, enabling, disabling, or deleting a job in the app takes effect
-within half a minute — no service restart. "Next Run" is stamped when you save a job and kept
+30 seconds, so creating, editing, or deleting a job in the app takes effect within half a minute —
+no service restart. (Jobs carry an enabled flag honored by the scheduler and engine; the app has
+no enable/disable toggle yet, so the flag only changes via job import.) "Next Run" is stamped when you save a job and kept
 Quartz-accurate by the service. Times are local wall-clock; daylight-saving transitions are handled
 by the scheduler's time-zone-aware triggers.
 
@@ -122,10 +123,12 @@ server or database, a broken git workspace preparation, a failed commit, or two 
 differ only by letter case (unsupported — Windows paths are case-insensitive; the error names both
 objects).
 
-**Retries.** Transient SQL errors (deadlocks, timeouts, transport blips) retry up to the job's SQL
-retry count (default 3) with backoff; transient git network failures retry up to the git retry
-count (default 3); GitHub API calls retry on server errors and secondary rate limits. Permanent
-errors — bad credentials, missing permissions, non-fast-forward pushes — are never retried blindly.
+**Retries.** Transient SQL errors (deadlocks, timeouts, transport blips) on the object-scripting
+readers retry up to the job's SQL retry count (default 3) with backoff (the generated-file catalog
+readers do not retry — a blip there becomes a reported skip instead); transient git network
+failures retry up to the git retry count (default 3); GitHub API calls retry on server errors and
+secondary rate limits. Permanent errors — bad credentials, missing permissions, non-fast-forward
+pushes — are never retried blindly.
 
 **Nothing is silently lost.** Tracked object state advances **only after the changeset is durably
 delivered**: a commit in direct/local modes (a commit whose push failed is re-pushed automatically
@@ -193,7 +196,8 @@ glance which jobs touch which environments.
 
 Any tag in the **production** list (configured in **Settings → Production tags**, default
 `prod, production`) renders red and arms a safeguard: a manual **Run Now** on a production-tagged job
-asks for confirmation first. Scheduled runs are never prompted.
+asks for confirmation first — in the app; the CLI's `obsync run` does not prompt. Scheduled runs are
+never prompted.
 
 ## Syncing every database on a server
 

@@ -35,9 +35,15 @@ public sealed class SyncQuartzJob : IJob
             return;
         }
 
-        var trigger = Enum.TryParse<RunTrigger>(context.MergedJobDataMap.GetString(TriggerKey), out var parsed)
-            ? parsed
-            : RunTrigger.Scheduled;
+        // TryGetString, NOT GetString: Quartz's GetString THROWS KeyNotFoundException for an
+        // absent key, and plain cron fires carry no trigger override — reading it the throwing
+        // way made every scheduled fire die before reaching the engine (startup/catch-up runs,
+        // which do carry the key, kept working, masking the breakage). SyncQuartzJobTests locks
+        // the absent-key default.
+        var trigger = context.MergedJobDataMap.TryGetString(TriggerKey, out var rawTrigger)
+            && Enum.TryParse<RunTrigger>(rawTrigger, out var parsed)
+                ? parsed
+                : RunTrigger.Scheduled;
 
         _logger.LogInformation("{Trigger} run starting for job {JobId}.", trigger, jobId);
         var run = await _engine.RunJobAsync(jobId, trigger, null, context.CancellationToken).ConfigureAwait(false);
