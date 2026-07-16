@@ -4,12 +4,29 @@ using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
 
+/// <summary>
+/// The +added / ~modified / −deleted summary of a run or a day, rendered everywhere as the same
+/// coloured tokens (History grid, timeline entries, timeline day totals) via one shared template.
+/// </summary>
+public sealed record ChangeSplit(int Added, int Modified, int Deleted)
+{
+    /// <summary>True when nothing changed — the token template shows a muted dash instead.</summary>
+    public bool HasNoChanges => Added == 0 && Modified == 0 && Deleted == 0;
+}
+
 /// <summary>One run inside the History timeline, with its lazily loaded object changes.</summary>
 public sealed partial class TimelineEntry : ObservableObject
 {
-    public TimelineEntry(SyncRun run) => Run = run;
+    public TimelineEntry(SyncRun run)
+    {
+        Run = run;
+        Split = new ChangeSplit(run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted);
+    }
 
     public SyncRun Run { get; }
+
+    /// <summary>The run's change counts in token form.</summary>
+    public ChangeSplit Split { get; }
 
     /// <summary>Local wall-clock time of the run, e.g. "2:05 PM".</summary>
     public string TimeLabel => Run.StartedAt.LocalDateTime.ToString("t");
@@ -48,12 +65,10 @@ public sealed class TimelineDay
         Date = date;
         DateLabel = dateLabel;
         Entries = entries;
-        foreach (var entry in entries)
-        {
-            Added += entry.Run.ObjectsAdded;
-            Modified += entry.Run.ObjectsModified;
-            Deleted += entry.Run.ObjectsDeleted;
-        }
+        Split = new ChangeSplit(
+            entries.Sum(e => e.Run.ObjectsAdded),
+            entries.Sum(e => e.Run.ObjectsModified),
+            entries.Sum(e => e.Run.ObjectsDeleted));
     }
 
     public DateTime Date { get; }
@@ -62,16 +77,10 @@ public sealed class TimelineDay
 
     public IReadOnlyList<TimelineEntry> Entries { get; }
 
-    public int Added { get; }
-
-    public int Modified { get; }
-
-    public int Deleted { get; }
+    /// <summary>The day's summed change counts in token form.</summary>
+    public ChangeSplit Split { get; }
 
     public string RunsLabel => Entries.Count == 1 ? "1 run" : $"{Entries.Count} runs";
-
-    /// <summary>True when no object changed that day (runs still show; the summary says so).</summary>
-    public bool HasNoChanges => Added == 0 && Modified == 0 && Deleted == 0;
 }
 
 /// <summary>Groups runs into timeline days. Pure, so the grouping and labels are unit-tested directly.</summary>

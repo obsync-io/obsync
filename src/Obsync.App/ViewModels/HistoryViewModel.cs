@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -152,11 +153,42 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         RefreshViews();
     }
 
-    partial void OnSelectedJobChanged(string value) => RefreshViews();
+    partial void OnSelectedJobChanged(string value) => OnFilterChanged();
 
-    partial void OnSelectedStatusChanged(StatusFilterOption value) => RefreshViews();
+    partial void OnSelectedStatusChanged(StatusFilterOption value) => OnFilterChanged();
 
-    partial void OnSearchTextChanged(string value) => RefreshViews();
+    partial void OnSearchTextChanged(string value) => OnFilterChanged();
+
+    private void OnFilterChanged()
+    {
+        RefreshViews();
+        OnPropertyChanged(nameof(HasActiveFilters));
+    }
+
+    /// <summary>True when any filter is off its default — shows the "Clear filters" action.</summary>
+    public bool HasActiveFilters =>
+        !string.Equals(SelectedJob, AllJobs, StringComparison.Ordinal)
+        || SelectedStatus?.Status is not null
+        || !string.IsNullOrWhiteSpace(SearchText);
+
+    /// <summary>Resets the job, status, and search filters to their defaults.</summary>
+    [RelayCommand]
+    private void ClearFilters()
+    {
+        SelectedJob = AllJobs;
+        SelectedStatus = StatusOptions[0];
+        SearchText = string.Empty;
+    }
+
+    /// <summary>Opens a run's pull request in the browser (PR-mode runs only).</summary>
+    [RelayCommand]
+    private void OpenPullRequest(SyncRun? run)
+    {
+        if (run?.PullRequestUrl is { Length: > 0 } url)
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+    }
 
     partial void OnSelectedRunChanged(SyncRun? value)
     {
