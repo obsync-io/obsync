@@ -30,6 +30,29 @@ public static class ObjectInventoryWriter
 
     public static string Serialize(string server, string database, IEnumerable<ObjectInventoryEntry> entries)
     {
+        return JsonSerializer.Serialize(BuildDocument(server, database, entries), Options) + "\n";
+    }
+
+    /// <summary>
+    /// Streams the manifest to <paramref name="destination"/> — byte-for-byte what
+    /// <see cref="Serialize"/> produces as UTF-8 (including the trailing LF), without ever
+    /// materializing the document as one string. At VLDB scale the string form is hundreds of
+    /// megabytes; the engine hashes and writes the streamed bytes instead.
+    /// <see cref="Serialize"/> stays as the reference implementation the byte-identity test
+    /// compares against.
+    /// </summary>
+    public static async Task WriteAsync(
+        Stream destination, string server, string database, IEnumerable<ObjectInventoryEntry> entries,
+        CancellationToken cancellationToken = default)
+    {
+        await JsonSerializer.SerializeAsync(destination, BuildDocument(server, database, entries), Options, cancellationToken)
+            .ConfigureAwait(false);
+        destination.WriteByte((byte)'\n');
+    }
+
+    private static ObjectInventoryDocument BuildDocument(
+        string server, string database, IEnumerable<ObjectInventoryEntry> entries)
+    {
         var ordered = entries
             .OrderBy(e => e.Type, StringComparer.Ordinal)
             .ThenBy(e => e.Schema, StringComparer.Ordinal)
@@ -42,7 +65,7 @@ public static class ObjectInventoryWriter
             counts[entry.Type] = counts.GetValueOrDefault(entry.Type) + 1;
         }
 
-        var document = new ObjectInventoryDocument
+        return new ObjectInventoryDocument
         {
             Server = server,
             Database = database,
@@ -50,7 +73,5 @@ public static class ObjectInventoryWriter
             CountsByType = counts,
             Objects = ordered,
         };
-
-        return JsonSerializer.Serialize(document, Options) + "\n";
     }
 }

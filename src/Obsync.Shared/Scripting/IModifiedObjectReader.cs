@@ -20,9 +20,14 @@ public interface IModifiedObjectReader
     /// <summary>
     /// Returns one snapshot item per catalog object of the requested types. Only types whose
     /// catalog rows live in <c>sys.objects</c> with a reliable <c>modify_date</c> may be requested.
+    /// A non-empty <paramref name="schemaFilter"/> narrows the snapshot server-side to those
+    /// schemas — safe because out-of-filter objects are out of the run's scope entirely (the
+    /// engine retains their committed files independently of the snapshot, and a widened filter
+    /// brings them back as no-prior planner violations that force the full scan).
     /// </summary>
     Task<IReadOnlyList<ModifiedObjectSnapshotItem>> GetSnapshotAsync(
         SqlConnectionProfile profile, string? password, string database,
         IReadOnlyCollection<SqlObjectType> types, int commandTimeoutSeconds,
-        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default);
+        int lockTimeoutSeconds = 0, IReadOnlyCollection<string>? schemaFilter = null,
+        CancellationToken cancellationToken = default);
 }

@@ -10,6 +10,15 @@ public interface IObjectStateRepository
         Guid jobId, string database, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The change-detection projection of <see cref="GetForJobDatabaseAsync"/>: identity, file
+    /// path, and last hash only. The engine holds one of these per tracked object for a whole
+    /// database pass — at VLDB scale the display-only columns of the wide row (timestamps, commit
+    /// SHA, status, error text) roughly double the resident memory for data the engine never reads.
+    /// </summary>
+    Task<IReadOnlyList<TrackedObjectState>> GetTrackingStatesAsync(
+        Guid jobId, string database, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Searches a job database's indexed objects by name (or <c>schema.name</c>), capped for display.
     /// An empty query returns the first objects alphabetically. Synthetic engine artifacts are
     /// excluded — only real catalog objects can have dependencies.
@@ -65,6 +74,34 @@ public sealed class ObjectStateRepository : IObjectStateRepository
             $"{SelectColumns} WHERE job_id = $job AND database_name = $db COLLATE NOCASE;",
             new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
         return [.. rows.Select(Map)];
+    }
+
+    public async Task<IReadOnlyList<TrackedObjectState>> GetTrackingStatesAsync(
+        Guid jobId, string database, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<SlimStateRow>(new CommandDefinition(
+            """
+            SELECT id AS Id, object_type AS ObjectType, schema_name AS SchemaName,
+                   object_name AS ObjectName, file_path AS FilePath, last_hash AS LastHash
+            FROM object_states
+            WHERE job_id = $job AND database_name = $db COLLATE NOCASE;
+            """,
+            new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+
+        // DatabaseName comes from the (NOCASE-matched) argument instead of one duplicated string
+        // per row; the unset wide-row fields stay at their defaults — the engine never reads them.
+        return [.. rows.Select(row => new TrackedObjectState
+        {
+            Id = row.Id,
+            JobId = jobId,
+            DatabaseName = database,
+            ObjectType = (Shared.Objects.SqlObjectType)row.ObjectType,
+            SchemaName = row.SchemaName,
+            ObjectName = row.ObjectName,
+            FilePath = row.FilePath,
+            LastHash = row.LastHash,
+        })];
     }
 
     public async Task<IReadOnlyList<TrackedObjectState>> SearchAsync(
@@ -227,6 +264,16 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         LastStatus = (Shared.RunStatus)row.LastStatus,
         ErrorMessage = row.ErrorMessage,
     };
+
+    private sealed class SlimStateRow
+    {
+        public long Id { get; set; }
+        public long ObjectType { get; set; }
+        public string SchemaName { get; set; } = string.Empty;
+        public string ObjectName { get; set; } = string.Empty;
+        public string FilePath { get; set; } = string.Empty;
+        public string LastHash { get; set; } = string.Empty;
+    }
 
     private sealed class StateRow
     {

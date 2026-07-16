@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -28,8 +29,6 @@ public interface ISyncEngine
 /// <inheritdoc cref="ISyncEngine" />
 public sealed class SyncEngine : ISyncEngine
 {
-    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
-
     /// <summary>How long a run waits for another job using the same repository before giving up.</summary>
     private static readonly TimeSpan WorkspaceLockTimeout = TimeSpan.FromMinutes(30);
 
@@ -38,6 +37,13 @@ public sealed class SyncEngine : ISyncEngine
     /// push would wedge the branch. (Realistic source: reference-data exports with wide rows.)
     /// </summary>
     private const int MaxScriptChars = 95_000_000;
+
+    /// <summary>
+    /// Most per-change rows persisted for one run. A VLDB first run generates hundreds of
+    /// thousands; storing them all is the single largest SQLite write of the system for detail
+    /// no view can display (the UI already caps at 2,000). The cap is surfaced in the run's log.
+    /// </summary>
+    private const int MaxPersistedChanges = 50_000;
 
     private readonly IJobRepository _jobs;
     private readonly IConnectionProfileRepository _connections;
@@ -344,9 +350,22 @@ public sealed class SyncEngine : ISyncEngine
             // next host restart. Fall back to marking the run failed with the reason.
             try
             {
+                // Per-change history rows are display/report detail, not tracking state (that is
+                // object_states). A VLDB first run records a million "Added" rows nobody can read
+                // — cap what is PERSISTED (the run's counters stay exact) and say so in the log.
+                var persistedChanges = context.Changes;
+                if (persistedChanges.Count > MaxPersistedChanges)
+                {
+                    context.Log(SyncLogLevel.Warning,
+                        $"The change list was capped at {MaxPersistedChanges:N0} of {persistedChanges.Count:N0} " +
+                        "entries for storage — the run's totals above remain exact; exported reports carry " +
+                        "the capped list.");
+                    persistedChanges = [.. persistedChanges.Take(MaxPersistedChanges)];
+                }
+
                 await _runs.UpdateAsync(run, persistToken).ConfigureAwait(false);
                 await _runs.AddLogsAsync(context.Logs, persistToken).ConfigureAwait(false);
-                await _runs.AddChangesAsync(run.Id, context.Changes, persistToken).ConfigureAwait(false);
+                await _runs.AddChangesAsync(run.Id, persistedChanges, persistToken).ConfigureAwait(false);
                 await _jobs.UpdateRunSummaryAsync(job.Id, new JobRunSummary
                 {
                     LastRunId = run.Id,
@@ -674,16 +693,46 @@ public sealed class SyncEngine : ISyncEngine
         var prior = fullSnapshot
             ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
             : BuildPriorMap(
-                await _objectStates.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false),
+                await _objectStates.GetTrackingStatesAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false),
                 database);
 
         // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
-        // `prior` is only read during processing, so a plain dictionary is safe to share.
-        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        // `prior` is only read during processing, so a plain dictionary is safe to share. `seen` is
+        // pre-sized to the tracked count — growing a ConcurrentDictionary from its default capacity
+        // to VLDB scale costs a dozen full-table rehashes under internal locks.
+        var seen = new ConcurrentDictionary<string, byte>(
+            Environment.ProcessorCount, Math.Max(1024, prior.Count * 2), StringComparer.OrdinalIgnoreCase);
         var changedStates = new ConcurrentBag<TrackedObjectState>();
         var inventory = new ConcurrentBag<ObjectInventoryEntry>();
+        // The per-object inventory entries feed only the object-inventory artifact and the docs
+        // generator — skip accumulating (and the per-object path mapping it costs) when both are off.
+        var wantInventoryEntries = context.Job.Selection.IncludeObjectInventory || context.Job.Selection.IncludeDocumentation;
         var skipped = new ConcurrentBag<string>();
         var ignoreRules = await LoadIgnoreRulesAsync(context, localPath, dbFolder, cancellationToken).ConfigureAwait(false);
+
+        // The self-heal existence probe for unchanged objects, batched: one directory enumeration
+        // per database pass instead of one File.Exists stat per tracked object (a violated-type
+        // full scan at VLDB scale otherwise pays ~1M NTFS stats). Lazy — incremental runs whose
+        // planner skipped everything never touch it. Rewrites are idempotent, so a file appearing
+        // mid-run can at worst cause one redundant write.
+        var existingFiles = new Lazy<HashSet<string>>(() =>
+        {
+            var dbRoot = Path.Combine(localPath, dbFolder.Replace('/', Path.DirectorySeparatorChar));
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (Directory.Exists(dbRoot))
+            {
+                var gitDir = $"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}";
+                foreach (var file in Directory.EnumerateFiles(dbRoot, "*", SearchOption.AllDirectories))
+                {
+                    if (!file.Contains(gitDir, StringComparison.OrdinalIgnoreCase))
+                    {
+                        set.Add(file);
+                    }
+                }
+            }
+
+            return set;
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // Snapshot the run counters so the docs artifact can tell whether THIS database changed
         // (databases are processed sequentially, so the delta is unambiguous).
@@ -716,15 +765,10 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
-            var hash = _hasher.ComputeHash(script);
-            var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
-            var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
 
             if (!isArtifact)
             {
                 context.IncrementScanned();
-                inventory.Add(new ObjectInventoryEntry(
-                    identity.Type.ToString(), identity.Schema, identity.Name, relativePath, hash));
 
                 // A live count during the longest phase — throttled so a VLDB run posts a few
                 // updates per second, not one per object.
@@ -742,6 +786,8 @@ public sealed class SyncEngine : ISyncEngine
                 // of a previously-scripted object, it must also block the type's watermark — else
                 // the next incremental run would treat the (still-oversized, still-changed) object
                 // as unchanged and the stale-file warning would vanish after this one run.
+                // (Checked before hashing — no point encoding and hashing 95MB+ of text about to
+                // be discarded.)
                 if (prior.ContainsKey(key))
                 {
                     skippedTypes.TryAdd(identity.Type, 0);
@@ -751,6 +797,20 @@ public sealed class SyncEngine : ISyncEngine
                 skipped.Add($"{identity.Type} {DescribeIdentity(identity)} — the generated script is " +
                     $"{script.Length / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
                 return;
+            }
+
+            // One UTF-8 encoding per object: the same bytes feed the content hash AND the file
+            // write (File.WriteAllTextAsync would encode the identical bytes a second time — the
+            // engine writes UTF-8 without BOM, exactly what the hasher consumes).
+            var scriptBytes = Encoding.UTF8.GetBytes(script);
+            var hash = _hasher.ComputeHash(scriptBytes);
+            var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
+            var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+
+            if (!isArtifact && wantInventoryEntries)
+            {
+                inventory.Add(new ObjectInventoryEntry(
+                    identity.Type.ToString(), identity.Schema, identity.Name, relativePath, hash));
             }
 
             var hasPrior = prior.TryGetValue(key, out var priorState);
@@ -773,7 +833,7 @@ public sealed class SyncEngine : ISyncEngine
                 // Self-heal drift: our recorded hash matches, but if the file is missing from the
                 // working tree (manual delete, fresh clone with stale state, a prior reset) rewrite it
                 // so the repository reflects the true source. If it is present, there is nothing to do.
-                if (File.Exists(absolutePath))
+                if (existingFiles.Value.Contains(absolutePath))
                 {
                     return;
                 }
@@ -781,7 +841,7 @@ public sealed class SyncEngine : ISyncEngine
                 changeType = ChangeType.Modified;
             }
 
-            await WriteFileAsync(context, localPath, repoRelativePath, script, context.Job.LocalExportPath, dbFolder, relativePath, ct)
+            await WriteFileAsync(context, localPath, repoRelativePath, scriptBytes, context.Job.LocalExportPath, dbFolder, relativePath, ct)
                 .ConfigureAwait(false);
 
             if (changeType == ChangeType.Added)
@@ -887,10 +947,146 @@ public sealed class SyncEngine : ISyncEngine
             skipped.Add($"Generated file {identity.Name} — {reason}");
         }
 
+        // Streams the object-inventory artifact through hash → diff → write without ever holding
+        // the serialized JSON as one string — at VLDB scale that string is hundreds of megabytes
+        // (and previously crossed the size guard, permanently skipping the artifact). Pass 1
+        // hashes the streamed bytes; only a CHANGED inventory is serialized a second time, straight
+        // to the atomic temp file. Byte-for-byte identical to the old string path (locked by
+        // ObjectInventoryWriter's byte-identity test), so existing hashes don't churn.
+        async Task ApplyInventoryArtifactAsync(IReadOnlyList<ObjectInventoryEntry> entries, CancellationToken ct)
+        {
+            var identity = ArtifactIdentity("object-inventory");
+            var key = StateKey(identity);
+            seen.TryAdd(key, 0);
+            try
+            {
+                string hash;
+                long byteLength;
+                using (var counting = new CountingHashStream())
+                {
+                    await ObjectInventoryWriter.WriteAsync(counting, context.Connection.ServerName, database, entries, ct)
+                        .ConfigureAwait(false);
+                    (hash, byteLength) = counting.Finish();
+                }
+
+                // The same guard as scripts (GitHub's 100 MB hard limit), applied to the actual
+                // byte length — strictly more accurate than the old char count.
+                if (byteLength > MaxScriptChars)
+                {
+                    context.IncrementFailed();
+                    skipped.Add($"Generated file object-inventory — the manifest is " +
+                        $"{byteLength / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
+                    return;
+                }
+
+                var repoRelativePath = RepositoryLayout.Combine(dbFolder, RepositoryLayout.ObjectInventoryFile);
+                var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                var hasPrior = prior.TryGetValue(key, out var priorState);
+
+                if (hasPrior && !string.Equals(priorState!.FilePath, repoRelativePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var oldAbsolute = Path.Combine(localPath, priorState.FilePath.Replace('/', Path.DirectorySeparatorChar));
+                    if (File.Exists(oldAbsolute))
+                    {
+                        File.Delete(oldAbsolute);
+                    }
+                }
+
+                var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
+                if (changeType == ChangeType.Unchanged)
+                {
+                    if (existingFiles.Value.Contains(absolutePath))
+                    {
+                        return;
+                    }
+
+                    changeType = ChangeType.Modified;
+                }
+
+                // Pass 2 (changed inventories only): stream straight into the atomic temp file.
+                EnsureDirectory(context, Path.GetDirectoryName(absolutePath)!);
+                var temp = absolutePath + ".obsync-tmp";
+                try
+                {
+                    await using (var file = File.Create(temp))
+                    {
+                        await ObjectInventoryWriter.WriteAsync(file, context.Connection.ServerName, database, entries, ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    File.Move(temp, absolutePath, overwrite: true);
+                }
+                catch
+                {
+                    try
+                    {
+                        File.Delete(temp);
+                    }
+                    catch (IOException)
+                    {
+                        // Best-effort: the git-side exclusion keeps a stray temp file out of commits.
+                    }
+
+                    throw;
+                }
+
+                if (!string.IsNullOrWhiteSpace(context.Job.LocalExportPath))
+                {
+                    var exportPath = Path.Combine(
+                        context.Job.LocalExportPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    EnsureDirectory(context, Path.GetDirectoryName(exportPath)!);
+                    File.Copy(absolutePath, exportPath, overwrite: true);
+                }
+
+                if (changeType == ChangeType.Added)
+                {
+                    context.IncrementAdded();
+                }
+                else
+                {
+                    context.IncrementModified();
+                }
+
+                context.AddChange(new ObjectChange
+                {
+                    ChangeType = changeType,
+                    ObjectType = identity.Type,
+                    Schema = identity.Schema,
+                    Name = identity.Name,
+                    RelativePath = repoRelativePath,
+                    PreviousHash = hasPrior ? priorState!.LastHash : null,
+                    NewHash = hash,
+                });
+
+                changedStates.Add(new TrackedObjectState
+                {
+                    JobId = context.Job.Id,
+                    DatabaseName = database,
+                    ObjectType = identity.Type,
+                    SchemaName = identity.Schema,
+                    ObjectName = identity.Name,
+                    FilePath = repoRelativePath,
+                    LastHash = hash,
+                    LastScriptedAt = _clock.UtcNow,
+                    LastRunId = run.Id,
+                    LastStatus = RunStatus.Running,
+                });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                RecordArtifactSkip(identity, ex.Message);
+            }
+        }
+
         // Artifacts, reference data, documentation, and deletions run after the parallel phase, so
         // they touch the accumulators alone.
         var inventorySnapshot = inventory.ToList();
-        await GenerateDatabaseArtifactsAsync(context, database, inventorySnapshot, ApplyItemAsync, RecordArtifactSkip, cancellationToken).ConfigureAwait(false);
+        if (context.Job.Selection.IncludeObjectInventory)
+        {
+            await ApplyInventoryArtifactAsync(inventorySnapshot, cancellationToken).ConfigureAwait(false);
+        }
+
+        await GenerateDatabaseArtifactsAsync(context, database, ApplyItemAsync, RecordArtifactSkip, cancellationToken).ConfigureAwait(false);
         await GenerateReferenceDataAsync(context, database, ApplyItemAsync, RecordDataSkip, cancellationToken).ConfigureAwait(false);
         await GenerateDocumentationAsync(
             context, database, inventorySnapshot, prior, seen, changesBeforeDatabase, ApplyItemAsync, cancellationToken)
@@ -963,7 +1159,7 @@ public sealed class SyncEngine : ISyncEngine
         var snapshot = await _modifiedObjects.GetSnapshotAsync(
             context.Connection, context.SqlPassword, database, capableTypes,
             context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
-            cancellationToken).ConfigureAwait(false);
+            context.Job.Selection.SchemaFilter, cancellationToken).ConfigureAwait(false);
 
         // "Ignored" for planning purposes means either an ignore-rule match or an out-of-filter
         // schema — the providers never yield those, so they must neither be skipped as unchanged
@@ -974,16 +1170,24 @@ public sealed class SyncEngine : ISyncEngine
             (type, schema, name) => ignoreRules.Matches(type, schema, name)
                 || (schemaFilter.Count > 0 && !schemaFilter.Contains(schema)));
 
+        // The inventory entries feed only the object-inventory artifact and the docs generator —
+        // when both are off, skip the per-skip path mapping and entry allocation (at VLDB scale
+        // that is millions of allocations per no-change run for consumers that don't exist).
+        var wantInventoryEntries =
+            context.Job.Selection.IncludeObjectInventory || context.Job.Selection.IncludeDocumentation;
         foreach (var skip in plan.SkippedItems)
         {
             var identity = new ScriptedObjectIdentity(skip.Item.Type, skip.Item.Schema, skip.Item.Name);
             seen.TryAdd(StateKey(identity), 0);
             context.IncrementScanned();
-            // The inventory wants the database-root-relative path; the mapper is deterministic, so
-            // this reproduces exactly what scripting the object would have recorded.
-            inventory.Add(new ObjectInventoryEntry(
-                skip.Item.Type.ToString(), skip.Item.Schema, skip.Item.Name,
-                _pathMapper.MapRelativePath(identity), skip.PriorState.LastHash));
+            if (wantInventoryEntries)
+            {
+                // The inventory wants the database-root-relative path; the mapper is deterministic,
+                // so this reproduces exactly what scripting the object would have recorded.
+                inventory.Add(new ObjectInventoryEntry(
+                    skip.Item.Type.ToString(), skip.Item.Schema, skip.Item.Name,
+                    _pathMapper.MapRelativePath(identity), skip.PriorState.LastHash));
+            }
         }
 
         // Ignored objects: seen (committed files retained, matching the full-scan path) but never
@@ -1037,7 +1241,7 @@ public sealed class SyncEngine : ISyncEngine
         var prior = fullSnapshot
             ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
             : BuildPriorMap(
-                await _objectStates.GetForJobDatabaseAsync(context.Job.Id, RepositoryLayout.ServerScopeName, cancellationToken).ConfigureAwait(false),
+                await _objectStates.GetTrackingStatesAsync(context.Job.Id, RepositoryLayout.ServerScopeName, cancellationToken).ConfigureAwait(false),
                 "The server scope");
 
         // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
@@ -1062,7 +1266,8 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
-            var hash = _hasher.ComputeHash(script);
+            var scriptBytes = Encoding.UTF8.GetBytes(script);
+            var hash = _hasher.ComputeHash(scriptBytes);
             var repoRelativePath = RepositoryLayout.Combine(serverRoot, relativePath);
             var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
 
@@ -1084,7 +1289,7 @@ public sealed class SyncEngine : ISyncEngine
                 changeType = ChangeType.Modified;
             }
 
-            await WriteFileAsync(context, localPath, repoRelativePath, script, context.Job.LocalExportPath, serverRoot, relativePath, ct)
+            await WriteFileAsync(context, localPath, repoRelativePath, scriptBytes, context.Job.LocalExportPath, serverRoot, relativePath, ct)
                 .ConfigureAwait(false);
 
             if (changeType == ChangeType.Added)
@@ -1254,7 +1459,7 @@ public sealed class SyncEngine : ISyncEngine
     /// and feeds each through the same change-detection path as a scripted object.
     /// </summary>
     private async Task GenerateDatabaseArtifactsAsync(
-        RunContext context, string database, IReadOnlyList<ObjectInventoryEntry> inventory,
+        RunContext context, string database,
         Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply,
         Action<ScriptedObjectIdentity, string> recordSkip, CancellationToken cancellationToken)
     {
@@ -1278,13 +1483,8 @@ public sealed class SyncEngine : ISyncEngine
             }
         }
 
-        if (selection.IncludeObjectInventory)
-        {
-            await GenerateAsync("object-inventory", RepositoryLayout.ObjectInventoryFile,
-                () => Task.FromResult(ObjectInventoryWriter.Serialize(context.Connection.ServerName, database, inventory)))
-                .ConfigureAwait(false);
-        }
-
+        // (The object-inventory artifact does not ride this string-based path: at VLDB scale its
+        // serialized form is hundreds of megabytes, so ScriptDatabaseAsync streams it instead.)
         if (selection.IncludeDatabaseOptions)
         {
             await GenerateAsync("database-options", RepositoryLayout.DatabaseOptionsFile,
@@ -1858,19 +2058,19 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     private static async Task WriteFileAsync(
-        RunContext context, string localPath, string repoRelativePath, string content,
+        RunContext context, string localPath, string repoRelativePath, byte[] utf8Content,
         string? localExportRoot, string dbFolder, string relativePath, CancellationToken cancellationToken)
     {
         var absolute = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
         EnsureDirectory(context, Path.GetDirectoryName(absolute)!);
-        await WriteAtomicAsync(absolute, content, cancellationToken).ConfigureAwait(false);
+        await WriteAtomicAsync(absolute, utf8Content, cancellationToken).ConfigureAwait(false);
 
         if (!string.IsNullOrWhiteSpace(localExportRoot))
         {
             var exportRelative = RepositoryLayout.Combine(dbFolder, relativePath).Replace('/', Path.DirectorySeparatorChar);
             var exportPath = Path.Combine(localExportRoot, exportRelative);
             EnsureDirectory(context, Path.GetDirectoryName(exportPath)!);
-            await WriteAtomicAsync(exportPath, content, cancellationToken).ConfigureAwait(false);
+            await WriteAtomicAsync(exportPath, utf8Content, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -1879,14 +2079,15 @@ public sealed class SyncEngine : ISyncEngine
     /// place — the change-detection self-heal is existence-only (it never re-reads content), so a
     /// torn file would otherwise be swept into the next commit as-is. The rename is atomic on NTFS;
     /// the temp name is cleaned up on failure here and excluded from git commits as a backstop for
-    /// a hard process kill between write and rename.
+    /// a hard process kill between write and rename. Takes the already-encoded UTF-8 bytes (no BOM)
+    /// so the hot path encodes each script exactly once — for the hash and this write.
     /// </summary>
-    private static async Task WriteAtomicAsync(string absolute, string content, CancellationToken cancellationToken)
+    private static async Task WriteAtomicAsync(string absolute, byte[] utf8Content, CancellationToken cancellationToken)
     {
         var temp = absolute + ".obsync-tmp";
         try
         {
-            await File.WriteAllTextAsync(temp, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllBytesAsync(temp, utf8Content, cancellationToken).ConfigureAwait(false);
             File.Move(temp, absolute, overwrite: true);
         }
         catch
@@ -1901,6 +2102,69 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             throw;
+        }
+    }
+
+    /// <summary>
+    /// A write-only sink that SHA-256-hashes and counts everything written to it — how the
+    /// streamed object-inventory artifact is fingerprinted without materializing its (potentially
+    /// hundreds of MB) serialized form. The hex format matches <see cref="Sha256ObjectHasher"/>
+    /// exactly, so streamed hashes compare against previously stored ones.
+    /// </summary>
+    private sealed class CountingHashStream : Stream
+    {
+        private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        private long _length;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _length;
+        public override long Position { get => _length; set => throw new NotSupportedException(); }
+
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            _hash.AppendData(buffer);
+            _length += buffer.Length;
+        }
+
+        public override void WriteByte(byte value) => Write([value]);
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            Write(buffer.AsSpan(offset, count));
+            return Task.CompletedTask;
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Write(buffer.Span);
+            return ValueTask.CompletedTask;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public (string Hash, long ByteLength) Finish() =>
+            (Convert.ToHexStringLower(_hash.GetHashAndReset()), _length);
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _hash.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 

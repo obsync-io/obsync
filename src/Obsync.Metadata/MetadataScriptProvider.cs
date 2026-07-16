@@ -109,7 +109,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (await reader.IsDBNullAsync(3, cancellationToken).ConfigureAwait(false))
+            if (reader.IsDBNull(3)) // sync: the row is already buffered once ReadAsync returned
             {
                 // Encrypted (WITH ENCRYPTION) or CLR modules have no retrievable T-SQL definition.
                 // Report them as skipped so the run warns instead of silently dropping objects.
@@ -156,7 +156,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (await reader.IsDBNullAsync(3, cancellationToken).ConfigureAwait(false))
+            if (reader.IsDBNull(3)) // sync: the row is already buffered once ReadAsync returned
             {
                 yield return RawScriptedObject.Skipped(
                     new ScriptedObjectIdentity(SqlObjectType.Trigger, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)),
@@ -189,7 +189,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         await using var reader = await ExecuteReaderWithRetryAsync(command, request.MaxRetries, cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (await reader.IsDBNullAsync(2, cancellationToken).ConfigureAwait(false))
+            if (reader.IsDBNull(2)) // sync: the row is already buffered once ReadAsync returned
             {
                 yield return RawScriptedObject.Skipped(
                     new ScriptedObjectIdentity(SqlObjectType.DatabaseDdlTrigger, string.Empty, reader.GetString(0), reader.GetInt32(1)),

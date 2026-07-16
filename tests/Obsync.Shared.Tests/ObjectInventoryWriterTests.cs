@@ -62,4 +62,26 @@ public sealed class ObjectInventoryWriterTests
         Assert.Contains("\"ObjectCount\": 0", json);
         Assert.Contains("\"Objects\": []", json);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WriteAsync_IsByteIdenticalToSerialize(bool empty)
+    {
+        // The engine hashes and writes the STREAMED form; a single differing byte would make every
+        // deployed installation re-commit its inventory (and mismatch all stored hashes). Serialize
+        // stays the reference implementation this locks against. Unicode entry included: multi-byte
+        // UTF-8 is where a divergent encoder would show.
+        ObjectInventoryEntry[] entries = empty
+            ? []
+            : [.. Entries, new("Table", "vault", "Ünïcødé ✓", "tables/vault.Ünïcødé ✓.sql", "dddd")];
+
+        var reference = System.Text.Encoding.UTF8.GetBytes(
+            ObjectInventoryWriter.Serialize("SRV", "SalesDB", entries));
+
+        using var streamed = new MemoryStream();
+        await ObjectInventoryWriter.WriteAsync(streamed, "SRV", "SalesDB", entries);
+
+        Assert.Equal(reference, streamed.ToArray());
+    }
 }

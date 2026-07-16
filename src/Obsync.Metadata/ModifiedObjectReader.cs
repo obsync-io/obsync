@@ -34,7 +34,8 @@ public sealed class ModifiedObjectReader : IModifiedObjectReader
     public async Task<IReadOnlyList<ModifiedObjectSnapshotItem>> GetSnapshotAsync(
         SqlConnectionProfile profile, string? password, string database,
         IReadOnlyCollection<SqlObjectType> types, int commandTimeoutSeconds,
-        int lockTimeoutSeconds = 0, CancellationToken cancellationToken = default)
+        int lockTimeoutSeconds = 0, IReadOnlyCollection<string>? schemaFilter = null,
+        CancellationToken cancellationToken = default)
     {
         var codeToType = new Dictionary<string, SqlObjectType>(StringComparer.Ordinal);
         foreach (var type in types)
@@ -65,17 +66,28 @@ public sealed class ModifiedObjectReader : IModifiedObjectReader
         await using var command = connection.CreateCommand();
         // Sequences keep the ms-shipped rows because the sequence scripting query has no
         // is_ms_shipped filter — the snapshot must cover exactly what the providers can yield.
+        // The schema filter matches the scripting queries' server-side narrowing: on a filtered
+        // VLDB job the snapshot would otherwise stream every out-of-scope row on every run.
+        var schemas = schemaFilter is { Count: > 0 } ? schemaFilter.ToList() : null;
+        var schemaClause = schemas is null
+            ? string.Empty
+            : $" AND s.name IN ({string.Join(", ", schemas.Select((_, i) => $"@sf{i}"))})";
         command.CommandText =
             $"""
              SELECT o.type, s.name, o.name, o.modify_date
              FROM sys.objects o
              JOIN sys.schemas s ON s.schema_id = o.schema_id
-             WHERE o.type IN ({placeholders}) AND (o.is_ms_shipped = 0 OR o.type = 'SO');
+             WHERE o.type IN ({placeholders}) AND (o.is_ms_shipped = 0 OR o.type = 'SO'){schemaClause};
              """;
         command.CommandTimeout = commandTimeoutSeconds;
         for (var i = 0; i < orderedCodes.Count; i++)
         {
             command.Parameters.AddWithValue($"@t{i}", orderedCodes[i]);
+        }
+
+        for (var i = 0; schemas is not null && i < schemas.Count; i++)
+        {
+            command.Parameters.AddWithValue($"@sf{i}", schemas[i]);
         }
 
         var items = new List<ModifiedObjectSnapshotItem>();
