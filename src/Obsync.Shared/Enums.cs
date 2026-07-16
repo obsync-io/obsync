@@ -121,12 +121,45 @@ public enum AuditAction
 
     /// <summary>A run failed — written by the engine for every trigger.</summary>
     RunFailed,
+
+    /// <summary>A running job was cancelled by the user.</summary>
+    RunCancelled,
     ServerAdded,
     ServerEdited,
     ServerDeleted,
     RepositoryAdded,
     RepositoryEdited,
     RepositoryDeleted,
+
+    /// <summary>A job's schedule was paused (disabled) from the job list.</summary>
+    JobPaused,
+
+    /// <summary>A job's schedule was resumed (re-enabled) from the job list.</summary>
+    JobResumed,
+
+    /// <summary>A job was duplicated into a new (paused) copy.</summary>
+    JobDuplicated,
+
+    /// <summary>A job's configuration was exported to a secret-free file.</summary>
+    JobExported,
+
+    /// <summary>An application settings section was saved.</summary>
+    SettingsChanged,
+
+    /// <summary>A stored secret (SQL password, GitHub token, SMTP or proxy password) was updated.</summary>
+    CredentialsUpdated,
+
+    /// <summary>A least-privilege permission (or revoke) script was generated.</summary>
+    PermissionScriptGenerated,
+
+    /// <summary>The audit trail was exported.</summary>
+    AuditLogExported,
+
+    /// <summary>A diagnostics support bundle was exported.</summary>
+    SupportBundleExported,
+
+    /// <summary>An update check was performed.</summary>
+    UpdateChecked,
 }
 
 /// <summary>The outcome of a sync run.</summary>
