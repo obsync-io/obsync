@@ -30,8 +30,11 @@ public sealed class JobAdvancedOptions
     /// <summary>
     /// Skip re-scripting objects whose <c>sys.objects.modify_date</c> is older than the last
     /// successful run's watermark. The big steady-state win on very large databases. Caveat:
-    /// permission- or extended-property-only changes don't bump <c>modify_date</c>; turning this
-    /// off for one run captures those. Export runs are always full snapshots.
+    /// permission- and extended-property-only changes don't bump <c>modify_date</c> — the
+    /// consolidated permissions file still captures grants every run, but a table file's INLINE
+    /// grant/extended-property section can lag until the table itself changes; turning this off
+    /// for one run captures those. (Index create/drop and trigger creation DO bump the table's
+    /// modify_date, so they are picked up.) Export runs are always full snapshots.
     /// </summary>
     public bool IncrementalScripting { get; set; } = true;
 }

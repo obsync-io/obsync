@@ -71,21 +71,21 @@ internal static class IncrementalPlanner
                 newWatermarks[item.Type] = item.ModifyDate;
             }
 
+            // Ignored/out-of-filter objects are never scripted, but their committed files are
+            // deliberately retained. They must be reported REGARDLESS of modify_date — this check
+            // sits before the watermark cutoff because a recently-modified out-of-filter object is
+            // still out of scope, and dropping it here made the deletion pass treat it as a
+            // dropped object and delete its committed file.
+            if (isIgnored(item.Type, item.Schema, item.Name))
+            {
+                ignored.Add(item);
+                continue;
+            }
+
             // Only objects strictly older than the type's watermark are skip/violation candidates;
             // a boundary modify_date == watermark is re-read (see the >= comparison above).
             if (!watermarks.TryGetValue(item.Type, out var watermark) || item.ModifyDate >= watermark)
             {
-                continue;
-            }
-
-            if (isIgnored(item.Type, item.Schema, item.Name))
-            {
-                // Ignored objects are never scripted, but their committed files are deliberately
-                // retained (the full-scan path marks them seen BEFORE the ignore check). They must
-                // be reported so the engine marks them seen here too — dropping them made the
-                // deletion pass treat them as dropped objects and delete their committed files,
-                // but only when incremental filtering kicked in.
-                ignored.Add(item);
                 continue;
             }
 

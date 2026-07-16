@@ -68,7 +68,7 @@ public static class ReferenceDataScriptBuilder
     internal static string FormatLiteral(object? value) => value switch
     {
         null or DBNull => "NULL",
-        string s => $"N'{s.Replace("'", "''")}'",
+        string s => FormatString(s),
         char c => $"N'{(c == '\'' ? "''" : c.ToString())}'",
         bool b => b ? "1" : "0",
         byte[] bytes => bytes.Length == 0 ? "0x" : $"0x{Convert.ToHexString(bytes)}",
@@ -84,6 +84,52 @@ public static class ReferenceDataScriptBuilder
         IFormattable n => n.ToString(null, CultureInfo.InvariantCulture),
         // Unknown provider-specific types (sql_variant payloads etc.): script as a text literal —
         // deterministic, and valid for the common variant cases.
-        _ => $"N'{(value.ToString() ?? string.Empty).Replace("'", "''")}'",
+        _ => FormatString(value.ToString() ?? string.Empty),
     };
+
+    /// <summary>
+    /// A string literal that never spans physical lines: CR/LF inside the DATA are emitted as
+    /// <c>CHAR(13)</c>/<c>CHAR(10)</c> concatenations. A raw newline in the literal would be
+    /// rewritten by the engine's line-based script normalization (CRLF→LF, trailing-space trim),
+    /// silently corrupting the exported values.
+    /// </summary>
+    internal static string FormatString(string value)
+    {
+        if (!value.Contains('\r') && !value.Contains('\n'))
+        {
+            return $"N'{value.Replace("'", "''")}'";
+        }
+
+        var parts = new List<string>();
+        var segment = new StringBuilder();
+        void FlushSegment()
+        {
+            if (segment.Length > 0)
+            {
+                parts.Add($"N'{segment.Replace("'", "''")}'");
+                segment.Clear();
+            }
+        }
+
+        foreach (var ch in value)
+        {
+            if (ch == '\r')
+            {
+                FlushSegment();
+                parts.Add("CHAR(13)");
+            }
+            else if (ch == '\n')
+            {
+                FlushSegment();
+                parts.Add("CHAR(10)");
+            }
+            else
+            {
+                segment.Append(ch);
+            }
+        }
+
+        FlushSegment();
+        return $"({string.Join(" + ", parts)})";
+    }
 }

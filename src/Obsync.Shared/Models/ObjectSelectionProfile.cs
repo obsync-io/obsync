@@ -38,7 +38,8 @@ public sealed class ObjectSelectionProfile
     /// <summary>Write <c>metadata/database-options.sql</c>: the database-level <c>ALTER DATABASE … SET</c> settings.</summary>
     public bool IncludeDatabaseOptions { get; set; } = true;
 
-    /// <summary>Write <c>security/permissions/permissions.sql</c>: consolidated database-scoped GRANT/DENY statements.</summary>
+    /// <summary>Write <c>security/permissions/permissions.sql</c>: consolidated GRANT/DENY statements
+    /// across the database, schema, object, column, and type scopes.</summary>
     public bool IncludeDatabasePermissionsFile { get; set; } = true;
 
     /// <summary>Write <c>docs/README.md</c>: a generated object index + data dictionary (markdown).</summary>

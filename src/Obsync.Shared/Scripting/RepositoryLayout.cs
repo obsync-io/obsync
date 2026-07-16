@@ -19,8 +19,10 @@ public static class RepositoryLayout
     public const string DatabaseOptionsFile = "metadata/database-options.sql";
 
     /// <summary>
-    /// Consolidated database-scoped GRANT/DENY permission script, relative to the database root.
-    /// (Object-level permissions are also scripted inline within each object's own file.)
+    /// Consolidated GRANT/DENY permission script (database, schema, object, column, and type
+    /// scopes), relative to the database root. This file is the authoritative permission record:
+    /// only SMO-scripted types (tables, users, UDTs, …) additionally carry grants inline in their
+    /// own files — the metadata fast-path types (procedures, views, functions, …) do not.
     /// </summary>
     public const string PermissionsFile = "security/permissions/permissions.sql";
 

@@ -7,5 +7,8 @@ public sealed class ObsyncDataOptions
     public string DatabasePath { get; set; } = string.Empty;
 
     /// <summary>Busy timeout (ms) applied to each connection, easing UI/Service contention.</summary>
-    public int BusyTimeoutMs { get; set; } = 5000;
+    // 30s, not the SQLite-ish 5s default: a VLDB state batch holds one write transaction for
+    // multiple seconds, and the app and service write concurrently — a shorter timeout surfaces
+    // spurious "database is locked" failures under exactly that overlap.
+    public int BusyTimeoutMs { get; set; } = 30000;
 }

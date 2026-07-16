@@ -109,4 +109,24 @@ public sealed class ReferenceDataScriptBuilderTests
 
         Assert.Equal(first, second);
     }
+
+    [Fact]
+    public void FormatLiteral_NewlinesInData_NeverSpanPhysicalLines()
+    {
+        // A raw newline inside the literal would be rewritten by the engine's line-based script
+        // normalization (CRLF→LF + trailing-space trim), silently corrupting the exported data.
+        var literal = ReferenceDataScriptBuilder.FormatLiteral("line1\r\nline2");
+
+        Assert.Equal("(N'line1' + CHAR(13) + CHAR(10) + N'line2')", literal);
+        Assert.DoesNotContain('\n', literal);
+        Assert.DoesNotContain('\r', literal);
+    }
+
+    [Fact]
+    public void FormatLiteral_NewlineEdgeCases_AreExact()
+    {
+        Assert.Equal("(CHAR(10))", ReferenceDataScriptBuilder.FormatLiteral("\n"));
+        Assert.Equal("(N'a' + CHAR(13))", ReferenceDataScriptBuilder.FormatLiteral("a\r"));
+        Assert.Equal("(CHAR(10) + N'it''s')", ReferenceDataScriptBuilder.FormatLiteral("\nit's"));
+    }
 }

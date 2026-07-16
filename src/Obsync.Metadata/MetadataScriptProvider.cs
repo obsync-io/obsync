@@ -80,11 +80,15 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var codes = string.Join(", ", typeCodes.Select((_, i) => $"@t{i}"));
+        // LEFT JOIN, not INNER: CLR modules (type codes PC/FS/FT) have NO sys.sql_modules row at
+        // all — an inner join dropped them silently (never scripted, never reported, and eligible
+        // for wrongful deletion). With the left join they surface with a NULL definition and take
+        // the skip-report path below, exactly like encrypted modules.
         var sql = new StringBuilder(
             $"""
              SELECT s.name, o.name, o.object_id, m.definition
-             FROM sys.sql_modules m
-             JOIN sys.objects o ON o.object_id = m.object_id
+             FROM sys.objects o
+             LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id
              JOIN sys.schemas s ON s.schema_id = o.schema_id
              WHERE o.is_ms_shipped = 0 AND o.type IN ({codes})
              """);
@@ -128,13 +132,15 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
     private async IAsyncEnumerable<RawScriptedObject> ReadDmlTriggersAsync(
         SqlConnection connection, ScriptRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // LEFT JOIN for the same reason as ReadModulesAsync: a CLR trigger (type TA) has no
+        // sys.sql_modules row and must surface as a reported skip, not vanish.
         var sql = new StringBuilder(
             """
             SELECT ps.name, t.name, t.object_id, m.definition
             FROM sys.triggers t
             JOIN sys.objects po ON po.object_id = t.parent_id
             JOIN sys.schemas ps ON ps.schema_id = po.schema_id
-            JOIN sys.sql_modules m ON m.object_id = t.object_id
+            LEFT JOIN sys.sql_modules m ON m.object_id = t.object_id
             WHERE t.is_ms_shipped = 0 AND t.parent_class = 1
             """);
         AppendSchemaFilter(sql, "ps.name", request.Selection.SchemaFilter);
@@ -169,11 +175,12 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
     private async IAsyncEnumerable<RawScriptedObject> ReadDatabaseDdlTriggersAsync(
         SqlConnection connection, ScriptRequest request, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // LEFT JOIN so a CLR DDL trigger (no sys.sql_modules row) surfaces as a reported skip.
         const string sql =
             """
             SELECT t.name, t.object_id, m.definition
             FROM sys.triggers t
-            JOIN sys.sql_modules m ON m.object_id = t.object_id
+            LEFT JOIN sys.sql_modules m ON m.object_id = t.object_id
             WHERE t.is_ms_shipped = 0 AND t.parent_class = 0
             ORDER BY t.name;
             """;

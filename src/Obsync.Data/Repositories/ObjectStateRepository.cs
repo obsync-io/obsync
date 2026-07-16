@@ -59,8 +59,10 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         Guid jobId, string database, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        // NOCASE database match: a re-typed database name that differs only by case must load the
+        // same prior state, not orphan it (which would re-add everything and delete the old tree).
         var rows = await connection.QueryAsync<StateRow>(new CommandDefinition(
-            $"{SelectColumns} WHERE job_id = $job AND database_name = $db;",
+            $"{SelectColumns} WHERE job_id = $job AND database_name = $db COLLATE NOCASE;",
             new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
         return [.. rows.Select(Map)];
     }
@@ -111,7 +113,11 @@ public sealed class ObjectStateRepository : IObjectStateRepository
             object_id = excluded.object_id, file_path = excluded.file_path, last_hash = excluded.last_hash,
             last_scripted_at = excluded.last_scripted_at, last_committed_at = excluded.last_committed_at,
             last_commit_sha = excluded.last_commit_sha, last_run_id = excluded.last_run_id,
-            last_status = excluded.last_status, error_message = excluded.error_message;
+            last_status = excluded.last_status, error_message = excluded.error_message,
+            -- The identity index is NOCASE (V011): a case-only rename updates the existing row, and
+            -- these keep the stored casing current with the live catalog.
+            database_name = excluded.database_name, schema_name = excluded.schema_name,
+            object_name = excluded.object_name;
         """;
 
     private static object ToParameters(TrackedObjectState state) => new

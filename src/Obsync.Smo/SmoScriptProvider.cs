@@ -41,15 +41,19 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
 
     private static readonly IReadOnlyDictionary<SqlObjectType, SmoTypeMap> Map = new Dictionary<SqlObjectType, SmoTypeMap>
     {
+        // HasIsSystemObject must match the SMO class EXACTLY: reading the property goes through a
+        // dynamic binder, and asking a class that lacks it (e.g. UserDefinedDataType) throws at
+        // runtime and fails the whole run. Only Table, User, and SqlAssembly expose it (SMO 181).
+        // SmoTypeMapTests verifies every flag against the real SMO types by reflection.
         [SqlObjectType.Table] = new(d => d.Tables, true, true, typeof(Table)),
         [SqlObjectType.User] = new(d => d.Users, false, true),
         [SqlObjectType.Role] = new(d => d.Roles, false, false),
         [SqlObjectType.ApplicationRole] = new(d => d.ApplicationRoles, false, false),
-        [SqlObjectType.UserDefinedDataType] = new(d => d.UserDefinedDataTypes, true, true),
-        [SqlObjectType.UserDefinedTableType] = new(d => d.UserDefinedTableTypes, true, true, typeof(UserDefinedTableType)),
-        [SqlObjectType.XmlSchemaCollection] = new(d => d.XmlSchemaCollections, true, true),
-        [SqlObjectType.UserDefinedType] = new(d => d.UserDefinedTypes, true, true),
-        [SqlObjectType.UserDefinedAggregate] = new(d => d.UserDefinedAggregates, true, true),
+        [SqlObjectType.UserDefinedDataType] = new(d => d.UserDefinedDataTypes, true, false),
+        [SqlObjectType.UserDefinedTableType] = new(d => d.UserDefinedTableTypes, true, false, typeof(UserDefinedTableType)),
+        [SqlObjectType.XmlSchemaCollection] = new(d => d.XmlSchemaCollections, true, false),
+        [SqlObjectType.UserDefinedType] = new(d => d.UserDefinedTypes, true, false),
+        [SqlObjectType.UserDefinedAggregate] = new(d => d.UserDefinedAggregates, true, false),
         [SqlObjectType.PartitionFunction] = new(d => d.PartitionFunctions, false, false),
         [SqlObjectType.PartitionScheme] = new(d => d.PartitionSchemes, false, false),
         [SqlObjectType.Assembly] = new(d => d.Assemblies, false, true),
@@ -330,9 +334,12 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
             return;
         }
 
+        // Request only fields the class actually has — asking for a missing one throws.
         string[] fields = typeMap.HeavyClrType == typeof(Table)
             ? ["Schema", "Name", "IsSystemObject", "DateLastModified"]
-            : ["Schema", "Name", "IsSystemObject"];
+            : typeMap.HasIsSystemObject
+                ? ["Schema", "Name", "IsSystemObject"]
+                : ["Schema", "Name"];
         server.SetDefaultInitFields(typeMap.HeavyClrType, fields);
     }
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -130,6 +131,25 @@ public sealed class SyncEngine : ISyncEngine
         var job = await _jobs.GetAsync(jobId, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Job {jobId} was not found.");
 
+        // A disabled job must never run unattended — the reconcile loop unschedules it within one
+        // tick, but a trigger already queued (or firing inside that window) still reaches here.
+        // Manual runs are the user's explicit choice and stay allowed.
+        if (!job.Enabled && trigger != RunTrigger.Manual)
+        {
+            _logger.LogInformation(
+                "Job {JobId} ({JobName}) {Trigger} run skipped — the job is disabled.", job.Id, job.Name, trigger);
+            return new SyncRun
+            {
+                JobId = job.Id,
+                JobName = job.Name,
+                Trigger = trigger,
+                Status = RunStatus.NoChanges,
+                StartedAt = _clock.UtcNow,
+                CompletedAt = _clock.UtcNow,
+                Tags = [.. job.Tags],
+            };
+        }
+
         // Cross-process run lock: the app, the scheduler service, and the CLI all execute jobs
         // against the same database and git workspace, so the same job must never run twice at
         // once across processes. Held until this method returns (after final persistence).
@@ -254,7 +274,9 @@ public sealed class SyncEngine : ISyncEngine
         var started = _clock.UtcNow;
         var run = new SyncRun
         {
-            RunKey = started.LocalDateTime.ToString("yyyyMMdd-HHmmss"),
+            // Invariant calendar: run keys feed PR branch names and commit subjects, and must not
+            // vary with the host account's culture (e.g. a non-Gregorian default calendar).
+            RunKey = started.LocalDateTime.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture),
             JobId = job.Id,
             JobName = job.Name,
             Trigger = trigger,
@@ -317,29 +339,49 @@ public sealed class SyncEngine : ISyncEngine
                 log.RunId = run.Id;
             }
 
-            await _runs.UpdateAsync(run, persistToken).ConfigureAwait(false);
-            await _runs.AddLogsAsync(context.Logs, persistToken).ConfigureAwait(false);
-            await _runs.AddChangesAsync(run.Id, context.Changes, persistToken).ConfigureAwait(false);
-            await _jobs.UpdateRunSummaryAsync(job.Id, new JobRunSummary
+            // A persistence failure here (disk full, SQLITE_BUSY past its timeout) must not escape:
+            // it would mask the run's real outcome AND leave the row stuck on "Running" until the
+            // next host restart. Fall back to marking the run failed with the reason.
+            try
             {
-                LastRunId = run.Id,
-                LastStatus = run.Status,
-                LastRunAt = run.StartedAt,
-                LastChangeCount = run.ChangeCount,
-                LastCommitSha = run.CommitSha,
-                // Standard cadences compute a preview here; the scheduler refines cron next-runs.
-                NextRunAt = job.Schedule.GetNextRun(completed) ?? job.RunSummary.NextRunAt,
-            }, persistToken).ConfigureAwait(false);
+                await _runs.UpdateAsync(run, persistToken).ConfigureAwait(false);
+                await _runs.AddLogsAsync(context.Logs, persistToken).ConfigureAwait(false);
+                await _runs.AddChangesAsync(run.Id, context.Changes, persistToken).ConfigureAwait(false);
+                await _jobs.UpdateRunSummaryAsync(job.Id, new JobRunSummary
+                {
+                    LastRunId = run.Id,
+                    LastStatus = run.Status,
+                    LastRunAt = run.StartedAt,
+                    LastChangeCount = run.ChangeCount,
+                    LastCommitSha = run.CommitSha,
+                    // Standard cadences compute a preview here; the scheduler refines cron next-runs.
+                    NextRunAt = job.Schedule.GetNextRun(completed) ?? job.RunSummary.NextRunAt,
+                }, persistToken).ConfigureAwait(false);
 
-            // One audit event per run outcome, written here so scheduled/service runs are covered
-            // too (they never pass through the app's coordinator). The actor is the account that
-            // executed the run — the interactive user for Run Now, the service account otherwise;
-            // the detail carries the trigger, change count, commit, and error so the trail answers
-            // "what ran, what changed, and did the push succeed" on its own.
-            await _audit.WriteAsync(
-                run.Status == RunStatus.Failed ? AuditAction.RunFailed : AuditAction.RunCompleted,
-                "Job", job.Id.ToString(), job.Name,
-                $"{run.Trigger} run {run.RunKey} {OutcomeSummary(run)}", persistToken).ConfigureAwait(false);
+                // One audit event per run outcome, written here so scheduled/service runs are covered
+                // too (they never pass through the app's coordinator). The actor is the account that
+                // executed the run — the interactive user for Run Now, the service account otherwise;
+                // the detail carries the trigger, change count, commit, and error so the trail answers
+                // "what ran, what changed, and did the push succeed" on its own.
+                await _audit.WriteAsync(
+                    run.Status == RunStatus.Failed ? AuditAction.RunFailed : AuditAction.RunCompleted,
+                    "Job", job.Id.ToString(), job.Name,
+                    $"{run.Trigger} run {run.RunKey} {OutcomeSummary(run)}", persistToken).ConfigureAwait(false);
+            }
+            catch (Exception persistEx)
+            {
+                _logger.LogError(persistEx, "Persisting the final state of run {RunKey} failed.", run.RunKey);
+                try
+                {
+                    await _runs.FailRunAsync(run.Id, completed,
+                        $"The run finished ({run.Status}) but its final state could not be saved: {persistEx.Message}",
+                        persistToken).ConfigureAwait(false);
+                }
+                catch (Exception failEx)
+                {
+                    _logger.LogError(failEx, "Even the failure fallback for run {RunKey} could not be saved.", run.RunKey);
+                }
+            }
         }
 
         // Best-effort alerting (email/webhook) after the run is fully persisted, with a
@@ -557,32 +599,50 @@ public sealed class SyncEngine : ISyncEngine
         context.Report(SyncPhase.Connecting, $"Connecting to {context.Connection.ServerName}…");
         Directory.CreateDirectory(outputRoot);
 
-        await ScriptServerAsync(run, context, outputRoot, cancellationToken, fullSnapshot: true).ConfigureAwait(false);
-
-        var types = context.Job.Selection.ResolveTypes();
-        foreach (var database in context.Databases)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ScriptDatabaseAsync(run, context, database, types, outputRoot, cancellationToken, fullSnapshot: true)
-                .ConfigureAwait(false);
+            await ScriptServerAsync(run, context, outputRoot, cancellationToken, fullSnapshot: true).ConfigureAwait(false);
+
+            var types = context.Job.Selection.ResolveTypes();
+            foreach (var database in context.Databases)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await ScriptDatabaseAsync(run, context, database, types, outputRoot, cancellationToken, fullSnapshot: true)
+                    .ConfigureAwait(false);
+            }
+
+            if (isZip)
+            {
+                context.Report(SyncPhase.Committing, "Packaging the export…");
+                // Build next to the destination, then swap: a failure mid-zip must never have
+                // destroyed the previous good export.
+                var temp = destination + ".obsync-tmp";
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+
+                ZipFile.CreateFromDirectory(outputRoot, temp, CompressionLevel.Optimal, includeBaseDirectory: false);
+                File.Move(temp, destination, overwrite: true);
+            }
         }
-
-        if (isZip)
+        finally
         {
-            context.Report(SyncPhase.Committing, "Packaging the export…");
-            if (File.Exists(destination))
+            if (isZip)
             {
-                File.Delete(destination);
-            }
-
-            ZipFile.CreateFromDirectory(outputRoot, destination, CompressionLevel.Optimal, includeBaseDirectory: false);
-            try
-            {
-                Directory.Delete(outputRoot, recursive: true);
-            }
-            catch (IOException)
-            {
-                // Best-effort cleanup of the temp staging directory.
+                // The staging directory is throwaway on every path — success, failure, or cancel.
+                try
+                {
+                    Directory.Delete(outputRoot, recursive: true);
+                }
+                catch (IOException)
+                {
+                    // Best-effort cleanup of the temp staging directory.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Same: never let cleanup mask the run's outcome.
+                }
             }
         }
 
@@ -629,6 +689,11 @@ public sealed class SyncEngine : ISyncEngine
         // (databases are processed sequentially, so the delta is unambiguous).
         var changesBeforeDatabase = context.Added + context.Modified;
 
+        // Types whose watermark must not advance this run because an object with prior state was
+        // skipped — advancing past the skipped object's change would hide it from every later
+        // incremental run. Declared before the apply/skip closures that record into it.
+        var skippedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
+
         // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
         // database artifact). Artifacts ride the same change-detection path so an options- or
         // permissions-only change still produces a commit, while an unchanged run still produces none.
@@ -673,7 +738,15 @@ public sealed class SyncEngine : ISyncEngine
             if (script.Length > MaxScriptChars)
             {
                 // Skip-and-report (file retained via "seen"): committing it would make GitHub
-                // reject the push and wedge the branch for every later run.
+                // reject the push and wedge the branch for every later run. Like every other skip
+                // of a previously-scripted object, it must also block the type's watermark — else
+                // the next incremental run would treat the (still-oversized, still-changed) object
+                // as unchanged and the stale-file warning would vanish after this one run.
+                if (prior.ContainsKey(key))
+                {
+                    skippedTypes.TryAdd(identity.Type, 0);
+                }
+
                 context.IncrementFailed();
                 skipped.Add($"{identity.Type} {DescribeIdentity(identity)} — the generated script is " +
                     $"{script.Length / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
@@ -756,7 +829,6 @@ public sealed class SyncEngine : ISyncEngine
         // state (e.g. permanently unscriptable encrypted modules) are covered by the planner's
         // no-prior violation rule instead, which forces a full scan of the type every run — gating
         // the watermark for those too would just keep it stale forever with no added safety.
-        var skippedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
         Task RecordSkipAsync(RawScriptedObject raw)
         {
             var key = StateKey(raw.Identity);
@@ -832,7 +904,24 @@ public sealed class SyncEngine : ISyncEngine
                 string.Join("\n", details.Take(100)));
         }
 
-        ApplyDeletions(context, database, localPath, prior, seen);
+        // A schema filter narrows what the providers YIELD (the filter is applied server-side), so
+        // out-of-filter objects never mark themselves seen. Their committed files must be retained,
+        // not deleted — narrowing the filter is a scope change, not a drop. This mirrors the
+        // ignore-rule and incremental-planner semantics; widening the filter later re-scripts them
+        // in place.
+        var schemaFilter = context.Job.Selection.SchemaFilter;
+        if (schemaFilter.Count > 0)
+        {
+            foreach (var (key, state) in prior)
+            {
+                if (state.SchemaName.Length > 0 && !schemaFilter.Contains(state.SchemaName))
+                {
+                    seen.TryAdd(key, 0);
+                }
+            }
+        }
+
+        ApplyDeletions(context, run.Trigger, database, localPath, prior, seen, types);
 
         // A type that had skips must not advance its watermark: the skipped object's change may
         // predate the new watermark, and advancing past it would hide the change from every later
@@ -1111,7 +1200,7 @@ public sealed class SyncEngine : ISyncEngine
             }
         }
 
-        ApplyDeletions(context, RepositoryLayout.ServerScopeName, localPath, prior, seen);
+        ApplyDeletions(context, run.Trigger, RepositoryLayout.ServerScopeName, localPath, prior, seen, serverTypes);
 
         context.PendingStates.AddRange(changedStates);
     }
@@ -1342,15 +1431,17 @@ public sealed class SyncEngine : ISyncEngine
         new(SqlObjectType.DatabaseArtifact, string.Empty, name);
 
     private static void ApplyDeletions(
-        RunContext context, string database, string localPath,
-        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen)
+        RunContext context, RunTrigger trigger, string database, string localPath,
+        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen,
+        IReadOnlyCollection<SqlObjectType> scopedTypes)
     {
         if (!context.Job.Selection.RemoveDroppedObjects)
         {
             return;
         }
 
-        var deletedIds = new List<long>();
+        var typesInScope = scopedTypes as IReadOnlySet<SqlObjectType> ?? scopedTypes.ToHashSet();
+        var candidates = new List<TrackedObjectState>();
         foreach (var (key, state) in prior)
         {
             if (seen.ContainsKey(key))
@@ -1358,6 +1449,38 @@ public sealed class SyncEngine : ISyncEngine
                 continue;
             }
 
+            // A prior row whose type was not part of this run's selection is out of scope, not
+            // dropped: deselecting a type must retain its committed files, exactly like removing a
+            // database from the job. The synthetic artifact/reference-data rows keep their explicit
+            // cleanup-on-toggle-off semantics (an artifact absent this run WAS deconfigured).
+            if (state.ObjectType is not (SqlObjectType.DatabaseArtifact or SqlObjectType.ReferenceData)
+                && !typesInScope.Contains(state.ObjectType))
+            {
+                continue;
+            }
+
+            candidates.Add(state);
+        }
+
+        // Mass-deletion circuit breaker: when most of the tracked objects vanish at once on an
+        // UNATTENDED run, the far likelier cause is lost metadata visibility (revoked VIEW
+        // DEFINITION, a remapped login) than a genuine mass drop — and committing the wipe would
+        // rewrite source-control history for every object. Suspend the deletions and warn; a manual
+        // Run Now applies them (the user is present and sees the counts — that is the confirmation).
+        if (trigger != RunTrigger.Manual && candidates.Count > 50 && candidates.Count * 2 > prior.Count)
+        {
+            context.DeletionSuspensionReason =
+                $"{candidates.Count:N0} of {prior.Count:N0} tracked objects in {database} disappeared in one run — " +
+                "deletions were suspended as a safety stop (this usually means the job's login lost metadata " +
+                "visibility, not a real mass drop). Verify the SQL permissions; if the objects were really " +
+                "dropped, use Run Now to confirm and apply the deletions.";
+            context.Log(SyncLogLevel.Warning, context.DeletionSuspensionReason);
+            return;
+        }
+
+        var deletedIds = new List<long>();
+        foreach (var state in candidates)
+        {
             var absolute = Path.Combine(localPath, state.FilePath.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(absolute))
             {
@@ -1467,8 +1590,13 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         // Nothing new to do (no new commit, and — for the push modes — no stranded commit either).
+        // PR mode short-circuits like local-only: its head branch is recut from the base every run,
+        // so "ahead of origin" is meaningless there (the fresh branch's whole history counts) — and
+        // an identical tree means the BASE already carries the content. Pushing a zero-diff branch
+        // would fail PR creation with GitHub's 422 "no commits between…" on every run, forever.
         if (!commit.HadChanges
-            && (isLocalOnly || !await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false)))
+            && (isLocalOnly || gitContext.BaseBranch is not null
+                || !await _gitWorkspace.HasUnpushedCommitsAsync(gitContext, cancellationToken).ConfigureAwait(false)))
         {
             // The detected changes produced an identical git tree (e.g. a file already carried the
             // new content) — the repository already reflects them, so state may advance.
@@ -1624,6 +1752,14 @@ public sealed class SyncEngine : ISyncEngine
     // A successful run that skipped one or more objects is a partial success — surface it as a warning.
     private static void EscalateForSkips(SyncRun run, RunContext context)
     {
+        if (context.DeletionSuspensionReason is not null && run.Status is RunStatus.Succeeded or RunStatus.NoChanges)
+        {
+            // The circuit breaker held back a suspicious mass deletion — that outranks skip noise.
+            run.Status = RunStatus.Warning;
+            run.ErrorMessage = context.DeletionSuspensionReason;
+            return;
+        }
+
         if (context.Failed > 0 && run.Status is RunStatus.Succeeded or RunStatus.NoChanges)
         {
             run.Status = RunStatus.Warning;
@@ -1894,6 +2030,12 @@ public sealed class SyncEngine : ISyncEngine
         /// while the repository silently misses this run's work.
         /// </summary>
         public bool ChangesDelivered { get; set; }
+
+        /// <summary>
+        /// Set when the mass-deletion circuit breaker suspended this run's deletions; escalates the
+        /// run to Warning with this text so the safety stop is impossible to miss.
+        /// </summary>
+        public string? DeletionSuspensionReason { get; set; }
 
         /// <summary>Per-database incremental watermarks staged during scripting; persisted with the
         /// final states only when the run ends healthy. Written from single-threaded stages.</summary>

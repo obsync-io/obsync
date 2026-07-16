@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -12,7 +13,9 @@ internal static class CommitMessageBuilder
     public static (string Subject, string Body) Build(SyncRun run, SyncJob job, IReadOnlyList<ObjectChange> changes)
     {
         var scope = string.IsNullOrEmpty(run.Databases) ? job.Name : run.Databases;
-        var subject = $"[{scope}] SQL object changes from {run.ServerName} - {run.StartedAt.LocalDateTime:yyyy-MM-dd HH:mm}";
+        // Invariant calendar: commit subjects must not vary with the executing account's culture.
+        var stamp = run.StartedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+        var subject = $"[{scope}] SQL object changes from {run.ServerName} - {stamp}";
 
         var body = new StringBuilder();
         body.Append("Server: ").Append(run.ServerName).Append('\n');
