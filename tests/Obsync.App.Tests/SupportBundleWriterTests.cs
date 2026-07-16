@@ -66,7 +66,7 @@ public sealed class SupportBundleWriterTests : IAsyncLifetime, IDisposable
             SystemClock.Instance,
             _provider.GetRequiredService<IAppSettingsRepository>());
 
-        await writer.WriteAsync(_zipPath, [new DiagnosticResult("Git CLI", DiagnosticStatus.Pass, "git version 2.45.0")]);
+        await writer.WriteAsync(_zipPath, [new DiagnosticResult("Git CLI", DiagnosticStatus.Pass, "git version 2.45.0", DateTimeOffset.UnixEpoch)]);
 
         using var zip = ZipFile.OpenRead(_zipPath);
         var names = zip.Entries.Select(e => e.FullName).ToList();

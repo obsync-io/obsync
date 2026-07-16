@@ -46,7 +46,10 @@ public partial class App : Application
 
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Information()
-                .WriteTo.File(System.IO.Path.Combine(ObsyncPaths.LogsRoot, "app-.log"), rollingInterval: RollingInterval.Day)
+                .WriteTo.File(
+                    System.IO.Path.Combine(ObsyncPaths.LogsRoot, "app-.log"),
+                    rollingInterval: RollingInterval.Day,
+                    retainedFileCountLimit: 31)
                 .CreateLogger();
 
             _host = Host.CreateDefaultBuilder()

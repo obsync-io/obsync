@@ -6,6 +6,7 @@ using Obsync.Data.Repositories;
 using Obsync.Engine.DependencyInjection;
 using Obsync.Git;
 using Obsync.Security.DependencyInjection;
+using Obsync.Shared;
 using Obsync.Shared.Abstractions;
 
 namespace Obsync.App;
@@ -35,6 +36,10 @@ public static class AppServices
         // Optional pre-save checks on the wizard's Review step (advisory — never blocks Save).
         services.AddSingleton<IJobPreflightService, JobPreflightService>();
         services.AddSingleton<IRunReportWriter, RunReportWriter>();
+        // Recent-logs panel on the Diagnostics tab (reads the newest app/service log files).
+        services.AddSingleton<ILogFileReader>(_ => new LogFileReader(ObsyncPaths.LogsRoot));
+        // About tab's "Support information" block (versions, runtime, schema).
+        services.AddSingleton<ISupportInfoService, SupportInfoService>();
 
         // Reads before/after script content for the diff viewer from the local git workspaces.
         services.AddSingleton<IScriptHistoryService>(sp => new ScriptHistoryService(

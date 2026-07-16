@@ -30,6 +30,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     private readonly IProxyProvider _proxy;
     private readonly IRunAlertService _alerts;
     private readonly IUpdateChecker _updates;
+    private readonly ILogFileReader _logs;
+    private readonly ISupportInfoService _supportInfo;
 
     public SettingsViewModel(
         IAuditWriter audit,
@@ -39,7 +41,9 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         ICredentialStore credentials,
         IProxyProvider proxy,
         IRunAlertService alerts,
-        IUpdateChecker updates)
+        IUpdateChecker updates,
+        ILogFileReader logs,
+        ISupportInfoService supportInfo)
     {
         _audit = audit;
         _diagnostics = diagnostics;
@@ -49,7 +53,13 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         _proxy = proxy;
         _alerts = alerts;
         _updates = updates;
+        _logs = logs;
+        _supportInfo = supportInfo;
     }
+
+    /// <summary>One audit event per saved settings section — the section name only, never values.</summary>
+    private Task AuditSettingsChangedAsync(string section) =>
+        _audit.WriteAsync(AuditAction.SettingsChanged, "Settings", null, section, section);
 
     public string DataRoot => ObsyncPaths.Root;
     public string DatabasePath => ObsyncPaths.DatabasePath;
@@ -107,19 +117,25 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         try
         {
             var result = await _updates.CheckAsync();
+            string outcome;
             if (result.Error is { } error)
             {
                 UpdateStatus = $"Could not check for updates — {error}";
+                outcome = "Check failed";
             }
             else if (result.IsUpdateAvailable)
             {
                 UpdateStatus = $"Obsync {result.LatestVersion} is available.";
                 UpdateReleaseUrl = result.ReleaseUrl;
+                outcome = $"Update available ({result.LatestVersion})";
             }
             else
             {
                 UpdateStatus = $"You're on the latest version ({VersionInfo.Of(typeof(App).Assembly)}).";
+                outcome = "Up to date";
             }
+
+            await _audit.WriteAsync(AuditAction.UpdateChecked, "Application", null, null, outcome);
         }
         catch (Exception ex)
         {
@@ -135,6 +151,63 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     private void OpenReleasePage()
     {
         if (UpdateReleaseUrl is { } url)
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+    }
+
+    // --- Support information (About tab) ----------------------------------------------------------
+
+    /// <summary>The "key: value" rows of the About tab's support information block.</summary>
+    public ObservableCollection<SupportInfoRow> SupportInfoRows { get; } = [];
+
+    [ObservableProperty] private string? _supportInfoStatus;
+
+    private bool _supportInfoLoaded;
+
+    /// <summary>Loads the block on first visit to the About tab (it runs the git probe + a DB read).</summary>
+    public async Task EnsureSupportInfoAsync()
+    {
+        if (_supportInfoLoaded)
+        {
+            return;
+        }
+
+        _supportInfoLoaded = true;
+        SupportInfoStatus = "Collecting…";
+        try
+        {
+            var rows = await _supportInfo.GetAsync();
+            SupportInfoRows.Clear();
+            foreach (var row in rows)
+            {
+                SupportInfoRows.Add(row);
+            }
+
+            SupportInfoStatus = null;
+        }
+        catch (Exception ex)
+        {
+            _supportInfoLoaded = false; // retry on the next tab visit
+            SupportInfoStatus = $"Could not collect support information — {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void CopySupportInfo()
+    {
+        if (SupportInfoRows.Count > 0)
+        {
+            System.Windows.Clipboard.SetText(
+                string.Join(Environment.NewLine, SupportInfoRows.Select(r => $"{r.Key}: {r.Value}")));
+            SupportInfoStatus = "Copied to the clipboard.";
+        }
+    }
+
+    [RelayCommand]
+    private void OpenLink(string? url)
+    {
+        if (!string.IsNullOrEmpty(url))
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
         }
@@ -203,6 +276,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             }
 
             await _bundle.WriteAsync(dialog.FileName, [.. Diagnostics]);
+            await _audit.WriteAsync(AuditAction.SupportBundleExported, "SupportBundle", null, null);
             DiagnosticsSummary = $"Support bundle saved to {dialog.FileName}.";
         }
         catch (Exception ex)
@@ -228,6 +302,112 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         var warn = results.Count(r => r.Status == DiagnosticStatus.Warning);
         var fail = results.Count(r => r.Status == DiagnosticStatus.Fail);
         DiagnosticsSummary = $"{results.Count} checks — {pass} passed, {warn} warnings, {fail} failed.";
+        CopyDiagnosticsResultsCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool HasDiagnostics => Diagnostics.Count > 0;
+
+    /// <summary>Copies the full diagnostics report — one "name: status — detail (timestamp)" line per check.</summary>
+    [RelayCommand(CanExecute = nameof(HasDiagnostics))]
+    private void CopyDiagnosticsResults()
+    {
+        var lines = Diagnostics.Select(d =>
+            $"{d.Name}: {d.Status} — {d.Detail} (checked {d.CheckedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
+        System.Windows.Clipboard.SetText(string.Join(Environment.NewLine, lines));
+        DiagnosticsSummary = "Results copied to the clipboard.";
+    }
+
+    // --- Recent logs (Diagnostics tab) ------------------------------------------------------------
+
+    /// <summary>The log entries matching the current severity filter + search text, newest first.</summary>
+    public ObservableCollection<LogEntry> FilteredLogEntries { get; } = [];
+
+    public IReadOnlyList<string> LogSeverityFilters { get; } = ["All", "Information", "Warning", "Error"];
+
+    [ObservableProperty] private string _selectedLogSeverity = "All";
+    [ObservableProperty] private string _logSearchText = string.Empty;
+    [ObservableProperty] private LogEntry? _selectedLogEntry;
+    [ObservableProperty] private string? _logsStatus;
+    [ObservableProperty] private bool _isLoadingLogs;
+
+    private IReadOnlyList<LogEntry> _allLogEntries = [];
+    private bool _logsLoaded;
+
+    /// <summary>Loads the logs panel on first visit to the Diagnostics tab — never at settings load,
+    /// so opening Settings stays instant.</summary>
+    public Task EnsureLogsLoadedAsync() => _logsLoaded ? Task.CompletedTask : RefreshLogsAsync();
+
+    [RelayCommand]
+    private async Task RefreshLogsAsync()
+    {
+        if (IsLoadingLogs)
+        {
+            return;
+        }
+
+        IsLoadingLogs = true;
+        LogsStatus = "Reading log files…";
+        try
+        {
+            _allLogEntries = await _logs.ReadRecentAsync();
+            _logsLoaded = true;
+            ApplyLogFilter();
+            LogsStatus = _allLogEntries.Count == 0
+                ? "No log files yet — they appear after the app or the service has run."
+                : $"{_allLogEntries.Count} entries from the newest app and service log files.";
+        }
+        catch (Exception ex)
+        {
+            LogsStatus = $"Could not read the log files — {ex.Message}";
+        }
+        finally
+        {
+            IsLoadingLogs = false;
+        }
+    }
+
+    partial void OnSelectedLogSeverityChanged(string value) => ApplyLogFilter();
+
+    partial void OnLogSearchTextChanged(string value) => ApplyLogFilter();
+
+    private void ApplyLogFilter()
+    {
+        var severity = SelectedLogSeverity switch
+        {
+            "Information" => (LogSeverity?)LogSeverity.Information,
+            "Warning" => LogSeverity.Warning,
+            "Error" => LogSeverity.Error,
+            _ => null,
+        };
+
+        FilteredLogEntries.Clear();
+        foreach (var entry in _allLogEntries)
+        {
+            if ((severity is null || entry.Severity == severity)
+                && (LogSearchText.Length == 0 || entry.Message.Contains(LogSearchText, StringComparison.OrdinalIgnoreCase)))
+            {
+                FilteredLogEntries.Add(entry);
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void OpenFolder(string? path)
+    {
+        if (!string.IsNullOrEmpty(path) && System.IO.Directory.Exists(path))
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+        }
+    }
+
+    [RelayCommand]
+    private void CopySelectedLogEntry()
+    {
+        if (SelectedLogEntry is { } entry)
+        {
+            System.Windows.Clipboard.SetText($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{entry.Level}] {entry.Message}");
+        }
     }
 
     // --- Required SQL Permissions ---------------------------------------------------------------
@@ -330,6 +510,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         {
             var markers = JobTags.Parse(ProductionTagsText);
             await _settings.SetProductionTagsAsync(markers);
+            await AuditSettingsChangedAsync("Production tags");
             ProductionTagsText = string.Join(", ", markers);
             ProductionTagsStatus = markers.Count == 0
                 ? "Saved — no tags mark production, so the run guard is off."
@@ -372,6 +553,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         {
             var days = SelectedRetention?.Days ?? 0;
             await _settings.SetRunRetentionDaysAsync(days);
+            await AuditSettingsChangedAsync("Run history retention");
             RetentionStatus = days == 0
                 ? "Saved — run history is kept forever."
                 : $"Saved — runs older than {days} days are removed automatically (checked daily and at startup).";
@@ -415,6 +597,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
                 name.Length == 0 ? CommitterIdentity.Default.Name : name,
                 email.Length == 0 ? null : email);
             await _settings.SetCommitterAsync(committer);
+            await AuditSettingsChangedAsync("Git commits");
             CommitterName = committer.Name;
             CommitterStatus = $"Saved — sync commits will be authored as {committer.Name}" +
                 (committer.Email is null ? "." : $" <{committer.Email}>.");
@@ -459,6 +642,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             if (path.Length == 0 || string.Equals(path, ObsyncPaths.WorkspacesRoot, StringComparison.OrdinalIgnoreCase))
             {
                 await _settings.SetWorkspacesRootOverrideAsync(null);
+                await AuditSettingsChangedAsync("Git workspaces location");
                 WorkspacesRootText = ObsyncPaths.WorkspacesRoot;
                 WorkspacesStatus = "Saved — using the default location.";
                 return;
@@ -481,6 +665,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             }
 
             await _settings.SetWorkspacesRootOverrideAsync(path);
+            await AuditSettingsChangedAsync("Git workspaces location");
             WorkspacesRootText = path;
             WorkspacesStatus =
                 "Saved — repositories clone here from their next run. Files at the old location are not moved or deleted.";
@@ -492,6 +677,60 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    // --- Storage health (Network & storage tab) ---------------------------------------------------
+
+    [ObservableProperty] private string? _workspacesSizeText;
+    [ObservableProperty] private string? _databaseSizeText;
+    [ObservableProperty] private string? _logsSizeText;
+    [ObservableProperty] private string? _freeDiskText;
+
+    private bool _storageComputed;
+    private bool _isComputingStorage;
+
+    /// <summary>Computes sizes on first visit to the Network &amp; storage tab; Refresh recomputes.</summary>
+    public Task EnsureStorageAsync() => _storageComputed ? Task.CompletedTask : RefreshStorageAsync();
+
+    [RelayCommand]
+    private async Task RefreshStorageAsync()
+    {
+        if (_isComputingStorage)
+        {
+            return;
+        }
+
+        _isComputingStorage = true;
+        WorkspacesSizeText = DatabaseSizeText = LogsSizeText = FreeDiskText = "Calculating…";
+        try
+        {
+            var workspacesOverride = await _settings.GetWorkspacesRootOverrideAsync();
+            var workspacesRoot = string.IsNullOrWhiteSpace(workspacesOverride)
+                ? ObsyncPaths.WorkspacesRoot
+                : workspacesOverride;
+
+            // The workspaces walk can touch thousands of clone files — never on the UI thread.
+            var (workspaces, database, logsSize, freeDisk) = await Task.Run(() => (
+                StorageUsage.FormatBytes(StorageUsage.DirectorySizeBytes(workspacesRoot)),
+                StorageUsage.FileSizeBytes(ObsyncPaths.DatabasePath) is { } db ? StorageUsage.FormatBytes(db) : "not created yet",
+                StorageUsage.FormatBytes(StorageUsage.DirectorySizeBytes(ObsyncPaths.LogsRoot)),
+                StorageUsage.FreeDiskBytes(ObsyncPaths.Root) is { } free ? $"{StorageUsage.FormatBytes(free)} free on the data drive" : "unknown"));
+
+            WorkspacesSizeText = workspaces;
+            DatabaseSizeText = database;
+            LogsSizeText = logsSize;
+            FreeDiskText = freeDisk;
+            _storageComputed = true;
+        }
+        catch (Exception ex)
+        {
+            WorkspacesSizeText = DatabaseSizeText = LogsSizeText = null;
+            FreeDiskText = $"Could not compute sizes — {ex.Message}";
+        }
+        finally
+        {
+            _isComputingStorage = false;
         }
     }
 
@@ -516,6 +755,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         try
         {
             await _settings.SetNotifyRunFailuresAsync(value);
+            await AuditSettingsChangedAsync("Notifications");
             NotifyStatus = value
                 ? "On — you'll see an in-app notification when a run fails or ends with warnings."
                 : "Off — failed runs are still recorded in History, but you won't be notified.";
@@ -601,6 +841,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
                 ScheduledRunsOnly = AlertScheduledOnly,
             };
             await _settings.UpsertAlertSettingsAsync(settings);
+            await AuditSettingsChangedAsync("Alerts");
             SmtpPortText = settings.SmtpPort.ToString();
 
             // Store the password when provided; otherwise keep the saved one, as the label
@@ -609,6 +850,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             if (!string.IsNullOrEmpty(SmtpPassword))
             {
                 _credentials.Store(CredentialKeys.SmtpPassword(), SmtpPassword);
+                await _audit.WriteAsync(AuditAction.CredentialsUpdated, "Settings", null, "SMTP password");
             }
 
             SmtpPassword = string.Empty;
@@ -707,6 +949,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
                     .Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)],
             };
             await _settings.UpsertProxyAsync(settings);
+            await AuditSettingsChangedAsync("Proxy");
 
             // Store the password when provided; otherwise keep the saved one, as the label
             // promises — switching the mode off Manual must not destroy the secret, or switching
@@ -714,6 +957,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             if (!string.IsNullOrEmpty(ProxyPassword))
             {
                 _credentials.Store(CredentialKeys.Proxy(), ProxyPassword);
+                await _audit.WriteAsync(AuditAction.CredentialsUpdated, "Settings", null, "Proxy password");
             }
 
             ProxyPassword = string.Empty;
@@ -758,13 +1002,28 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         }
     }
 
+    /// <summary>Adds the server-level section (VIEW ANY DEFINITION / VIEW SERVER STATE + msdb Agent read).</summary>
+    [ObservableProperty] private bool _includeServerObjects;
+
+    /// <summary>Names which script the preview shows ("Grant script" / "Revoke script"); the copy and
+    /// save buttons act on whichever was generated last.</summary>
+    [ObservableProperty] private string? _permissionScriptLabel;
+
+    private bool _permissionScriptIsRevoke;
+
     [RelayCommand]
-    private void GeneratePermissionScript()
+    private Task GeneratePermissionScriptAsync() => GenerateAsync(revoke: false);
+
+    [RelayCommand]
+    private Task GenerateRevokeScriptAsync() => GenerateAsync(revoke: true);
+
+    private async Task GenerateAsync(bool revoke)
     {
         var account = PermissionAccount.Trim();
         if (string.IsNullOrEmpty(account))
         {
             PermissionScript = "-- Enter the account name first.";
+            PermissionScriptLabel = null;
             return;
         }
 
@@ -774,10 +1033,21 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         if (databases.Count == 0)
         {
             PermissionScript = "-- Enter at least one database name.";
+            PermissionScriptLabel = null;
             return;
         }
 
-        PermissionScript = SqlPermissionScriptBuilder.Build(account, databases);
+        PermissionScript = revoke
+            ? SqlPermissionScriptBuilder.BuildRevoke(account, databases, IncludeServerObjects)
+            : SqlPermissionScriptBuilder.Build(account, databases, IncludeServerObjects);
+        _permissionScriptIsRevoke = revoke;
+        PermissionScriptLabel = revoke ? "Revoke script" : "Grant script";
+
+        // The account name is an identity (not a secret); database names locate the grants.
+        await _audit.WriteAsync(
+            AuditAction.PermissionScriptGenerated, "PermissionScript", null, account,
+            $"{(revoke ? "Revoke" : "Grant")} · {databases.Count} database(s)"
+            + (IncludeServerObjects ? " · server-level included" : string.Empty));
     }
 
     private bool HasScript => !string.IsNullOrWhiteSpace(PermissionScript);
@@ -801,7 +1071,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
 
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
-            FileName = "obsync-permissions.sql",
+            FileName = _permissionScriptIsRevoke ? "obsync-permissions-revoke.sql" : "obsync-permissions.sql",
             Filter = "SQL script (*.sql)|*.sql|All files (*.*)|*.*",
             DefaultExt = ".sql",
         };

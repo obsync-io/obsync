@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Obsync.Shared;
 using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
@@ -60,6 +61,10 @@ internal static class AuditLogExport
                     }
                 }
             }).ConfigureAwait(false);
+
+            // The export itself is an audited action (compliance data leaving the app).
+            await audit.WriteAsync(
+                AuditAction.AuditLogExported, "AuditLog", null, null, asJson ? "JSON" : "CSV").ConfigureAwait(false);
 
             return $"Audit log saved to {dialog.FileName}.";
         }

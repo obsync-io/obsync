@@ -98,4 +98,90 @@ public sealed class SqlPermissionScriptBuilderTests
         Assert.DoesNotContain("USE [msdb];", script);
         Assert.DoesNotContain("SQLAgentReaderRole", script);
     }
+
+    // --- Revoke script (the exact inverse of the grants) -------------------------------------------
+
+    [Fact]
+    public void BuildRevoke_RevokesTheLeastPrivilegeSetPerDatabase()
+    {
+        var script = SqlPermissionScriptBuilder.BuildRevoke("svc_obsync", ["SalesDB"]);
+
+        Assert.Contains("USE [SalesDB];", script);
+        Assert.Contains("REVOKE CONNECT FROM [svc_obsync];", script);
+        Assert.Contains("REVOKE VIEW DEFINITION FROM [svc_obsync];", script);
+        Assert.Contains("REVOKE VIEW DATABASE STATE FROM [svc_obsync];", script);
+        // A revoke script never grants anything and never creates principals.
+        Assert.DoesNotContain("GRANT ", script);
+        Assert.DoesNotContain("CREATE USER", script);
+    }
+
+    [Fact]
+    public void BuildRevoke_IsTheExactInverseOfTheGrants()
+    {
+        string[] databases = ["SalesDB", "HRDB"];
+        var grant = SqlPermissionScriptBuilder.Build("svc", databases, includeServerObjects: true);
+        var revoke = SqlPermissionScriptBuilder.BuildRevoke("svc", databases, includeServerObjects: true);
+
+        // Every executable GRANT has a matching REVOKE, and the role membership is removed.
+        foreach (var line in grant.Split('\n').Where(l => l.StartsWith("GRANT ", StringComparison.Ordinal)))
+        {
+            var expected = line
+                .Replace("GRANT ", "REVOKE ", StringComparison.Ordinal)
+                .Replace(" TO ", " FROM ", StringComparison.Ordinal);
+            Assert.Contains(expected, revoke);
+        }
+
+        Assert.Contains("ALTER ROLE [SQLAgentReaderRole] DROP MEMBER [svc];", revoke);
+        // Same deterministic shape: master first, then the sorted per-database blocks.
+        Assert.True(revoke.IndexOf("USE [master];", StringComparison.Ordinal)
+            < revoke.IndexOf("USE [HRDB];", StringComparison.Ordinal));
+        Assert.True(revoke.IndexOf("USE [HRDB];", StringComparison.Ordinal)
+            < revoke.IndexOf("USE [SalesDB];", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildRevoke_IsByteStable_AndOrderIndependent()
+    {
+        var a = SqlPermissionScriptBuilder.BuildRevoke("svc", ["SalesDB", "HRDB"], includeServerObjects: true);
+        var b = SqlPermissionScriptBuilder.BuildRevoke("svc", ["HRDB", "SalesDB"], includeServerObjects: true);
+
+        Assert.Equal(a, b);                    // input order does not change output
+        Assert.DoesNotContain("\r\n", a);      // LF-only, like the grant script
+    }
+
+    [Fact]
+    public void BuildRevoke_NeverEmitsAnExecutableDropUser()
+    {
+        var script = SqlPermissionScriptBuilder.BuildRevoke("svc", ["SalesDB"], includeServerObjects: true);
+
+        // DROP USER appears only as commented guidance — removal needs a human decision.
+        Assert.Contains("DROP USER [svc];", script);
+        foreach (var line in script.Split('\n').Where(l => l.Contains("DROP USER", StringComparison.Ordinal)))
+        {
+            Assert.StartsWith("--", line.TrimStart());
+        }
+    }
+
+    [Fact]
+    public void BuildRevoke_WithoutServerObjects_OmitsTheServerSection()
+    {
+        var script = SqlPermissionScriptBuilder.BuildRevoke("svc", ["SalesDB"]);
+
+        Assert.DoesNotContain("USE [master];", script);
+        Assert.DoesNotContain("SQLAgentReaderRole", script);
+    }
+
+    [Fact]
+    public void BuildRevoke_WithNoDatabases_ExplainsWhatToDo()
+    {
+        var script = SqlPermissionScriptBuilder.BuildRevoke("svc", []);
+
+        Assert.Contains("Specify at least one database", script);
+    }
+
+    [Fact]
+    public void BuildRevoke_WithBlankAccount_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => SqlPermissionScriptBuilder.BuildRevoke("  ", ["DB"]));
+    }
 }
