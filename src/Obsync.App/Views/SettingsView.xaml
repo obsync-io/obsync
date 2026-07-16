@@ -150,6 +150,8 @@
                                     <Button Content="Send test alert" Style="{StaticResource SecondaryButton}" Command="{Binding SendTestAlertCommand}"
                                             IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
                                 </StackPanel>
+                                <TextBlock Text="The test uses the saved settings — save first if you just edited them."
+                                           Style="{StaticResource Caption}" Margin="0,6,0,0" />
                                 <TextBlock Text="{Binding AlertStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
                                            Visibility="{Binding AlertStatus, Converter={StaticResource NullToVisibility}}" />
                             </StackPanel>
@@ -202,6 +204,8 @@
                                     <Button Content="Test proxy" Style="{StaticResource SecondaryButton}" Command="{Binding TestProxyCommand}"
                                             IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
                                 </StackPanel>
+                                <TextBlock Text="The test uses the saved settings — save first if you just edited them."
+                                           Style="{StaticResource Caption}" Margin="0,6,0,0" />
                                 <TextBlock Text="{Binding ProxyStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
                                            Visibility="{Binding ProxyStatus, Converter={StaticResource NullToVisibility}}" />
                             </StackPanel>

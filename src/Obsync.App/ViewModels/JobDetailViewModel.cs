@@ -211,6 +211,8 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
         var connection = await _connections.GetAsync(job.ConnectionProfileId);
         _repository = job.RepositoryProfileId is { } repoId ? await _repositories.GetAsync(repoId) : null;
+        // Computed from Job + the freshly loaded repository, neither of which notifies on its own.
+        OnPropertyChanged(nameof(CanOpenChangesInGitHub));
         await Dependencies.InitializeAsync(job, connection);
 
         ConnectionName = connection?.Name ?? "—";
@@ -438,15 +440,26 @@ public sealed partial class JobDetailViewModel : ObservableObject
             System.Windows.Application.Current?.MainWindow, run, [.. Changes], _repository, change);
     }
 
+    /// <summary>True when a change has a browsable GitHub location: DirectCommit and PullRequest
+    /// jobs with a repository. Export-only jobs have no repository at all, and local-commit-only
+    /// work was never pushed — the button hides for those instead of doing nothing (or lying).</summary>
+    public bool CanOpenChangesInGitHub =>
+        _repository is not null && Job?.CommitMode is CommitMode.DirectCommit or CommitMode.PullRequest;
+
     [RelayCommand]
     private void OpenChange(ObjectChange? change)
     {
-        if (change is null || _repository is null)
+        if (change is null || _repository is null || !CanOpenChangesInGitHub)
         {
             return;
         }
 
-        OpenUrl(GitHubService.BuildBlobUrl(_repository.Owner, _repository.RepositoryName, Branch, change.RelativePath));
+        // A PR run's change lives on the PR head branch, not the base branch — link it at the
+        // run's commit instead (a sha fills the same URL slot as a branch name).
+        var reference = Job?.CommitMode == CommitMode.PullRequest && LatestRun?.CommitSha is { } sha
+            ? sha
+            : Branch;
+        OpenUrl(GitHubService.BuildBlobUrl(_repository.Owner, _repository.RepositoryName, reference, change.RelativePath));
     }
 
     private static void OpenUrl(string url) =>

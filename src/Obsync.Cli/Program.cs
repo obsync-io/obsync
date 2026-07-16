@@ -6,6 +6,7 @@ using Obsync.Engine;
 using Obsync.Engine.DependencyInjection;
 using Obsync.Security.DependencyInjection;
 using Obsync.Shared;
+using Obsync.Shared.Models;
 using Serilog;
 using Serilog.Extensions.Logging;
 
@@ -50,7 +51,8 @@ static async Task<int> ListJobsAsync(IServiceProvider provider)
     Console.WriteLine($"{"NAME",-32} {"LAST STATUS",-12} {"DATABASES"}");
     foreach (var job in jobs)
     {
-        Console.WriteLine($"{Truncate(job.Name, 32),-32} {job.RunSummary.LastStatus?.ToString() ?? "—",-12} {string.Join(", ", job.Databases)}");
+        // DatabasesDisplay, not the raw list — an all-user-databases job has an empty list.
+        Console.WriteLine($"{Truncate(job.Name, 32),-32} {job.RunSummary.LastStatus?.ToString() ?? "—",-12} {job.DatabasesDisplay}");
     }
 
     return 0;
@@ -100,7 +102,17 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
     };
 
     Console.WriteLine($"Running job '{job.Name}'…");
-    var run = await engine.RunJobAsync(job.Id, RunTrigger.Manual, progress, cts.Token);
+    SyncRun run;
+    try
+    {
+        run = await engine.RunJobAsync(job.Id, RunTrigger.Manual, progress, cts.Token);
+    }
+    catch (InvalidOperationException ex)
+    {
+        // e.g. the job is already running in another Obsync process — a message, not a stack trace.
+        Console.Error.WriteLine(ex.Message);
+        return 1;
+    }
 
     Console.WriteLine();
     Console.WriteLine($"Status:   {run.Status}");
@@ -117,7 +129,14 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
         Console.Error.WriteLine($"Error:    {run.ErrorMessage}");
     }
 
-    return run.Status is RunStatus.Failed or RunStatus.Cancelled ? 1 : 0;
+    // Warning gets its own exit code (see help): the run partially succeeded (e.g. commit created
+    // but push failed) and scripts checking "!= 0" should notice.
+    return run.Status switch
+    {
+        RunStatus.Failed or RunStatus.Cancelled => 1,
+        RunStatus.Warning => 3,
+        _ => 0,
+    };
 }
 
 static int PrintVersion()
@@ -138,6 +157,12 @@ static int PrintHelp()
           obsync run <name-or-id>     Run a sync job now
           obsync version              Show the CLI version
           obsync help                 Show this help
+
+        Exit codes (run):
+          0   succeeded (or no changes)
+          1   failed, cancelled, or could not start
+          2   usage error
+          3   finished with warnings (e.g. commit created but push failed)
         """);
     return 0;
 }

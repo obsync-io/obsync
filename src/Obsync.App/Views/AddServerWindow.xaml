@@ -57,7 +57,9 @@
                 <StackPanel>
                     <TextBlock Text="Advanced" Style="{StaticResource Caption}" Margin="0,0,0,10" />
                     <CheckBox Content="Encrypt connection" IsChecked="{Binding Encrypt}" />
-                    <CheckBox Content="Trust server certificate" IsChecked="{Binding TrustServerCertificate}" Margin="0,8,0,12" />
+                    <CheckBox Content="Trust server certificate" IsChecked="{Binding TrustServerCertificate}" Margin="0,8,0,3" />
+                    <TextBlock Text="Skips certificate validation. Only enable on trusted networks or with a self-signed certificate you know."
+                               Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12" />
                     <TextBlock Text="CONNECTION TIMEOUT (SECONDS)" Style="{StaticResource Caption}" />
                     <TextBox Text="{Binding ConnectTimeoutSeconds}" Width="110" HorizontalAlignment="Left" Margin="0,4,0,0"
                              MaxLength="4" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
@@ -80,7 +82,7 @@
             </TextBlock>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="Cancel" Style="{StaticResource SubtleButton}" Click="OnCancel" Margin="0,0,8,0" />
+                <Button Content="Cancel" Style="{StaticResource SubtleButton}" IsCancel="True" Click="OnCancel" Margin="0,0,8,0" />
                 <Button Content="Test connection" Style="{StaticResource SecondaryButton}" Command="{Binding TestCommand}" Margin="0,0,8,0"
                         IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
                 <Button Content="Save" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}"

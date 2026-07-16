@@ -85,6 +85,19 @@ public sealed class HistoryViewModelTests
     }
 
     [Fact]
+    public async Task JobFilter_MatchesRunsCaseInsensitively()
+    {
+        // The dropdown de-dupes names OrdinalIgnoreCase, so "Sales" and "sales" collapse into one
+        // entry — the filter must match both spellings or one job's runs silently vanish.
+        var vm = NewViewModel(RepositoryWith(NewRun("Sales"), NewRun("sales"), NewRun("Other")));
+        await vm.LoadAsync();
+
+        vm.SelectedJob = vm.JobNames.Single(n => string.Equals(n, "sales", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(2, vm.RunsView.Cast<SyncRun>().Count());
+    }
+
+    [Fact]
     public async Task Timeline_IsBuiltOnLoad_AndFollowsTheJobFilter()
     {
         var vm = NewViewModel(RepositoryWith(NewRun("Prod Sync", changed: 3), NewRun("Dev Sync")));

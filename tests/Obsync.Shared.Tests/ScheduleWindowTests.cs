@@ -78,6 +78,78 @@ public sealed class ScheduleWindowTests
         Assert.False(schedule.IsWithinMaintenanceWindow(At(2024, 1, 5, 23))); // Fri 23:00 → weekday
     }
 
+    // Local-wall-clock anchor: GetNextRun works in local time, so window tests pin the local date.
+    private static DateTimeOffset LocalAt(int year, int month, int day, int hour, int minute = 0) =>
+        new(new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Local));
+
+    [Fact]
+    public void GetNextRun_Daily_InsideOvernightWindow_IsUnchanged()
+    {
+        var schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Daily,
+            TimeOfDay = new TimeOnly(23, 30),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+        };
+        var unconstrained = new ScheduleProfile { Kind = ScheduleKind.Daily, TimeOfDay = new TimeOnly(23, 30) };
+        var from = LocalAt(2024, 1, 5, 12);
+
+        var next = schedule.GetNextRun(from);
+
+        Assert.NotNull(next);
+        Assert.Equal(unconstrained.GetNextRun(from), next); // 23:30 is in-window → no advance
+        Assert.True(schedule.IsWithinMaintenanceWindow(next!.Value));
+    }
+
+    [Fact]
+    public void GetNextRun_Daily_WeekdaysOnlyWindow_WalksPastTheWeekend()
+    {
+        var schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Daily,
+            TimeOfDay = new TimeOnly(23, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+            DayScope = MaintenanceDayScope.WeekdaysOnly,
+        };
+
+        // Saturday local noon → Sat 23:00 and Sun 23:00 open weekend windows; Monday runs.
+        var next = schedule.GetNextRun(LocalAt(2024, 1, 6, 12));
+
+        Assert.NotNull(next);
+        var local = next!.Value.ToLocalTime();
+        Assert.Equal(DayOfWeek.Monday, local.DayOfWeek);
+        Assert.Equal(23, local.Hour);
+        Assert.True(schedule.IsWithinMaintenanceWindow(next.Value));
+    }
+
+    [Fact]
+    public void GetNextRun_Weekly_OvernightWindowAttribution_KeepsSundayEarlyMorning()
+    {
+        // Sunday 02:00 belongs to SATURDAY's overnight window, so a weekends-only scope allows it.
+        var schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Weekly,
+            DayOfWeek = DayOfWeek.Sunday,
+            TimeOfDay = new TimeOnly(2, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+            DayScope = MaintenanceDayScope.WeekendsOnly,
+        };
+
+        var next = schedule.GetNextRun(LocalAt(2024, 1, 5, 12));
+
+        Assert.NotNull(next);
+        var local = next!.Value.ToLocalTime();
+        Assert.Equal(DayOfWeek.Sunday, local.DayOfWeek);
+        Assert.Equal(2, local.Hour);
+        Assert.True(schedule.IsWithinMaintenanceWindow(next.Value));
+    }
+
     [Fact]
     public void GetNextRun_Hourly_AdvancesIntoWindow()
     {

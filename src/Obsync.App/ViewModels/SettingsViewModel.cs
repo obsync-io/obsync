@@ -564,8 +564,9 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             return;
         }
 
+        // Validated even while email is disabled — saving would otherwise persist port 0 for later.
         var port = string.IsNullOrWhiteSpace(SmtpPortText) ? 587 : int.TryParse(SmtpPortText.Trim(), out var parsed) ? parsed : 0;
-        if (AlertEmailEnabled && port is < 1 or > 65535)
+        if (port is < 1 or > 65535)
         {
             AlertStatus = "Enter an SMTP port between 1 and 65535 (587 is the usual submission port).";
             return;
@@ -602,18 +603,12 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             await _settings.UpsertAlertSettingsAsync(settings);
             SmtpPortText = settings.SmtpPort.ToString();
 
-            // Store the password when provided; keep the saved one when blank on an authenticated
-            // relay (mirrors the proxy pattern); otherwise remove it.
-            if (settings.RequiresPassword)
+            // Store the password when provided; otherwise keep the saved one, as the label
+            // promises — disabling email (or clearing the username) must not destroy the secret,
+            // or re-enabling later would silently fail to authenticate.
+            if (!string.IsNullOrEmpty(SmtpPassword))
             {
-                if (!string.IsNullOrEmpty(SmtpPassword))
-                {
-                    _credentials.Store(CredentialKeys.SmtpPassword(), SmtpPassword);
-                }
-            }
-            else
-            {
-                _credentials.Delete(CredentialKeys.SmtpPassword());
+                _credentials.Store(CredentialKeys.SmtpPassword(), SmtpPassword);
             }
 
             SmtpPassword = string.Empty;
@@ -689,6 +684,16 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             return;
         }
 
+        // A manual proxy with an unusable URL would silently resolve to a DIRECT connection
+        // (ProxyProvider returns null for it) while the UI still says Manual — refuse to save it.
+        if (SelectedProxyMode == ProxyMode.Manual
+            && (!Uri.TryCreate(ProxyUrl.Trim(), UriKind.Absolute, out var proxyUri)
+                || (proxyUri.Scheme != Uri.UriSchemeHttp && proxyUri.Scheme != Uri.UriSchemeHttps)))
+        {
+            ProxyStatus = "A manual proxy needs a full http(s) URL, e.g. http://proxy.corp:8080.";
+            return;
+        }
+
         IsBusy = true;
         ProxyStatus = "Saving proxy settings…";
         try
@@ -703,18 +708,12 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             };
             await _settings.UpsertProxyAsync(settings);
 
-            // Store the password when provided; keep the saved one when blank on an authenticated
-            // manual proxy (mirrors the server/repo edit pattern); otherwise remove it.
-            if (settings.RequiresPassword)
+            // Store the password when provided; otherwise keep the saved one, as the label
+            // promises — switching the mode off Manual must not destroy the secret, or switching
+            // back later would silently fail to authenticate.
+            if (!string.IsNullOrEmpty(ProxyPassword))
             {
-                if (!string.IsNullOrEmpty(ProxyPassword))
-                {
-                    _credentials.Store(CredentialKeys.Proxy(), ProxyPassword);
-                }
-            }
-            else
-            {
-                _credentials.Delete(CredentialKeys.Proxy());
+                _credentials.Store(CredentialKeys.Proxy(), ProxyPassword);
             }
 
             ProxyPassword = string.Empty;

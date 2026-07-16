@@ -63,7 +63,22 @@ public partial class App : Application
             // executing in the scheduler service is never falsely marked failed.
             var now = DateTimeOffset.UtcNow;
             var runs = _host.Services.GetRequiredService<IRunRepository>();
-            await OrphanedRunCleaner.CleanAsync(runs, ObsyncPaths.LocksRoot, now);
+            var recovered = await OrphanedRunCleaner.CleanAsync(runs, ObsyncPaths.LocksRoot, now);
+
+            // Crash-recovered failures still alert — the process that ran them died before it
+            // could. Best-effort, like the engine's own post-run alerting.
+            var alerts = _host.Services.GetRequiredService<Engine.Alerting.IRunAlertService>();
+            foreach (var run in recovered)
+            {
+                try
+                {
+                    await alerts.NotifyAsync(run, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Could not send the failure alert for recovered run {RunKey}.", run.RunKey);
+                }
+            }
 
             // Apply the run-history retention setting (0 = keep forever). The service also prunes
             // daily; doing it here keeps app-only installs tidy too.

@@ -109,7 +109,7 @@
         <DockPanel Margin="0,14,0,0">
             <!-- The load is capped; older runs are still in the database -->
             <TextBlock DockPanel.Dock="Bottom" Style="{StaticResource Caption}" Margin="2,8,0,0" TextWrapping="Wrap"
-                       Text="Showing the 100 most recent runs — export a run report or use filters for older history."
+                       Text="Showing the 100 most recent runs — the filters above search only these. Older runs stay in the database."
                        Visibility="{Binding IsCapped, Converter={StaticResource BoolToVisibility}}" />
         <Border Style="{StaticResource Card}" Padding="0">
             <DataGrid ItemsSource="{Binding RunsView}" SelectedItem="{Binding SelectedRun}">

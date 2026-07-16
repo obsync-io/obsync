@@ -44,6 +44,12 @@ public static class GitTransientErrors
         "repository not found",
         "could not read username",
         "terminal prompts disabled",
+        // HTTP auth/permission/not-found from the smart-HTTP transport. These arrive inside a
+        // "fatal: unable to access …" line, which is a transient marker — without these entries a
+        // revoked token or a deleted repository would be retried with backoff instead of surfacing.
+        "returned error: 401",
+        "returned error: 403",
+        "returned error: 404",
     ];
 
     /// <summary>True when <paramref name="stderr"/> indicates a retryable network condition.</summary>

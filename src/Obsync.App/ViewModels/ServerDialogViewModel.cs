@@ -28,7 +28,10 @@ public sealed partial class ServerDialogViewModel : ObservableObject
     [ObservableProperty] private SqlAuthenticationMode _authenticationMode = SqlAuthenticationMode.WindowsIntegrated;
     [ObservableProperty] private string _username = string.Empty;
     [ObservableProperty] private bool _encrypt = true;
-    [ObservableProperty] private bool _trustServerCertificate = true;
+
+    // Off by default (matches the model): trusting any certificate silently disables TLS
+    // validation. The edit path still loads whatever the stored profile says.
+    [ObservableProperty] private bool _trustServerCertificate;
     [ObservableProperty] private int _connectTimeoutSeconds = 30;
     [ObservableProperty] private string? _testResult;
     [ObservableProperty] private bool _testSucceeded;

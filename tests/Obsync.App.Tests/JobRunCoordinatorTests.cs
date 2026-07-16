@@ -155,6 +155,26 @@ public sealed class JobRunCoordinatorTests
     }
 
     [Fact]
+    public async Task RunAsync_ReturnsCancelled_WhenTheEngineThrowsOperationCanceled()
+    {
+        // A cancel during the engine's pre-run wait phase (e.g. the shared-repository lock wait)
+        // escapes as OperationCanceledException instead of a Cancelled run — the user's own Cancel
+        // click must not surface as an unhandled-exception dialog.
+        var jobId = Guid.NewGuid();
+        var engine = Substitute.For<ISyncEngine>();
+        engine.RunJobAsync(jobId, Arg.Any<RunTrigger>(), Arg.Any<IProgress<SyncProgress>?>(), Arg.Any<CancellationToken>())
+            .Returns<Task<SyncRun>>(_ => throw new OperationCanceledException());
+
+        var coordinator = new JobRunCoordinator(engine, Substitute.For<IAuditWriter>(), AllowingGuard());
+
+        var outcome = await coordinator.RunAsync(jobId, RunTrigger.Manual);
+
+        Assert.Equal(RunRequestStatus.Cancelled, outcome.Status);
+        Assert.Null(outcome.Run);
+        Assert.False(coordinator.IsRunning(jobId)); // the slot is released for the next run
+    }
+
+    [Fact]
     public async Task Cancel_IsANoOp_WhenTheJobIsNotRunning()
     {
         var jobId = Guid.NewGuid();

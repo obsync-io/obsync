@@ -15,8 +15,9 @@ public interface ISyncJobScheduler
 
     /// <summary>
     /// Schedules (or reschedules) a single job. <paramref name="triggerStartupRun"/> controls whether a
-    /// RunOnStartup job is fired immediately — true at startup / first schedule, false when merely
-    /// applying a changed schedule so an edit does not kick off an unexpected run.
+    /// RunOnStartup job is fired immediately — true only at service startup (ScheduleAllAsync), false
+    /// when applying a schedule while the service is running (reconcile, edits) so a job becoming
+    /// newly scheduled does not kick off an unattended run.
     /// </summary>
     Task ScheduleJobAsync(SyncJob job, bool triggerStartupRun = true, CancellationToken cancellationToken = default);
 
@@ -52,22 +53,30 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
         var jobs = await _jobs.GetAllAsync(cancellationToken).ConfigureAwait(false);
         foreach (var job in jobs.Where(j => j.Enabled))
         {
-            // Evaluate BEFORE scheduling: ScheduleJobAsync overwrites the persisted next-run (the
-            // evidence of a fire time missed while the scheduler was down) with the next future fire.
-            var catchUp = MissedRunPolicy.ShouldCatchUp(job, nowUtc) && CronTranslator.IsValid(job.Schedule);
-
-            await ScheduleJobAsync(job, triggerStartupRun: true, cancellationToken).ConfigureAwait(false);
-
-            if (catchUp)
+            // Per-job fault isolation: one job Quartz rejects must not fail service startup for the rest.
+            try
             {
-                var scheduler = await _schedulerFactory.GetScheduler(cancellationToken).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Job {Name}: a scheduled run (due {Due:u}) was missed while the scheduler was offline; running once now.",
-                    job.Name, job.RunSummary.NextRunAt);
-                await scheduler.TriggerJob(
-                    new JobKey(job.Id.ToString("N"), Group),
-                    new JobDataMap { [SyncQuartzJob.TriggerKey] = nameof(RunTrigger.CatchUp) },
-                    cancellationToken).ConfigureAwait(false);
+                // Evaluate BEFORE scheduling: ScheduleJobAsync overwrites the persisted next-run (the
+                // evidence of a fire time missed while the scheduler was down) with the next future fire.
+                var catchUp = MissedRunPolicy.ShouldCatchUp(job, nowUtc) && CronTranslator.IsValid(job.Schedule);
+
+                await ScheduleJobAsync(job, triggerStartupRun: true, cancellationToken).ConfigureAwait(false);
+
+                if (catchUp)
+                {
+                    var scheduler = await _schedulerFactory.GetScheduler(cancellationToken).ConfigureAwait(false);
+                    _logger.LogInformation(
+                        "Job {Name}: a scheduled run (due {Due:u}) was missed while the scheduler was offline; running once now.",
+                        job.Name, job.RunSummary.NextRunAt);
+                    await scheduler.TriggerJob(
+                        new JobKey(job.Id.ToString("N"), Group),
+                        new JobDataMap { [SyncQuartzJob.TriggerKey] = nameof(RunTrigger.CatchUp) },
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Job {Name}: could not be scheduled; continuing with the remaining jobs.", job.Name);
             }
         }
     }
@@ -84,6 +93,14 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
 
         var cron = CronTranslator.ToCron(job.Schedule);
         var hasCron = !string.IsNullOrWhiteSpace(cron) && CronExpression.IsValidExpression(cron);
+
+        // A syntactically valid cron can still never fire (e.g. a past year, Feb 31). Quartz's
+        // ScheduleJob throws for such a trigger, so degrade to unscheduled instead.
+        if (hasCron && CronTranslator.NextFire(cron!, DateTimeOffset.UtcNow) is null)
+        {
+            _logger.LogError("Job {Name}: cron '{Cron}' never fires; leaving it unscheduled.", job.Name, cron);
+            hasCron = false;
+        }
 
         if (!hasCron && !job.Schedule.RunOnStartup)
         {
@@ -145,49 +162,67 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
         var existingKeys = await scheduler.GetJobKeys(GroupMatcher<JobKey>.GroupEquals(Group), cancellationToken).ConfigureAwait(false);
         foreach (var key in existingKeys.Where(k => !desiredKeys.Contains(k)))
         {
-            await scheduler.DeleteJob(key, cancellationToken).ConfigureAwait(false);
-            if (Guid.TryParseExact(key.Name, "N", out var jobId))
+            // Per-job fault isolation: one failing job must not stop this tick (or the heartbeat).
+            try
             {
-                // Clear the cached next-run so a disabled job stops advertising a fire time that
-                // will never happen (a no-op for deleted jobs — the row is gone).
-                await _jobs.UpdateNextRunAtAsync(jobId, null, cancellationToken).ConfigureAwait(false);
-            }
+                await scheduler.DeleteJob(key, cancellationToken).ConfigureAwait(false);
+                if (Guid.TryParseExact(key.Name, "N", out var jobId))
+                {
+                    // Clear the cached next-run so a disabled job stops advertising a fire time that
+                    // will never happen (a no-op for deleted jobs — the row is gone).
+                    await _jobs.UpdateNextRunAtAsync(jobId, null, cancellationToken).ConfigureAwait(false);
+                }
 
-            _logger.LogInformation("Unscheduled job {Key} (deleted or disabled).", key.Name);
+                _logger.LogInformation("Unscheduled job {Key} (deleted or disabled).", key.Name);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Job {Key}: could not be unscheduled; continuing with the remaining jobs.", key.Name);
+            }
         }
 
         // Add new jobs, apply changed cadences, and keep the cached next-run fresh.
         foreach (var job in enabled)
         {
-            var jobKey = new JobKey(job.Id.ToString("N"), Group);
-            var triggerKey = new TriggerKey(job.Id.ToString("N"), Group);
-            var cron = CronTranslator.ToCron(job.Schedule);
-            var hasCron = !string.IsNullOrWhiteSpace(cron) && CronExpression.IsValidExpression(cron);
-
-            if (!await scheduler.CheckExists(jobKey, cancellationToken).ConfigureAwait(false))
+            try
             {
-                await ScheduleJobAsync(job, triggerStartupRun: true, cancellationToken).ConfigureAwait(false);
-                continue;
-            }
+                var jobKey = new JobKey(job.Id.ToString("N"), Group);
+                var triggerKey = new TriggerKey(job.Id.ToString("N"), Group);
+                var cron = CronTranslator.ToCron(job.Schedule);
+                var hasCron = !string.IsNullOrWhiteSpace(cron) && CronExpression.IsValidExpression(cron);
 
-            if (hasCron)
-            {
-                var trigger = await scheduler.GetTrigger(triggerKey, cancellationToken).ConfigureAwait(false) as ICronTrigger;
-                if (trigger?.CronExpressionString != cron)
+                if (!await scheduler.CheckExists(jobKey, cancellationToken).ConfigureAwait(false))
                 {
-                    // Cadence changed in the app → reschedule, but do NOT re-fire the startup run.
+                    // No startup run here: a job that becomes newly scheduled while the service runs
+                    // (re-enabled, or RunOnStartup switched on) must wait for its trigger — startup
+                    // runs belong to ScheduleAllAsync (service start) only.
                     await ScheduleJobAsync(job, triggerStartupRun: false, cancellationToken).ConfigureAwait(false);
+                    continue;
                 }
-                else
+
+                if (hasCron)
                 {
-                    await _jobs.UpdateNextRunAtAsync(job.Id, trigger?.GetNextFireTimeUtc(), cancellationToken).ConfigureAwait(false);
+                    var trigger = await scheduler.GetTrigger(triggerKey, cancellationToken).ConfigureAwait(false) as ICronTrigger;
+                    if (trigger?.CronExpressionString != cron)
+                    {
+                        // Cadence changed in the app → reschedule, but do NOT re-fire the startup run.
+                        await ScheduleJobAsync(job, triggerStartupRun: false, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await _jobs.UpdateNextRunAtAsync(job.Id, trigger?.GetNextFireTimeUtc(), cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                else if (!job.Schedule.RunOnStartup)
+                {
+                    // Switched to manual-only → drop the trigger.
+                    await scheduler.DeleteJob(jobKey, cancellationToken).ConfigureAwait(false);
+                    await _jobs.UpdateNextRunAtAsync(job.Id, null, cancellationToken).ConfigureAwait(false);
                 }
             }
-            else if (!job.Schedule.RunOnStartup)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Switched to manual-only → drop the trigger.
-                await scheduler.DeleteJob(jobKey, cancellationToken).ConfigureAwait(false);
-                await _jobs.UpdateNextRunAtAsync(job.Id, null, cancellationToken).ConfigureAwait(false);
+                _logger.LogError(ex, "Job {Name}: could not be reconciled; continuing with the remaining jobs.", job.Name);
             }
         }
     }

@@ -90,8 +90,11 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
     /// </summary>
     public async Task RefreshOnActivationAsync()
     {
+        // Settings has no service-run-fed data to catch up on, and its LoadAsync resets every
+        // unsaved field (including the typed SMTP/proxy passwords) — alt-tabbing must not wipe them.
         var now = DateTimeOffset.UtcNow;
         if (now - _lastActivationRefresh < ActivationRefreshInterval
+            || CurrentView is SettingsViewModel
             || CurrentView is not IAsyncViewModel section)
         {
             return;

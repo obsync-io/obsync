@@ -301,8 +301,10 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
             return false;
         }
 
+        // OrdinalIgnoreCase to match how the dropdown de-dupes job names — an Ordinal comparison
+        // would hide runs whose recorded name differs from the listed one only by case.
         if (!string.Equals(SelectedJob, AllJobs, StringComparison.Ordinal)
-            && !string.Equals(run.JobName, SelectedJob, StringComparison.Ordinal))
+            && !string.Equals(run.JobName, SelectedJob, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

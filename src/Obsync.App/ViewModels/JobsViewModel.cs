@@ -109,6 +109,9 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
 
     public async Task LoadAsync()
     {
+        // A stale action message must not outlive a reload (e.g. navigating away and back).
+        StatusMessage = null;
+
         var jobs = await _jobs.GetAllAsync();
         var markers = await _settings.GetProductionTagsAsync();
         await JobDisplay.PopulateAsync(jobs, _connections, _repositories, markers);
@@ -162,7 +165,9 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
             return;
         }
 
-        if (_coordinator.IsRunning(job.Id))
+        // The coordinator only sees runs started in THIS app; the cross-process run lock is the
+        // ground truth for a run executing in the scheduler service or the CLI.
+        if (_coordinator.IsRunning(job.Id) || JobRunLock.IsHeld(ObsyncPaths.LocksRoot, job.Id))
         {
             StatusMessage = $"{job.Name}: cannot delete while a run is in progress.";
             return;

@@ -336,6 +336,7 @@
                                                                FontSize="15" />
                                                 </Button>
                                                 <Button Style="{StaticResource IconButton}" ToolTip="Open in GitHub" AutomationProperties.Name="Open in GitHub"
+                                                        Visibility="{Binding DataContext.CanOpenChangesInGitHub, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource BoolToVisibility}}"
                                                         Command="{Binding DataContext.OpenChangeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                         CommandParameter="{Binding}">
                                                     <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconOpenExternal}"

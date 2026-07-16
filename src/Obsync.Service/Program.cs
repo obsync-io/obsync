@@ -49,6 +49,9 @@ try
 
     builder.Services.AddQuartz();
     builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
+    // Registered AFTER the Quartz hosted service on purpose: hosted services stop in reverse
+    // registration order, so this cancels in-flight runs BEFORE Quartz waits for them.
+    builder.Services.AddHostedService<RunCancellationOnStopService>();
     builder.Services.AddHostedService<JobSchedulingBootstrapper>();
     // Keeps the live schedule in sync with the database so app changes apply without a restart.
     builder.Services.AddHostedService<JobReconciliationService>();
@@ -60,6 +63,10 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "Obsync service terminated unexpectedly.");
+
+    // A fatal crash must not look like a clean stop to the SCM, or the installer's
+    // restart-on-failure recovery never fires.
+    Environment.ExitCode = 1;
 }
 finally
 {

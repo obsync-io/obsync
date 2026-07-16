@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Obsync.Data;
 using Obsync.Data.Repositories;
+using Obsync.Engine.Alerting;
 using Obsync.Scheduler;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -20,6 +21,7 @@ public sealed class JobSchedulingBootstrapper : IHostedService
     private readonly ISyncJobScheduler _scheduler;
     private readonly IRunRepository _runs;
     private readonly IAppSettingsRepository _settings;
+    private readonly IRunAlertService _alerts;
     private readonly ILogger<JobSchedulingBootstrapper> _logger;
 
     public JobSchedulingBootstrapper(
@@ -27,12 +29,14 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         ISyncJobScheduler scheduler,
         IRunRepository runs,
         IAppSettingsRepository settings,
+        IRunAlertService alerts,
         ILogger<JobSchedulingBootstrapper> logger)
     {
         _databaseInitializer = databaseInitializer;
         _scheduler = scheduler;
         _runs = runs;
         _settings = settings;
+        _alerts = alerts;
         _logger = logger;
     }
 
@@ -44,9 +48,23 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         // service or machine crash mid-run leaves an honest Failed entry instead of a stuck one.
         var recovered = await OrphanedRunCleaner.CleanAsync(
             _runs, ObsyncPaths.LocksRoot, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
-        if (recovered > 0)
+        if (recovered.Count > 0)
         {
-            _logger.LogWarning("Recovered {Count} run(s) interrupted by an earlier crash.", recovered);
+            _logger.LogWarning("Recovered {Count} run(s) interrupted by an earlier crash.", recovered.Count);
+        }
+
+        // Crash-recovered failures still alert — the process that ran them died before it could.
+        // Best-effort, like the engine's own post-run alerting.
+        foreach (var run in recovered)
+        {
+            try
+            {
+                await _alerts.NotifyAsync(run, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not send the failure alert for recovered run {RunKey}.", run.RunKey);
+            }
         }
 
         await _scheduler.ScheduleAllAsync(cancellationToken).ConfigureAwait(false);
