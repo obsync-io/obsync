@@ -181,6 +181,26 @@ public sealed class RunRepository : IRunRepository
         return [.. rows.Select(Map)];
     }
 
+    /// <summary>
+    /// Rows per multi-row run_logs insert: 5 parameters per row × 560 rows = 2,800 parameters,
+    /// comfortably under the bundled e_sqlite3's 32,766-variable limit
+    /// (SQLITE_LIMIT_VARIABLE_NUMBER, verified empirically by BatchInsertChunkingTests).
+    /// </summary>
+    internal const int LogChunkRows = 560;
+
+    private static string BuildLogsInsertSql(int rowCount)
+    {
+        var values = string.Join(",\n    ", Enumerable.Range(0, rowCount).Select(i =>
+            $"($run{i}, $timestamp{i}, $level{i}, $message{i}, $detail{i})"));
+        return $"""
+            INSERT INTO run_logs (run_id, timestamp, level, message, detail)
+            VALUES
+                {values};
+            """;
+    }
+
+    private static readonly string FullChunkLogsSql = BuildLogsInsertSql(LogChunkRows);
+
     public async Task AddLogsAsync(IReadOnlyCollection<SyncRunLog> logs, CancellationToken cancellationToken = default)
     {
         if (logs.Count == 0)
@@ -189,24 +209,27 @@ public sealed class RunRepository : IRunRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        // One transaction for the batch: Dapper executes once per item, and without this each row
-        // would pay its own auto-commit fsync.
+        // One transaction for the batch (one journal fsync total), and multi-row VALUES chunks so
+        // each command inserts LogChunkRows rows instead of paying a command round-trip per row.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await connection.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO run_logs (run_id, timestamp, level, message, detail)
-            VALUES ($run, $timestamp, $level, $message, $detail);
-            """,
-            logs.Select(l => new
+        foreach (var chunk in logs.Chunk(LogChunkRows))
+        {
+            var sql = chunk.Length == LogChunkRows ? FullChunkLogsSql : BuildLogsInsertSql(chunk.Length);
+            var parameters = new DynamicParameters();
+            for (var i = 0; i < chunk.Length; i++)
             {
-                run = l.RunId.ToString(),
-                timestamp = l.Timestamp,
-                level = (int)l.Level,
-                message = l.Message,
-                detail = l.Detail,
-            }),
-            transaction,
-            cancellationToken: cancellationToken)).ConfigureAwait(false);
+                var log = chunk[i];
+                parameters.Add($"run{i}", log.RunId.ToString());
+                parameters.Add($"timestamp{i}", log.Timestamp);
+                parameters.Add($"level{i}", (int)log.Level);
+                parameters.Add($"message{i}", log.Message);
+                parameters.Add($"detail{i}", log.Detail);
+            }
+
+            await connection.ExecuteAsync(new CommandDefinition(
+                sql, parameters, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -222,6 +245,26 @@ public sealed class RunRepository : IRunRepository
         return [.. rows];
     }
 
+    /// <summary>
+    /// Rows per multi-row run_changes insert: 8 parameters per row × 350 rows = 2,800 parameters,
+    /// comfortably under the bundled e_sqlite3's 32,766-variable limit
+    /// (SQLITE_LIMIT_VARIABLE_NUMBER, verified empirically by BatchInsertChunkingTests).
+    /// </summary>
+    internal const int ChangeChunkRows = 350;
+
+    private static string BuildChangesInsertSql(int rowCount)
+    {
+        var values = string.Join(",\n    ", Enumerable.Range(0, rowCount).Select(i =>
+            $"($run{i}, $change{i}, $type{i}, $schema{i}, $name{i}, $path{i}, $prev{i}, $new{i})"));
+        return $"""
+            INSERT INTO run_changes (run_id, change_type, object_type, schema_name, object_name, relative_path, previous_hash, new_hash)
+            VALUES
+                {values};
+            """;
+    }
+
+    private static readonly string FullChunkChangesSql = BuildChangesInsertSql(ChangeChunkRows);
+
     public async Task AddChangesAsync(Guid runId, IReadOnlyCollection<ObjectChange> changes, CancellationToken cancellationToken = default)
     {
         if (changes.Count == 0)
@@ -231,26 +274,31 @@ public sealed class RunRepository : IRunRepository
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         // One transaction for the batch — a VLDB first run records every object as an Added change,
-        // so this insert can carry hundreds of thousands of rows.
+        // so this insert can carry hundreds of thousands of rows. Multi-row VALUES chunks keep it to
+        // one command per ChangeChunkRows rows instead of a command round-trip per row.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await connection.ExecuteAsync(new CommandDefinition(
-            """
-            INSERT INTO run_changes (run_id, change_type, object_type, schema_name, object_name, relative_path, previous_hash, new_hash)
-            VALUES ($run, $change, $type, $schema, $name, $path, $prev, $new);
-            """,
-            changes.Select(c => new
+        var run = runId.ToString();
+        foreach (var chunk in changes.Chunk(ChangeChunkRows))
+        {
+            var sql = chunk.Length == ChangeChunkRows ? FullChunkChangesSql : BuildChangesInsertSql(chunk.Length);
+            var parameters = new DynamicParameters();
+            for (var i = 0; i < chunk.Length; i++)
             {
-                run = runId.ToString(),
-                change = (int)c.ChangeType,
-                type = (int)c.ObjectType,
-                schema = c.Schema,
-                name = c.Name,
-                path = c.RelativePath,
-                prev = c.PreviousHash,
-                @new = c.NewHash,
-            }),
-            transaction,
-            cancellationToken: cancellationToken)).ConfigureAwait(false);
+                var change = chunk[i];
+                parameters.Add($"run{i}", run);
+                parameters.Add($"change{i}", (int)change.ChangeType);
+                parameters.Add($"type{i}", (int)change.ObjectType);
+                parameters.Add($"schema{i}", change.Schema);
+                parameters.Add($"name{i}", change.Name);
+                parameters.Add($"path{i}", change.RelativePath);
+                parameters.Add($"prev{i}", change.PreviousHash);
+                parameters.Add($"new{i}", change.NewHash);
+            }
+
+            await connection.ExecuteAsync(new CommandDefinition(
+                sql, parameters, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 

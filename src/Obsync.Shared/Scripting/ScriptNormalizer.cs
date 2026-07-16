@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Obsync.Shared.Scripting;
@@ -32,6 +33,10 @@ public interface IScriptNormalizer
 /// <inheritdoc cref="IScriptNormalizer" />
 public sealed partial class ScriptNormalizer : IScriptNormalizer
 {
+    // This runs once per scripted object (up to ~1M per run) and its output feeds the SHA-256
+    // content hashes stored in the state database, so it must stay byte-identical to the
+    // historical Replace/Split/Join/TrimEnd pipeline. The single-pass form below exists purely
+    // to cut allocations (~6 full string copies per call before) — never to change semantics.
     public string Normalize(string script, NormalizationOptions? options = null)
     {
         if (string.IsNullOrEmpty(script))
@@ -42,36 +47,138 @@ public sealed partial class ScriptNormalizer : IScriptNormalizer
         options ??= NormalizationOptions.Default;
         var text = script;
 
-        if (options.StripObjectHeaderComment)
+        // Every possible match of ObjectHeaderRegex starts with the literal "/*", so the regex
+        // scan (the expensive part) can be skipped whenever that substring is absent. When it is
+        // present the regex runs exactly as before, keeping behavior identical.
+        if (options.StripObjectHeaderComment && text.Contains("/*", StringComparison.Ordinal))
         {
             text = ObjectHeaderRegex().Replace(text, string.Empty);
         }
 
-        // Always work in LF internally; re-emit per the option at the end.
-        text = text.Replace("\r\n", "\n").Replace('\r', '\n');
-
-        if (options.TrimTrailingWhitespace)
+        // Steady-state fast path: input that the remaining steps would leave unchanged is
+        // returned as-is, allocation-free. Only valid when LF output is requested.
+        if (options.NormalizeLineEndings && IsAlreadyNormalized(text, options))
         {
-            var lines = text.Split('\n');
-            for (var i = 0; i < lines.Length; i++)
+            return text;
+        }
+
+        return NormalizeCore(text, options);
+    }
+
+    /// <summary>
+    /// Determines in one scan whether the line-ending conversion, per-line trailing-whitespace
+    /// trim, and single-trailing-newline steps would all be no-ops for <paramref name="text"/>.
+    /// Callers must only trust the result when <see cref="NormalizationOptions.NormalizeLineEndings"/>
+    /// is enabled (otherwise the final LF-to-CRLF re-emit would still rewrite the text).
+    /// </summary>
+    private static bool IsAlreadyNormalized(string text, NormalizationOptions options)
+    {
+        if (text.Length == 0)
+        {
+            // The historical pipeline turns an empty remainder into "\n" when a trailing
+            // newline is guaranteed; otherwise it stays empty.
+            return !options.EnsureSingleTrailingNewline;
+        }
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '\r')
             {
-                lines[i] = lines[i].TrimEnd();
+                return false;
             }
 
-            text = string.Join('\n', lines);
+            // TrimEnd() removes every char.IsWhiteSpace character, so any such character at a
+            // line end (immediately before '\n' or at end of input) means work is needed.
+            // '\n' itself is whitespace but is the line delimiter, not trimmable line content.
+            if (options.TrimTrailingWhitespace && c != '\n' && char.IsWhiteSpace(c)
+                && (i + 1 == text.Length || text[i + 1] == '\n'))
+            {
+                return false;
+            }
         }
 
         if (options.EnsureSingleTrailingNewline)
         {
-            text = text.TrimEnd('\n') + "\n";
+            if (text[^1] != '\n')
+            {
+                return false;
+            }
+
+            if (text.Length > 1 && text[^2] == '\n')
+            {
+                return false;
+            }
         }
 
-        if (!options.NormalizeLineEndings)
+        return true;
+    }
+
+    /// <summary>
+    /// Single-pass, single-buffer equivalent of the historical pipeline:
+    /// CRLF/CR-to-LF conversion, optional per-line <c>TrimEnd()</c>, optional collapse of
+    /// trailing newlines to exactly one, optional LF-to-CRLF re-emit.
+    /// </summary>
+    private static string NormalizeCore(string text, NormalizationOptions options)
+    {
+        var trim = options.TrimTrailingWhitespace;
+        var builder = new StringBuilder(text.Length + 1);
+
+        // Builder length up to (and including) the last non-whitespace char of the current line;
+        // truncating to it at a line boundary reproduces string.TrimEnd() exactly.
+        var lineContentEnd = 0;
+
+        for (var i = 0; i < text.Length; i++)
         {
-            text = text.Replace("\n", "\r\n");
+            var c = text[i];
+            if (c == '\r')
+            {
+                // "\r\n" and a lone '\r' both become '\n', matching
+                // Replace("\r\n", "\n").Replace('\r', '\n').
+                if (i + 1 < text.Length && text[i + 1] == '\n')
+                {
+                    i++;
+                }
+
+                c = '\n';
+            }
+
+            if (c == '\n')
+            {
+                if (trim)
+                {
+                    builder.Length = lineContentEnd;
+                }
+
+                builder.Append('\n');
+                lineContentEnd = builder.Length;
+                continue;
+            }
+
+            builder.Append(c);
+            if (!char.IsWhiteSpace(c))
+            {
+                lineContentEnd = builder.Length;
+            }
         }
 
-        return text;
+        if (trim)
+        {
+            builder.Length = lineContentEnd;
+        }
+
+        if (options.EnsureSingleTrailingNewline)
+        {
+            while (builder.Length > 0 && builder[^1] == '\n')
+            {
+                builder.Length--;
+            }
+
+            builder.Append('\n');
+        }
+
+        var result = builder.ToString();
+        return options.NormalizeLineEndings ? result : result.Replace("\n", "\r\n");
     }
 
     // Matches the single-line SSMS header, e.g.

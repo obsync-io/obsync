@@ -115,10 +115,13 @@ public sealed class ObjectStateRepository : IObjectStateRepository
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal);
+        // NOCASE database match, same as GetForJobDatabaseAsync: the identity index compares
+        // database_name with NOCASE (V011), so a BINARY comparison here could not seek it past
+        // job_id and would miss rows whose stored casing differs from the caller's.
         var rows = await connection.QueryAsync<StateRow>(new CommandDefinition(
             $"""
             {SelectColumns}
-            WHERE job_id = $job AND database_name = $db AND object_type < 60
+            WHERE job_id = $job AND database_name = $db COLLATE NOCASE AND object_type < 60
               AND (object_name LIKE $pattern ESCAPE '\' OR (schema_name || '.' || object_name) LIKE $pattern ESCAPE '\')
             ORDER BY schema_name, object_name LIMIT $limit;
             """,
@@ -139,47 +142,64 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         return [.. names];
     }
 
-    private const string UpsertSql =
-        """
-        INSERT INTO object_states
-            (job_id, database_name, object_type, schema_name, object_name, object_id, file_path, last_hash,
-             last_scripted_at, last_committed_at, last_commit_sha, last_run_id, last_status, error_message)
-        VALUES
-            ($job, $db, $type, $schema, $name, $objectId, $path, $hash, $scripted, $committed, $sha, $run, $status, $error)
-        ON CONFLICT (job_id, database_name, object_type, schema_name, object_name) DO UPDATE SET
-            object_id = excluded.object_id, file_path = excluded.file_path, last_hash = excluded.last_hash,
-            last_scripted_at = excluded.last_scripted_at, last_committed_at = excluded.last_committed_at,
-            last_commit_sha = excluded.last_commit_sha, last_run_id = excluded.last_run_id,
-            last_status = excluded.last_status, error_message = excluded.error_message,
-            -- The identity index is NOCASE (V011): a case-only rename updates the existing row, and
-            -- these keep the stored casing current with the live catalog.
-            database_name = excluded.database_name, schema_name = excluded.schema_name,
-            object_name = excluded.object_name;
-        """;
+    /// <summary>
+    /// Rows per multi-row upsert statement: 14 parameters per row × 200 rows = 2,800 parameters,
+    /// comfortably under the bundled e_sqlite3's 32,766-variable limit
+    /// (SQLITE_LIMIT_VARIABLE_NUMBER, verified empirically by BatchInsertChunkingTests).
+    /// </summary>
+    internal const int UpsertChunkRows = 200;
 
-    private static object ToParameters(TrackedObjectState state) => new
+    private static string BuildUpsertSql(int rowCount)
     {
-        job = state.JobId.ToString(),
-        db = state.DatabaseName,
-        type = (int)state.ObjectType,
-        schema = state.SchemaName,
-        name = state.ObjectName,
-        objectId = state.ObjectId,
-        path = state.FilePath,
-        hash = state.LastHash,
-        scripted = state.LastScriptedAt,
-        committed = state.LastCommittedAt,
-        sha = state.LastCommitSha,
-        run = state.LastRunId?.ToString(),
-        status = (int)state.LastStatus,
-        error = state.ErrorMessage,
-    };
+        var values = string.Join(",\n    ", Enumerable.Range(0, rowCount).Select(i =>
+            $"($job{i}, $db{i}, $type{i}, $schema{i}, $name{i}, $objectId{i}, $path{i}, $hash{i}, " +
+            $"$scripted{i}, $committed{i}, $sha{i}, $run{i}, $status{i}, $error{i})"));
+        return $"""
+            INSERT INTO object_states
+                (job_id, database_name, object_type, schema_name, object_name, object_id, file_path, last_hash,
+                 last_scripted_at, last_committed_at, last_commit_sha, last_run_id, last_status, error_message)
+            VALUES
+                {values}
+            ON CONFLICT (job_id, database_name, object_type, schema_name, object_name) DO UPDATE SET
+                object_id = excluded.object_id, file_path = excluded.file_path, last_hash = excluded.last_hash,
+                last_scripted_at = excluded.last_scripted_at, last_committed_at = excluded.last_committed_at,
+                last_commit_sha = excluded.last_commit_sha, last_run_id = excluded.last_run_id,
+                last_status = excluded.last_status, error_message = excluded.error_message,
+                -- The identity index is NOCASE (V011): a case-only rename updates the existing row, and
+                -- these keep the stored casing current with the live catalog.
+                database_name = excluded.database_name, schema_name = excluded.schema_name,
+                object_name = excluded.object_name;
+            """;
+    }
+
+    private static readonly string SingleUpsertSql = BuildUpsertSql(1);
+    private static readonly string FullChunkUpsertSql = BuildUpsertSql(UpsertChunkRows);
+
+    private static void AddUpsertParameters(DynamicParameters parameters, TrackedObjectState state, int i)
+    {
+        parameters.Add($"job{i}", state.JobId.ToString());
+        parameters.Add($"db{i}", state.DatabaseName);
+        parameters.Add($"type{i}", (int)state.ObjectType);
+        parameters.Add($"schema{i}", state.SchemaName);
+        parameters.Add($"name{i}", state.ObjectName);
+        parameters.Add($"objectId{i}", state.ObjectId);
+        parameters.Add($"path{i}", state.FilePath);
+        parameters.Add($"hash{i}", state.LastHash);
+        parameters.Add($"scripted{i}", state.LastScriptedAt);
+        parameters.Add($"committed{i}", state.LastCommittedAt);
+        parameters.Add($"sha{i}", state.LastCommitSha);
+        parameters.Add($"run{i}", state.LastRunId?.ToString());
+        parameters.Add($"status{i}", (int)state.LastStatus);
+        parameters.Add($"error{i}", state.ErrorMessage);
+    }
 
     public async Task UpsertAsync(TrackedObjectState state, CancellationToken cancellationToken = default)
     {
+        var parameters = new DynamicParameters();
+        AddUpsertParameters(parameters, state, 0);
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         await connection.ExecuteAsync(new CommandDefinition(
-            UpsertSql, ToParameters(state), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            SingleUpsertSql, parameters, cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
     public async Task UpsertManyAsync(
@@ -191,13 +211,23 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        // One transaction for the whole batch: SQLite pays the journal fsync once instead of once
-        // per row, and the prepared statement is reused across the loop.
+        // One transaction for the whole batch (SQLite pays the journal fsync once instead of once
+        // per row), and multi-row VALUES chunks so each command upserts UpsertChunkRows rows —
+        // per-row commands cost a Dapper prepare + SQLite round-trip each, which dominates a
+        // VLDB first run at hundreds of thousands of states.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var state in states)
+        foreach (var chunk in states.Chunk(UpsertChunkRows))
         {
+            // Full chunks reuse one cached SQL text so Dapper caches a single command shape.
+            var sql = chunk.Length == UpsertChunkRows ? FullChunkUpsertSql : BuildUpsertSql(chunk.Length);
+            var parameters = new DynamicParameters();
+            for (var i = 0; i < chunk.Length; i++)
+            {
+                AddUpsertParameters(parameters, chunk[i], i);
+            }
+
             await connection.ExecuteAsync(new CommandDefinition(
-                UpsertSql, ToParameters(state), transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
+                sql, parameters, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);

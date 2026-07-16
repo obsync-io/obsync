@@ -105,6 +105,17 @@ public sealed partial class GitWorkspace : IGitWorkspace
             _ = await _git.RunAsync(
                 context.LocalPath, ["remote", "set-url", "origin", context.RemoteUrl], cancellationToken).ConfigureAwait(false);
 
+            // Clones deployed before these repository defaults existed (see CloneFreshAsync) must
+            // pick them up too. `git config` set is a cheap local write, fine on every prepare;
+            // best-effort for the same reason as set-url above.
+            _ = await _git.RunAsync(
+                context.LocalPath, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
+            _ = await _git.RunAsync(
+                context.LocalPath, ["config", "feature.manyFiles", "true"], cancellationToken).ConfigureAwait(false);
+            _ = await _git.RunAsync(
+                context.LocalPath, ["config", "core.fsyncMethod", "batch"], cancellationToken).ConfigureAwait(false);
+            EnsureObsyncTmpExcluded(context.LocalPath);
+
             var fetch = await RunNetworkAsync(context.LocalPath, context, ["fetch", "origin"], cancellationToken).ConfigureAwait(false);
             if (!fetch.Success)
             {
@@ -219,19 +230,58 @@ public sealed partial class GitWorkspace : IGitWorkspace
             Directory.CreateDirectory(parent);
         }
 
-        var clone = await RunNetworkAsync(parent ?? ".", context, ["clone", context.RemoteUrl, context.LocalPath], cancellationToken)
-            .ConfigureAwait(false);
+        // `clone -c` applies each setting during the clone itself AND persists it into the new
+        // clone's config:
+        // - core.longpaths: Windows MAX_PATH protection — a deep workspaces root plus a long
+        //   schema/object path can exceed 260 chars. It must be active during the clone's own
+        //   checkout: a self-heal re-clone of a repo that already contains such paths would fail
+        //   with "Filename too long" before any post-clone config could apply.
+        // - feature.manyFiles: index.version=4 + core.untrackedCache=true — smaller index and
+        //   cached untracked-walks over large exported trees (a VLDB run writes 100k+ script files).
+        // - core.fsyncMethod=batch: batches loose-object fsyncs on mass adds; the reduced
+        //   durability window is acceptable because the workspace is fully regenerable (above).
+        var clone = await RunNetworkAsync(
+            parent ?? ".", context,
+            [
+                "clone",
+                "-c", "core.longpaths=true",
+                "-c", "feature.manyFiles=true",
+                "-c", "core.fsyncMethod=batch",
+                context.RemoteUrl, context.LocalPath,
+            ],
+            cancellationToken).ConfigureAwait(false);
         if (!clone.Success)
         {
             return Result.Failure($"git clone failed: {Summarize(clone.StandardError)}");
         }
 
-        // Windows MAX_PATH protection: a deep workspaces root plus a long schema/object path can
-        // exceed 260 chars, failing checkouts and `git show` with "Filename too long". Best-effort
-        // (a failure here surfaces later with git's own clear message).
-        _ = await _git.RunAsync(
-            context.LocalPath, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
+        EnsureObsyncTmpExcluded(context.LocalPath);
         return Result.Success();
+    }
+
+    // The engine's atomic-write temp files (*.obsync-tmp, orphaned only by a hard process kill
+    // mid-write) are kept out of commits and status via .git/info/exclude rather than an exclude
+    // pathspec on add/status: git bypasses the untracked cache for any non-empty pathspec.
+    // Idempotent check-then-append; info/exclude is local-only and never pushed.
+    private static void EnsureObsyncTmpExcluded(string localPath)
+    {
+        const string pattern = "*.obsync-tmp";
+        var excludePath = Path.Combine(localPath, ".git", "info", "exclude");
+        if (File.Exists(excludePath))
+        {
+            var content = File.ReadAllText(excludePath);
+            if (content.Split('\n').Any(line => line.Trim() == pattern))
+            {
+                return;
+            }
+
+            var separator = content.Length == 0 || content.EndsWith('\n') ? string.Empty : Environment.NewLine;
+            File.AppendAllText(excludePath, separator + pattern + Environment.NewLine);
+            return;
+        }
+
+        Directory.CreateDirectory(Path.Combine(localPath, ".git", "info"));
+        File.WriteAllText(excludePath, pattern + Environment.NewLine);
     }
 
     // Git object files are read-only, which makes Directory.Delete(recursive) throw — clear the
@@ -266,25 +316,28 @@ public sealed partial class GitWorkspace : IGitWorkspace
     public async Task<GitCommitResult> CommitAllAsync(
         GitWorkspaceContext context, string subject, string body, bool allowEmpty = false, CancellationToken cancellationToken = default)
     {
-        // untrackedCache persists untracked-directory mtimes in the index, so the add/status walks
-        // over a large exported tree (a VLDB run writes 100k+ script files) skip unchanged directories
-        // on subsequent runs. The exclude pathspec keeps the engine's atomic-write temp files
-        // (*.obsync-tmp, orphaned only by a hard process kill mid-write) out of commits.
-        var add = await _git.RunAsync(
-            context.LocalPath,
-            ["-c", "core.untrackedCache=true", "add", "-A", "--", ".", ":(exclude,glob)**/*.obsync-tmp"],
-            cancellationToken).ConfigureAwait(false);
+        // Full-tree sweep: `add -A -- .` stages every creation, modification, and deletion under
+        // the workspace. *.obsync-tmp temps stay out via .git/info/exclude (see
+        // EnsureObsyncTmpExcluded), and the untracked cache enabled by feature.manyFiles (see
+        // CloneFreshAsync) makes the walk skip unchanged directories on subsequent runs.
+        var add = await _git.RunAsync(context.LocalPath, ["add", "-A", "--", "."], cancellationToken).ConfigureAwait(false);
         if (!add.Success)
         {
             return GitCommitResult.Failed($"git add failed: {Summarize(add.StandardError)}");
         }
 
-        var status = await _git.RunAsync(
-            context.LocalPath,
-            ["-c", "core.untrackedCache=true", "status", "--porcelain", "--", ".", ":(exclude,glob)**/*.obsync-tmp"],
-            cancellationToken).ConfigureAwait(false);
-        var hasWorkingChanges = !string.IsNullOrWhiteSpace(status.StandardOutput);
-        if (!hasWorkingChanges && !allowEmpty)
+        // `status --porcelain` prints one line per change (~100 MB of buffered stdout on a
+        // million-file first run) just to answer yes/no; `diff --cached --quiet` answers with the
+        // exit code alone: 0 = nothing staged, 1 = staged changes, anything else = error. Holds on
+        // an unborn HEAD too (first commit against an empty remote).
+        var diff = await _git.RunAsync(context.LocalPath, ["diff", "--cached", "--quiet"], cancellationToken).ConfigureAwait(false);
+        if (diff.ExitCode is not (0 or 1))
+        {
+            return GitCommitResult.Failed($"git diff failed: {Summarize(diff.StandardError)}");
+        }
+
+        var hasStagedChanges = diff.ExitCode == 1;
+        if (!hasStagedChanges && !allowEmpty)
         {
             return GitCommitResult.NoChanges();
         }
@@ -295,7 +348,7 @@ public sealed partial class GitWorkspace : IGitWorkspace
             "-c", $"user.email={context.CommitterEmail}",
             "commit", "-m", subject, "-m", body,
         };
-        if (!hasWorkingChanges)
+        if (!hasStagedChanges)
         {
             commitArgs.Add("--allow-empty");
         }

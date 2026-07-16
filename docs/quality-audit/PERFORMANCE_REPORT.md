@@ -83,3 +83,49 @@ Notes:
 5. Not measured here (bounded by environment): slow-network Git/GitHub behavior, low-memory and
    low-disk operation, and a true 500k-object VLDB run — see RELEASE_READINESS for the remaining
    human-gated items.
+
+---
+
+## Addendum — 2026-07-16 optimization pass (post-audit)
+
+A dedicated performance review (two fresh-context auditors over the hot paths, findings verified
+against this report's numbers) was implemented and re-measured. Changes: per-slice SMO prefetch
+(the parallel table path never prefetched — the N+1 its own doc claimed to prevent; bounded by a
+25k-table ceiling), streamed object-inventory serialize/hash (the string form previously crossed
+the 95 MB guard at ~380k objects and was skipped forever with a perpetual Warning), single-pass
+byte-identical script normalizer (locked by a frozen reference implementation + 2,000,200
+differential fuzz cases), encode-once hash+write, size-guard before hashing, batched self-heal
+existence probe, slim prior-state projection (~half the resident bytes), chunked multi-row SQLite
+inserts (parameter limit 32,766 confirmed empirically; chunks 200×14 / 350×8 / 560×5), V012 drops
+a strict-prefix-duplicate index, per-run persisted change rows capped at 50k (counters stay exact;
+surfaced in the run log), server-side schema filter on the incremental snapshot,
+`clone -c core.longpaths` (the old post-clone set left the clone itself unprotected),
+`feature.manyFiles` + `core.fsyncMethod=batch` + `.git/info/exclude`-based tmp exclusion
+(re-enabling untracked-cache eligibility), and `git diff --cached --quiet` replacing the
+porcelain-status capture (~100 MB of stdout on a 1M-file first run).
+
+**Re-measured (same machine/method; interference-checked with re-runs):**
+
+| Workload | Metric | Before | After |
+|---|---|---|---|
+| 2,000 tables + 300 modules | Full scan | 236.0 s | **43.6 s (5.4×)** |
+| 2,000 tables + 300 modules | Full-scan allocations | 31.3 GB | **1.45 GB** |
+| 50,202 modules+tables | Full scan | 587.7 s | **369.5 s (1.6×)** — scripting phase 460.5 → 190.8 s (2.4×) |
+| 50,202 | No-change (cold) | 39.5 s | **11.6 s (3.4×)** |
+| 50,202 | No-change (warm) | 6.7 s | 6.7 s (unchanged — dominated by the encrypted-object full-scan-of-type, by design) |
+| 50,202 | Incremental, 500 changed | 11.3 s | 11.6 s (unchanged) |
+| 50,202 | Peak working set | 363 MB | **203 MB** |
+
+**Honest notes:** (1) the first-COMMIT phase measured 126 → 178 s; an isolated A/B (plain vs tuned
+git config, synthetic 50k files) attributes ~5% of that to `feature.manyFiles`+`fsyncMethod=batch`
+on a one-time mass add — kept because index v4 and the untracked cache target the 1M-file steady
+state, where a ~5% one-time cost is the right trade; the rest of the delta was environmental
+(back-to-back benchmark disk churn — the re-run confirmed). (2) Correctness was re-proven after
+the changes: full suite 561/561, E2E battery 73/73 (including the determinism tree-hash check —
+the byte-identity work means existing deployments' stored hashes remain valid; no mass re-commit
+on upgrade). (3) Deliberately deferred, with reasons: `core.fsmonitor` daemon (lifecycle surprise
+in service/multi-user contexts — revisit as opt-in), pathspec-scoped commits (would lose the
+full-sweep self-heal semantics), per-type aggregate no-change short-circuit (checksum-collision
+risk needs a conservative-fallback design), per-database parallelism (multiplies production SQL
+load; needs opt-in design), streaming pending-state to a staging table (touches the delivery-gate
+invariant), provider-stream overlap (subtle fault-teardown concurrency for a modest win).

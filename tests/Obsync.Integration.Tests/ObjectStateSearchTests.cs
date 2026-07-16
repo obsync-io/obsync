@@ -84,6 +84,17 @@ public sealed class ObjectStateSearchTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task Search_MatchesTheDatabaseNameCaseInsensitively()
+    {
+        var states = _provider.GetRequiredService<IObjectStateRepository>();
+
+        // The identity index compares database_name with NOCASE (V011); a differently-cased
+        // database name must find the same rows, consistent with GetForJobDatabaseAsync.
+        var all = await states.SearchAsync(_job.Id, "SALESDB", string.Empty, 50);
+        Assert.Equal(4, all.Count);
+    }
+
+    [Fact]
     public async Task Search_EscapesLikeWildcards()
     {
         var states = _provider.GetRequiredService<IObjectStateRepository>();

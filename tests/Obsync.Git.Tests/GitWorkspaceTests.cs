@@ -191,6 +191,78 @@ public sealed class GitWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task Prepare_FreshClone_WritesLargeRepoConfigAndTmpExclude()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+
+        Assert.True((await _workspace.PrepareAsync(NewContext(remote, workPath))).IsSuccess);
+
+        // `clone -c` must persist each setting into the new clone's own config, so it also holds
+        // for every later command (and core.longpaths already protected the clone's checkout).
+        Assert.Equal("true", await ConfigValueAsync(workPath, "core.longpaths"));
+        Assert.Equal("true", await ConfigValueAsync(workPath, "feature.manyFiles"));
+        Assert.Equal("batch", await ConfigValueAsync(workPath, "core.fsyncMethod"));
+        Assert.Contains("*.obsync-tmp", await File.ReadAllLinesAsync(Path.Combine(workPath, ".git", "info", "exclude")));
+    }
+
+    [Fact]
+    public async Task Prepare_ExistingClone_AddsLargeRepoConfigAndTmpExclude()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+
+        // A clone deployed before these repository defaults existed: plain clone, no config keys,
+        // no info/exclude entry.
+        Assert.True((await _runner.RunAsync(_root, ["clone", remote, workPath])).Success);
+        var context = NewContext(remote, workPath);
+
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+
+        Assert.Equal("true", await ConfigValueAsync(workPath, "core.longpaths"));
+        Assert.Equal("true", await ConfigValueAsync(workPath, "feature.manyFiles"));
+        Assert.Equal("batch", await ConfigValueAsync(workPath, "core.fsyncMethod"));
+        var excludePath = Path.Combine(workPath, ".git", "info", "exclude");
+        Assert.Contains("*.obsync-tmp", await File.ReadAllLinesAsync(excludePath));
+
+        // Runs on every prepare, so it must be idempotent — no duplicate exclude lines.
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        Assert.Single(await File.ReadAllLinesAsync(excludePath), line => line == "*.obsync-tmp");
+    }
+
+    [Fact]
+    public async Task DiffCachedQuiet_ExitCodes_HoldOnAnUnbornHead()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        // CommitAllAsync reads `diff --cached --quiet` exit codes as 0 = nothing staged and
+        // 1 = staged changes; lock that contract on the unborn HEAD of a first run against an
+        // empty remote, where there is no HEAD commit to diff against.
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        Assert.True((await _workspace.PrepareAsync(NewContext(remote, workPath))).IsSuccess);
+
+        Assert.Equal(0, (await _runner.RunAsync(workPath, ["diff", "--cached", "--quiet"])).ExitCode);
+
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "x.sql"), "CREATE SCHEMA [x];");
+        Assert.True((await _runner.RunAsync(workPath, ["add", "-A", "--", "."])).Success);
+        Assert.Equal(1, (await _runner.RunAsync(workPath, ["diff", "--cached", "--quiet"])).ExitCode);
+    }
+
+    [Fact]
     public async Task Prepare_RecoversFromAPartialClone()
     {
         if (!GitAvailable())
@@ -393,6 +465,13 @@ public sealed class GitWorkspaceTests : IDisposable
         CommitterName = "Obsync Tests",
         CommitterEmail = "tests@obsync.local",
     };
+
+    private async Task<string> ConfigValueAsync(string workPath, string key)
+    {
+        var result = await _runner.RunAsync(workPath, ["config", "--local", "--get", key]);
+        Assert.True(result.Success, result.StandardError);
+        return result.StandardOutput.Trim();
+    }
 
     private async Task<string> InitBareRemoteAsync()
     {
