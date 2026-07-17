@@ -56,7 +56,7 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Authentication" Width="1*" MinWidth="90">
+                        <DataGridTemplateColumn Header="Authentication" Width="1*" MinWidth="108">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding AuthenticationMode, Converter={StaticResource EnumDisplay}}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
