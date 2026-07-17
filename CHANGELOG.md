@@ -2,6 +2,56 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.9.0 — 2026-07-16
+
+**Production-trust and clarity release.** A full product-improvement review (assessment, plan, and
+evidence in `docs/product-improvements/`) drove this release: the app now tells you when something
+needs attention instead of leaving you to infer it, without changing the calm six-section design.
+
+- **Overdue schedules are visible** — a scheduled job whose next run silently passed now shows an
+  amber "Overdue" (with the scheduled time and a corrective hint) on the Dashboard, Jobs, and Job
+  Workspace instead of a stale timestamp.
+- **Dashboard "Needs attention" panel** — failed jobs (with the error), warning runs, overdue
+  schedules, and servers failing their connection test, each with a one-click Open action. Absent
+  when everything is healthy.
+- **Pause, resume, duplicate, export** — pause/resume a job's schedule from the list (paused jobs
+  show a neutral "Paused" badge and clear their next run); duplicate a job as a paused copy; export
+  its secret-free configuration — all from a new per-row menu.
+- **Server & repository health that persists** — servers show their SQL Server edition/version and
+  last-checked time (captured during tests, no extra load) plus a copy-name button; repository
+  validation results (including whether the configured branch actually exists) are now stored and
+  shown as a status badge; a read-only token now says exactly which commit modes it breaks.
+- **Wizard clarity** — every preset can show its exact included object types (sourced from the real
+  preset expansion); all four commit modes have inline descriptions; the destination step
+  live-previews the resolved folder and warns when another job writes to the same place; branch
+  names are validated against git's rules; the databases list gained search + select-all; the
+  schedule step shows the computed next run with your time zone and documents the overlap policy
+  (a run still in progress means the next fire is skipped); the Review step can run optional
+  preflight checks (SQL, repository + branch, export path, credentials, folder collisions) that
+  never block saving.
+- **History & diff** — the runs grid now shows added/modified/deleted counts separately, the run's
+  trigger (manual/scheduled/startup/catch-up), and a link to the pull request it opened; filters get
+  a one-click reset. The diff viewer gains change-type filters, find-in-script (F3/Shift+F3), a
+  word-wrap toggle, and copy actions for object name, path, and script.
+- **Diagnostics & logs** — new checks for Windows Credential Manager, data/workspace folder
+  writability, and state-database integrity, each timestamped, with copy-all; a Recent-logs panel
+  (severity filter, search, open-folder) inside Settings; the app's log files are now capped at 31
+  days (previously unbounded).
+- **Storage & About** — workspace/state-database/log sizes and free disk with open-folder buttons;
+  About now shows app, engine, service, .NET, Git, and Windows versions plus the database schema
+  version, with one-click "Copy support info" and project/issue/documentation links.
+- **Security & audit** — the least-privilege permission generator can include server-level grants
+  and now also produces a matching revoke script; the audit trail additionally records settings
+  changes, credential updates, permission-script generation, audit/support-bundle exports, update
+  checks, run cancellations, and job pause/resume/duplicate/export.
+- **Alert reliability** — email and webhook alerts retry once on transient delivery failure.
+- **Polish** — column truncation and clipped row actions fixed on the Dashboard, Jobs, and History
+  tables at small window sizes (now guarded by automated layout probes).
+
+Also new in the repository: proposals for a future drift-detection/schema-compare module and a
+migration-assessment module, an enterprise roadmap, and a design-system reference
+(`docs/product-improvements/`, `docs/design-system/`).
+
 ## 0.8.3 — 2026-07-15
 
 **Critical fix — upgrade required.** In 0.8.0–0.8.2 the Windows Service crashed on every plain
