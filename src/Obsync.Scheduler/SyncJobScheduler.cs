@@ -246,7 +246,7 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
                 if (hasCron)
                 {
                     var trigger = await scheduler.GetTrigger(triggerKey, cancellationToken).ConfigureAwait(false) as ICronTrigger;
-                    if (trigger?.CronExpressionString != cron)
+                    if (!CronTranslator.MatchesTrigger(trigger?.CronExpressionString, cron!))
                     {
                         // Cadence changed in the app → reschedule, but do NOT re-fire the startup run.
                         await ScheduleJobAsync(job, triggerStartupRun: false, cancellationToken).ConfigureAwait(false);

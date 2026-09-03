@@ -1,4 +1,4 @@
-using Obsync.Scheduler;
+﻿using Obsync.Scheduler;
 using Obsync.Shared;
 using Obsync.Shared.Models;
 using Quartz;
@@ -104,6 +104,76 @@ public sealed class CronTranslatorTests
 
         Assert.Null(CronTranslator.ToCron(schedule));
         Assert.False(CronTranslator.IsValid(schedule));
+    }
+
+    /// <summary>
+    /// The comparison reconcile makes every 30 seconds. It has to hold for the expression as Quartz
+    /// reports it back, not as the user typed it, or the trigger is rebuilt forever.
+    /// </summary>
+    [Theory]
+    [InlineData("0 0 2 ? * mon-fri")]
+    [InlineData("0 0 2 ? * Mon-Fri")]
+    [InlineData("0 0 2 ? * MON-FRI")]
+    [InlineData("0 0 2 ? * mon,wed,fri")]
+    [InlineData("0 0 2 ? jan-mar mon")]
+    [InlineData("0 0 2 ? * sun#2")]
+    [InlineData("0 0 2 L * ?")]
+    [InlineData("0 0 23 * * ?")]
+    [InlineData("  0 0 2 ? * mon-fri  ")]
+    public void MatchesTrigger_HoldsForTheExpressionQuartzReportsBack(string cron)
+    {
+        // Built exactly as SyncJobScheduler builds it, so the round-trip under test is the real one.
+        var trigger = (ICronTrigger)TriggerBuilder.Create()
+            .WithIdentity("t", "obsync")
+            .WithCronSchedule(cron, x => x.InTimeZone(TimeZoneInfo.Local))
+            .Build();
+
+        Assert.True(
+            CronTranslator.MatchesTrigger(trigger.CronExpressionString, cron),
+            $"stored '{cron}' did not match the trigger's '{trigger.CronExpressionString}'");
+    }
+
+    [Fact]
+    public void MatchesTrigger_IsFalseForADifferentCadence()
+    {
+        var trigger = (ICronTrigger)TriggerBuilder.Create()
+            .WithIdentity("t", "obsync")
+            .WithCronSchedule("0 0 2 ? * MON-FRI", x => x.InTimeZone(TimeZoneInfo.Local))
+            .Build();
+
+        Assert.False(CronTranslator.MatchesTrigger(trigger.CronExpressionString, "0 0 5 ? * mon-fri"));
+        Assert.False(CronTranslator.MatchesTrigger(trigger.CronExpressionString, "0 0 2 ? * mon-thu"));
+    }
+
+    /// <summary>A job with no trigger must reschedule, so a missing expression can never match.</summary>
+    [Fact]
+    public void MatchesTrigger_IsFalseWhenThereIsNoTrigger() =>
+        Assert.False(CronTranslator.MatchesTrigger(null, "0 0 2 ? * mon-fri"));
+
+    /// <summary>
+    /// The built-in cadences are machine-generated and already in Quartz's normal form, so the
+    /// comparison must hold for every one of them as well.
+    /// </summary>
+    [Fact]
+    public void MatchesTrigger_HoldsForEveryBuiltInCadence()
+    {
+        foreach (var schedule in EnumerateSchedules())
+        {
+            var cron = CronTranslator.ToCron(schedule);
+            if (string.IsNullOrWhiteSpace(cron) || !CronExpression.IsValidExpression(cron))
+            {
+                continue;
+            }
+
+            var trigger = (ICronTrigger)TriggerBuilder.Create()
+                .WithIdentity("t", "obsync")
+                .WithCronSchedule(cron, x => x.InTimeZone(TimeZoneInfo.Local))
+                .Build();
+
+            Assert.True(
+                CronTranslator.MatchesTrigger(trigger.CronExpressionString, cron),
+                $"{schedule.Kind} produced '{cron}' but the trigger reported '{trigger.CronExpressionString}'");
+        }
     }
 
     private static IEnumerable<ScheduleProfile> EnumerateSchedules()
