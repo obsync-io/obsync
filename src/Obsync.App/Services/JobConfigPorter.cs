@@ -169,6 +169,14 @@ public sealed class JobConfigPorter : IJobConfigPorter
             return JobImportResult.Failure($"This job's schedule can't be run as exported. {scheduleError}");
         }
 
+        // Same reasoning for the maintenance window, which import checked for no cadence at all: a
+        // schedule the window can never admit builds a healthy trigger and is skipped every single
+        // occurrence, so importing one produced an enabled job that quietly never ran.
+        if (ScheduleWindowGuard.ConflictReason(file.Schedule, _clock.UtcNow) is { } windowError)
+        {
+            return JobImportResult.Failure($"This job's schedule can't be run as exported. {windowError}");
+        }
+
         // Re-attach the server profile: by profile name first, then by server name.
         var connections = await _connections.GetAllAsync(cancellationToken).ConfigureAwait(false);
         var connection =

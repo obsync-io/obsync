@@ -199,6 +199,97 @@ public sealed class JobConfigPorterTests
         Assert.Equal(6, Assert.Single(_saved).Schedule.IntervalHours);
     }
 
+    [Fact]
+    public async Task Import_HourlyScheduleStarvedByItsMaintenanceWindow_FailsWithAnActionableError()
+    {
+        // Import checked the cadence but never the window, at any cadence — so this arrived enabled,
+        // built a healthy trigger, and had every occurrence skipped with only a log line to show it.
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Hourly,
+            IntervalHours = 7,
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(1, 0),
+            WindowEnd = new TimeOnly(4, 0),
+        };
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("maintenance window", result.Error);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_DailyScheduleStarvedByItsMaintenanceWindow_FailsWithAnActionableError()
+    {
+        // The wizard has refused this combination since the Daily/Weekly guard was added; import
+        // was still a way straight past it.
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Daily,
+            TimeOfDay = new TimeOnly(12, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+        };
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("maintenance window", result.Error);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_CronScheduleStarvedByItsMaintenanceWindow_FailsWithAnActionableError()
+    {
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Cron,
+            CronExpression = "0 30 2 * * ?",
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(3, 0),
+            WindowEnd = new TimeOnly(5, 0),
+        };
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("maintenance window", result.Error);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_ScheduleThatItsMaintenanceWindowAdmits_Succeeds()
+    {
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Hourly,
+            IntervalHours = 6,
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+        };
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.True(Assert.Single(_saved).Schedule.MaintenanceWindowEnabled);
+    }
+
     [Theory]
     [InlineData(@"..\..\..\Users\Public\Startup")]
     [InlineData("environments/../../secrets")]

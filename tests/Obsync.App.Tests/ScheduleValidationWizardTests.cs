@@ -197,6 +197,121 @@ public sealed class ScheduleValidationWizardTests
         Assert.NotNull(built.Saved());
     }
 
+    [Fact]
+    public async Task Save_HourlyIntervalNeverInsideMaintenanceWindow_Blocks()
+    {
+        // The regression: the window guard returned early for anything that was not Daily or Weekly,
+        // so this saved cleanly and the engine then skipped every occurrence. Every 7 hours fires at
+        // 00/07/14/21, and a 01:00-04:00 window admits none of them.
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Hourly;
+        vm.IntervalHours = 7;
+        vm.MaintenanceWindowEnabled = true;
+        vm.WindowStart = "01:00";
+        vm.WindowEnd = "04:00";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Null(built.Saved());
+        Assert.Equal(4, vm.CurrentStep);
+        Assert.Contains("maintenance window", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Save_HourlyWithAMidHourMaintenanceWindow_Blocks()
+    {
+        // Hourly runs land on :00, which the wizard never tells the user, so a window open for a
+        // perfectly sensible half hour in the middle of an hour starves the job.
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Hourly;
+        vm.IntervalHours = 1;
+        vm.MaintenanceWindowEnabled = true;
+        vm.WindowStart = "02:15";
+        vm.WindowEnd = "02:45";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Null(built.Saved());
+        Assert.Equal(4, vm.CurrentStep);
+        Assert.Contains("on the hour", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Save_HourlyInsideMaintenanceWindow_Passes()
+    {
+        // Every 6 hours fires at 00/06/12/18, and 00:00 is inside the overnight window.
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Hourly;
+        vm.IntervalHours = 6;
+        vm.MaintenanceWindowEnabled = true;
+        vm.WindowStart = "22:00";
+        vm.WindowEnd = "05:00";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(built.Saved());
+        Assert.Equal(6, built.Saved()!.Schedule.IntervalHours);
+    }
+
+    [Fact]
+    public async Task Save_CronThatNeverFiresInsideMaintenanceWindow_Blocks()
+    {
+        // 02:30 daily is valid Quartz and does fire — it just never fires while the window is open.
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Cron;
+        vm.CronExpression = "0 30 2 * * ?";
+        vm.MaintenanceWindowEnabled = true;
+        vm.WindowStart = "03:00";
+        vm.WindowEnd = "05:00";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Null(built.Saved());
+        Assert.Equal(4, vm.CurrentStep);
+        Assert.Contains("maintenance window", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Save_CronInsideMaintenanceWindow_Passes()
+    {
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Cron;
+        vm.CronExpression = "0 30 3 * * ?";
+        vm.MaintenanceWindowEnabled = true;
+        vm.WindowStart = "03:00";
+        vm.WindowEnd = "05:00";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(built.Saved());
+        Assert.Equal("0 30 3 * * ?", built.Saved()!.Schedule.CronExpression);
+    }
+
+    [Fact]
+    public async Task Save_ZeroLengthMaintenanceWindow_Blocks()
+    {
+        // Equal bounds ask for `time >= 03:00 && time < 03:00`, so the window excludes all 1440
+        // minutes of the day. Nothing rejected it, at any cadence.
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Daily;
+        vm.TimeOfDay = "03:00";
+        vm.MaintenanceWindowEnabled = true;
+        vm.WindowStart = "03:00";
+        vm.WindowEnd = "03:00";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Null(built.Saved());
+        Assert.Equal(4, vm.CurrentStep);
+        Assert.Contains("opens and closes at the same time", vm.StatusMessage);
+    }
+
     [Theory]
     [InlineData(24)]
     [InlineData(48)]

@@ -164,7 +164,6 @@ public sealed class ScheduleProfile
     private static DateTimeOffset Local(DateTime wallClock) =>
         new(DateTime.SpecifyKind(wallClock, DateTimeKind.Local));
 
-    /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
     /// <summary>
     /// Why this schedule cannot be turned into a trigger, or null when it can. Every entry point
     /// that persists a schedule checks this, so the app, the job-config importer, and the service
@@ -178,6 +177,122 @@ public sealed class ScheduleProfile
                 + "03:00 every second day)."
             : null;
 
+    /// <summary>
+    /// Why an enabled maintenance window can never admit this schedule, or null when at least one
+    /// occurrence lands inside it. Companion to <see cref="UnschedulableReason"/>: that one asks
+    /// whether a trigger can be built, this one asks whether the trigger's fires can ever get past
+    /// the window.
+    ///
+    /// A starved combination is the quietest failure this product has — the trigger is healthy,
+    /// "Next run" advances, and the engine skips every occurrence with a single Information log
+    /// line and no history row — so it is refused before it can be saved.
+    ///
+    /// Covers the cadences whose fire times this profile fully determines. <see cref="ScheduleKind.Cron"/>
+    /// returns null here: its fire times need a cron engine, which this layer deliberately does not
+    /// reference (see <see cref="GetNextRun"/>), so a caller that has one checks it separately.
+    /// </summary>
+    public string? MaintenanceWindowConflictReason()
+    {
+        // Manual has nothing to starve: the window gates Scheduled and CatchUp runs only, and
+        // "Run Now" and startup runs bypass it.
+        if (!MaintenanceWindowEnabled || Kind == ScheduleKind.Manual)
+        {
+            return null;
+        }
+
+        // Equal bounds take the non-wrapping branch of IsWithinMaintenanceWindow, which asks for
+        // `time >= start && time < end` — false for all 1440 minutes of the day. That starves every
+        // cadence, so it is checked before, and independently of, the fire times.
+        if (WindowStart == WindowEnd)
+        {
+            return $"The maintenance window opens and closes at the same time ({WindowStart:HH:mm}), so no run "
+                + "would ever fall inside it and the job would never run. Give the window an end time that "
+                + "differs from its start.";
+        }
+
+        var days = DayScope switch
+        {
+            MaintenanceDayScope.WeekdaysOnly => ", weekdays",
+            MaintenanceDayScope.WeekendsOnly => ", weekends",
+            _ => string.Empty,
+        };
+        var window = $"({WindowStart:HH:mm}–{WindowEnd:HH:mm}{days})";
+
+        switch (Kind)
+        {
+            case ScheduleKind.Hourly:
+            {
+                var hours = HourlyFireTimes();
+                if (hours.Any(hour => AllDays.Any(day => Admits(day, hour))))
+                {
+                    return null;
+                }
+
+                // Naming the fire times matters here in a way it does not for Daily/Weekly: the
+                // usual cause is a window that opens or closes mid-hour (02:15–02:45 admits no
+                // HH:00 at all), and the user has never been shown that hourly runs land on :00.
+                var fires = hours.Count >= 24
+                    ? "on the hour, every hour"
+                    : $"at {string.Join(", ", hours.Select(hour => hour.ToString("HH:mm")))}";
+                return $"An hourly schedule runs {fires}, and none of those times ever falls inside the "
+                    + $"maintenance window {window}, so the job would never run. Widen the window, or change "
+                    + "the interval.";
+            }
+
+            case ScheduleKind.Daily:
+                return AllDays.Any(day => Admits(day, TimeOfDay))
+                    ? null
+                    : $"Daily at {TimeOfDay:HH:mm} never falls inside the maintenance window " +
+                      $"({WindowStart:HH:mm}–{WindowEnd:HH:mm}), so the job would never run. Change the time or the window.";
+
+            case ScheduleKind.Weekly:
+                return Admits(DayOfWeek, TimeOfDay)
+                    ? null
+                    : $"Weekly on {DayOfWeek} at {TimeOfDay:HH:mm} never falls inside the maintenance window " +
+                      $"{window}, so the job would never run. Change the schedule or the window.";
+
+            default:
+                return null; // Cron — see the remark on this method.
+        }
+    }
+
+    /// <summary>2024-01-01 is a Monday, so one anchored week covers every day-of-week case exactly once.</summary>
+    private static readonly DateTime ProbeWeekMonday = new(2024, 1, 1);
+
+    private static readonly DayOfWeek[] AllDays = Enum.GetValues<DayOfWeek>();
+
+    /// <summary>
+    /// Whether the window would admit an occurrence on <paramref name="day"/> at <paramref name="time"/>.
+    /// Asked through <see cref="IsWithinMaintenanceWindow"/> itself rather than re-deriving the rule, so
+    /// an overnight window attributes the occurrence to the day the window opened exactly as the engine
+    /// does at run time.
+    /// </summary>
+    private bool Admits(DayOfWeek day, TimeOnly time) =>
+        // Sunday is 0 in DayOfWeek; shift by 6 so Monday — the anchor — lands on index 0.
+        IsWithinMaintenanceWindow(new DateTimeOffset(
+            ProbeWeekMonday.AddDays(((int)day + 6) % 7) + time.ToTimeSpan(), TimeSpan.Zero));
+
+    /// <summary>
+    /// The local times an Hourly schedule fires at, mirroring the cron the scheduler builds
+    /// (<c>0 0 * * * ?</c>, or <c>0 0 0/N * * ?</c> for an interval above 1): always minute zero, on
+    /// hours that are multiples of the interval, and the step restarts at midnight.
+    /// </summary>
+    private List<TimeOnly> HourlyFireTimes()
+    {
+        var step = IntervalHours <= 0 ? 1 : IntervalHours;
+        var times = new List<TimeOnly>();
+        for (var hour = 0; hour < 24; hour++)
+        {
+            if (hour % step == 0)
+            {
+                times.Add(new TimeOnly(hour, 0));
+            }
+        }
+
+        return times;
+    }
+
+    /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
     public string Describe()
     {
         var cadence = Kind switch

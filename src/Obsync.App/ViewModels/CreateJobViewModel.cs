@@ -772,7 +772,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
         // The shared rule the importer and the scheduler also use: a schedule this rejects would be
         // saved as enabled, show a next-run time, and never fire.
         4 when BuildSchedule().UnschedulableReason() is { } scheduleError => scheduleError,
-        4 when ValidateScheduleAgainstWindow() is { } windowError => windowError,
+        // The other half of that shared rule: a schedule this rejects builds a healthy trigger, but
+        // the engine's window gate skips every one of its occurrences and says so only in a log line.
+        4 when Services.ScheduleWindowGuard.ConflictReason(BuildSchedule(), _clock.UtcNow) is { } windowError => windowError,
         _ => null,
     };
 
@@ -785,45 +787,6 @@ public sealed partial class CreateJobViewModel : ObservableObject
     // scheduler down — reject the expression here instead.
     private static bool CronNeverFires(string cron) =>
         new Quartz.CronExpression(cron) { TimeZone = TimeZoneInfo.Local }.GetNextValidTimeAfter(DateTimeOffset.Now) is null;
-
-    /// <summary>
-    /// A Daily/Weekly fire time that never lands inside an enabled maintenance window means the engine
-    /// skips every scheduled run and the job silently never runs — reject the combination up front.
-    /// </summary>
-    private string? ValidateScheduleAgainstWindow()
-    {
-        if (!MaintenanceWindowEnabled || SelectedScheduleKind is not (ScheduleKind.Daily or ScheduleKind.Weekly))
-        {
-            return null;
-        }
-
-        var schedule = BuildSchedule();
-        // Probe one calendar week (2024-01-01 is a Monday) so overnight windows attribute the fire to
-        // the day the window opened, exactly as the engine's window check does at run time.
-        var monday = new DateTime(2024, 1, 1);
-        bool FiresOn(DayOfWeek day) => schedule.IsWithinMaintenanceWindow(new DateTimeOffset(
-            monday.AddDays(((int)day - (int)DayOfWeek.Monday + 7) % 7) + schedule.TimeOfDay.ToTimeSpan(), TimeSpan.Zero));
-
-        var days = SelectedDayScope switch
-        {
-            MaintenanceDayScope.WeekdaysOnly => ", weekdays",
-            MaintenanceDayScope.WeekendsOnly => ", weekends",
-            _ => string.Empty,
-        };
-
-        if (SelectedScheduleKind == ScheduleKind.Weekly)
-        {
-            return FiresOn(SelectedDayOfWeek)
-                ? null
-                : $"Weekly on {SelectedDayOfWeek} at {schedule.TimeOfDay:HH:mm} never falls inside the maintenance window " +
-                  $"({schedule.WindowStart:HH:mm}–{schedule.WindowEnd:HH:mm}{days}), so the job would never run. Change the schedule or the window.";
-        }
-
-        return Enum.GetValues<DayOfWeek>().Any(FiresOn)
-            ? null
-            : $"Daily at {schedule.TimeOfDay:HH:mm} never falls inside the maintenance window " +
-              $"({schedule.WindowStart:HH:mm}–{schedule.WindowEnd:HH:mm}), so the job would never run. Change the time or the window.";
-    }
 
     private void BuildReview()
     {
