@@ -102,17 +102,20 @@ public sealed class ScheduleProfile
             case ScheduleKind.Hourly:
             {
                 var step = IntervalHours <= 0 ? 1 : IntervalHours;
-                var candidate = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(1);
-                while (candidate.Hour % step != 0)
-                {
-                    candidate = candidate.AddHours(1);
-                }
+                var candidate = NextHourlyFireAfter(
+                    new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0), step);
 
-                // A maintenance window can skip most hourly fires — advance to the next in-window hour so
-                // the displayed "next run" is the time the job will actually run. Bounded to ~8 days.
+                // A maintenance window can skip most hourly fires — advance to the next in-window fire so
+                // the displayed "next run" is a time the job will actually run. It has to advance along the
+                // grid, NOT by `step`: the trigger is `0 0 0/N * * ?`, whose step restarts at hour 0 every
+                // midnight, so a uniform N-hour stride leaves the grid the moment it crosses midnight for
+                // any N that does not divide 24 — and the loop then stops on whatever off-grid hour the
+                // window happens to admit, reporting a time the job can never fire at.
+                // Bounded at 200 fires: over a week even on the densest grid (hourly), and a day-scoped
+                // window can defer a run by at most a week.
                 for (var i = 0; MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(Local(candidate)) && i < 200; i++)
                 {
-                    candidate = candidate.AddHours(step);
+                    candidate = NextHourlyFireAfter(candidate, step);
                 }
 
                 return Local(candidate);
@@ -159,6 +162,26 @@ public sealed class ScheduleProfile
     }
 
     private static DateTime At(DateTime date, TimeOnly time) => date.Date + time.ToTimeSpan();
+
+    /// <summary>
+    /// The first Hourly occurrence strictly after <paramref name="hour"/> (a whole hour), on the grid
+    /// the scheduler's cron actually uses: minute zero, on hours where <c>hour % step == 0</c>, with
+    /// the step restarting at midnight. Note that grid is NOT "every step hours" — for a step that
+    /// does not divide 24 the last gap of the day is short (step 5 runs 20:00 then 00:00, four hours
+    /// later), which is exactly why advancing by the step drifts off it. Same rule as
+    /// <see cref="HourlyFireTimes"/>; used for both the first candidate and the window advance so the
+    /// two cannot disagree.
+    /// </summary>
+    private static DateTime NextHourlyFireAfter(DateTime hour, int step)
+    {
+        var next = hour.AddHours(1);
+        while (next.Hour % step != 0)
+        {
+            next = next.AddHours(1);
+        }
+
+        return next;
+    }
 
     /// <summary>A local wall-clock time as a DateTimeOffset, with the UTC offset in effect at THAT date.</summary>
     private static DateTimeOffset Local(DateTime wallClock) =>
