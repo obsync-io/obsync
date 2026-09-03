@@ -11,9 +11,16 @@ public interface IObjectFilePathMapper
 {
     /// <summary>
     /// Returns the database-root-relative path (forward slashes) for an object, e.g.
-    /// <c>procedures/dbo.usp_GetCustomer.sql</c>. Deterministic across runs and guaranteed
-    /// not to collide for two distinct objects.
+    /// <c>procedures/dbo.usp_GetCustomer.sql</c>. Deterministic across runs, and distinct for two
+    /// objects whose names differ by anything more than letter case.
     /// </summary>
+    /// <remarks>
+    /// Two names differing ONLY by case are the one exception, and it cannot be resolved here: the
+    /// mapper sees a single identity at a time, so it cannot know a twin exists. It returns two
+    /// paths that differ only in case, which a case-insensitive filesystem treats as one file. Only
+    /// a case-sensitive database collation can produce such a pair, and the engine rejects it up
+    /// front — see <c>SyncEngine.GuardAgainstCaseTwin</c>.
+    /// </remarks>
     string MapRelativePath(ScriptedObjectIdentity identity);
 }
 

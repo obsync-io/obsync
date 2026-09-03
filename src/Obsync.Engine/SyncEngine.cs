@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
@@ -714,6 +714,11 @@ public sealed class SyncEngine : ISyncEngine
         // to VLDB scale costs a dozen full-table rehashes under internal locks.
         var seen = new ConcurrentDictionary<string, byte>(
             Environment.ProcessorCount, Math.Max(1024, prior.Count * 2), StringComparer.OrdinalIgnoreCase);
+        // Keeps the first identity behind each case-folded key so a case twin can be rejected by
+        // name. Separate from `seen`, which is also marked for ignored and out-of-filter objects —
+        // those are never written, so they cannot collide on a file and must not trip the guard.
+        var identitiesSeen = new ConcurrentDictionary<string, ScriptedObjectIdentity>(
+            Environment.ProcessorCount, Math.Max(1024, prior.Count * 2), StringComparer.OrdinalIgnoreCase);
         var changedStates = new ConcurrentBag<TrackedObjectState>();
         var inventory = new ConcurrentBag<ObjectInventoryEntry>();
         // The per-object inventory entries feed only the object-inventory artifact and the docs
@@ -775,6 +780,11 @@ public sealed class SyncEngine : ISyncEngine
             {
                 return;
             }
+
+            // After the ignore rules on purpose: only an object that will actually be written can
+            // collide on a file, and excluding one twin with .obsyncignore is the remedy this
+            // guard's own message recommends — so an ignored object must not trip it.
+            GuardAgainstCaseTwin(identitiesSeen, key, identity, database);
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
 
@@ -1249,6 +1259,7 @@ public sealed class SyncEngine : ISyncEngine
 
         // Accumulators are written from many worker threads concurrently, so they are all thread-safe.
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var identitiesSeen = new ConcurrentDictionary<string, ScriptedObjectIdentity>(StringComparer.OrdinalIgnoreCase);
         var changedStates = new ConcurrentBag<TrackedObjectState>();
         var skipped = new ConcurrentBag<string>();
         var failedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
@@ -1267,6 +1278,8 @@ public sealed class SyncEngine : ISyncEngine
             {
                 return;
             }
+
+            GuardAgainstCaseTwin(identitiesSeen, key, identity, "The server scope");
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
             var scriptBytes = Encoding.UTF8.GetBytes(script);
@@ -2216,7 +2229,7 @@ public sealed class SyncEngine : ISyncEngine
             return 0;
         });
 
-    private static string StateKey(ScriptedObjectIdentity identity) => $"{(int)identity.Type}|{identity.Schema}|{identity.Name}";
+    internal static string StateKey(ScriptedObjectIdentity identity) => $"{(int)identity.Type}|{identity.Schema}|{identity.Name}";
 
     private static string StateKey(TrackedObjectState state) => $"{(int)state.ObjectType}|{state.SchemaName}|{state.ObjectName}";
 
@@ -2245,6 +2258,53 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// Records an object's identity for this run and rejects a second object whose name differs
+    /// from the first only by letter case.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="BuildPriorMap"/> makes the same check, but on the wrong side of the pipeline. It
+    /// reads persisted state, and since <c>V011__object_identity_nocase</c> rebuilt the identity
+    /// index with <c>COLLATE NOCASE</c> the database can no longer hold the second row that check
+    /// looks for — so for ASCII names it can never fire. (SQLite's NOCASE folds ASCII only, so a
+    /// non-ASCII pair such as Ärger/ärger still reaches it.) The twins arrive from the live
+    /// catalog, and nothing checked them there.
+    /// <para>
+    /// Left unchecked they map to two paths that differ only in case, which is one file on NTFS:
+    /// the second object silently overwrote the first, the surviving file kept one object's name
+    /// and the other's body, and the pair then alternated on every run that re-scripted them. On a
+    /// first run both are written concurrently and their <c>.obsync-tmp</c> paths collide too,
+    /// failing the whole run with a sharing violation that named neither object.
+    /// </para>
+    /// <para>
+    /// Failing here is deliberate rather than a fallback: Obsync cannot version such a pair
+    /// distinctly on a case-insensitive filesystem, and reporting them as skipped instead would pin
+    /// the object type's watermark and degrade every later run into a full re-scan. Only a
+    /// case-sensitive database collation can produce the pair at all.
+    /// </para>
+    /// </remarks>
+    internal static void GuardAgainstCaseTwin(
+        ConcurrentDictionary<string, ScriptedObjectIdentity> identities,
+        string key,
+        ScriptedObjectIdentity identity,
+        string scope)
+    {
+        var first = identities.GetOrAdd(key, identity);
+
+        // The same object arriving twice is not a twin — only a genuine difference in casing is.
+        if (string.Equals(first.Schema, identity.Schema, StringComparison.Ordinal)
+            && string.Equals(first.Name, identity.Name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{scope} contains two objects whose names differ only by letter case " +
+            $"({first.Schema}.{first.Name} and {identity.Schema}.{identity.Name}). " +
+            "Windows file paths are case-insensitive, so Obsync cannot version them as separate files — " +
+            "rename one of the objects, or exclude one with an .obsyncignore rule.");
     }
 
     /// <summary>Mutable per-run accumulator passed between the engine stages.</summary>
