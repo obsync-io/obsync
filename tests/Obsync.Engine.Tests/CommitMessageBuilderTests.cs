@@ -46,7 +46,7 @@ public sealed class CommitMessageBuilderTests
     {
         var (run, job, changes) = Sample();
 
-        var (subject, _) = CommitMessageBuilder.Build(run, job, changes);
+        var (subject, _) = CommitMessageBuilder.Build(run, job, changes, ["SalesDB"]);
 
         Assert.StartsWith("[SalesDB] SQL object changes from PROD-SQL01 - 2026-06-28", subject, StringComparison.Ordinal);
     }
@@ -56,7 +56,7 @@ public sealed class CommitMessageBuilderTests
     {
         var (run, job, changes) = Sample();
 
-        var (_, body) = CommitMessageBuilder.Build(run, job, changes);
+        var (_, body) = CommitMessageBuilder.Build(run, job, changes, ["SalesDB"]);
 
         Assert.Contains("Server: PROD-SQL01", body, StringComparison.Ordinal);
         Assert.Contains("Database: SalesDB", body, StringComparison.Ordinal);
@@ -89,12 +89,130 @@ public sealed class CommitMessageBuilderTests
             .Select(i => Change(ChangeType.Added, $"procedures/dbo.usp_Proc{i:D3}.sql"))
             .ToList();
 
-        var (_, body) = CommitMessageBuilder.Build(run, job, changes);
+        var (_, body) = CommitMessageBuilder.Build(run, job, changes, ["SalesDB"]);
 
         var expected = "Added:\n"
             + string.Concat(Enumerable.Range(0, 50).Select(i => $"  - procedures/dbo.usp_Proc{i:D3}.sql\n"))
             + "  … and 10 more";
         Assert.Contains(expected, body, StringComparison.Ordinal);
         Assert.DoesNotContain("usp_Proc050", body, StringComparison.Ordinal);
+    }
+
+    private static readonly string[] ManyDatabases =
+        [.. Enumerable.Range(1, 40).Select(i => $"CustomerPortal{i:D2}")];
+
+    /// <summary>A run whose scope is <paramref name="databases"/>, joined exactly as the engine joins it.</summary>
+    private static SyncRun RunWith(IReadOnlyList<string> databases, string serverName = "PROD-SQL01")
+    {
+        var (run, _, _) = Sample();
+        run.ServerName = serverName;
+        run.Databases = string.Join(", ", databases);
+        return run;
+    }
+
+    private static void AssertWithinBudget(string subject) =>
+        Assert.True(subject.Length <= 250, $"subject was {subject.Length} chars: {subject}");
+
+    private static void AssertWellFormedUtf16(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]))
+            {
+                Assert.True(
+                    i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]),
+                    $"unpaired high surrogate at index {i}");
+                i++;
+            }
+            else
+            {
+                Assert.False(char.IsLowSurrogate(value[i]), $"unpaired low surrogate at index {i}");
+            }
+        }
+    }
+
+    [Fact]
+    public void Build_Subject_KeepsTheWholeDatabaseList_WhenItFits()
+    {
+        var (_, job, changes) = Sample();
+        string[] databases = ["SalesDB", "HRDB", "FinanceDB"];
+
+        var (subject, _) = CommitMessageBuilder.Build(RunWith(databases), job, changes, databases);
+
+        Assert.StartsWith(
+            "[SalesDB, HRDB, FinanceDB] SQL object changes from PROD-SQL01 - ", subject, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_Subject_SummarizesTheScope_WhenTheFullListWouldOverflow()
+    {
+        // The regression: this subject is also the GitHub pull request title, and an untruncated
+        // 40-database list pushed it past the limit, so the PR was rejected on every single run.
+        var (_, job, changes) = Sample();
+
+        var (subject, _) = CommitMessageBuilder.Build(RunWith(ManyDatabases), job, changes, ManyDatabases);
+
+        AssertWithinBudget(subject);
+        Assert.StartsWith("[CustomerPortal01, ", subject, StringComparison.Ordinal);
+        // The scope yields; the tail that makes a subject scannable survives whole.
+        Assert.Contains(" +37 more] SQL object changes from PROD-SQL01 - ", subject, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(15)]
+    [InlineData(40)]
+    [InlineData(400)]
+    public void Build_Subject_StaysWithinBudget_ForAnyDatabaseCount(int count)
+    {
+        var (_, job, changes) = Sample();
+        var databases = Enumerable.Range(1, count)
+            .Select(i => $"EnterpriseReportingWarehouse{i:D4}")
+            .ToArray();
+
+        var (subject, _) = CommitMessageBuilder.Build(RunWith(databases), job, changes, databases);
+
+        AssertWithinBudget(subject);
+    }
+
+    [Fact]
+    public void Build_Subject_StaysWithinBudget_WhenTheServerNameAloneExhaustsIt()
+    {
+        var (_, job, changes) = Sample();
+        var run = RunWith(ManyDatabases, new string('s', 300));
+
+        var (subject, _) = CommitMessageBuilder.Build(run, job, changes, ManyDatabases);
+
+        AssertWithinBudget(subject);
+        Assert.EndsWith("…", subject, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_Subject_NeverSplitsASurrogatePair()
+    {
+        // SQL Server identifiers are nvarchar, so a database name may carry non-BMP characters;
+        // truncating between the halves of a pair would emit an invalid string.
+        var (_, job, changes) = Sample();
+        string[] databases = [string.Concat(Enumerable.Repeat("𝔄", 400))];
+
+        var (subject, _) = CommitMessageBuilder.Build(RunWith(databases), job, changes, databases);
+
+        AssertWithinBudget(subject);
+        AssertWellFormedUtf16(subject);
+    }
+
+    [Fact]
+    public void Build_Body_SummarizesTheDatabaseList_BeyondFifty()
+    {
+        // The body carries the same list and is exposed to GitHub's (better attested) 65,536 limit.
+        var (_, job, changes) = Sample();
+        var databases = Enumerable.Range(1, 60).Select(i => $"DB{i:D2}").ToArray();
+
+        var (_, body) = CommitMessageBuilder.Build(RunWith(databases), job, changes, databases);
+
+        Assert.Contains("Database: DB01, DB02, ", body, StringComparison.Ordinal);
+        Assert.Contains("DB50 … and 10 more", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("DB60", body, StringComparison.Ordinal);
     }
 }

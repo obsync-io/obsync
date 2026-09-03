@@ -177,7 +177,8 @@ public sealed class GitHubService : IGitHubService
         {
             var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
             var pr = await WithRetryAsync(
-                () => client.PullRequest.Create(owner, name, new NewPullRequest(title, headBranch, baseBranch) { Body = body }),
+                () => client.PullRequest.Create(
+                    owner, name, new NewPullRequest(ClampTitle(title), headBranch, baseBranch) { Body = body }),
                 cancellationToken).ConfigureAwait(false);
 
             string? reviewerWarning = null;
@@ -283,6 +284,35 @@ public sealed class GitHubService : IGitHubService
         TimeoutException => true,
         _ => false,
     };
+
+    /// <summary>
+    /// Longest pull request title sent to GitHub. GitHub documents no limit, but it rejects an
+    /// over-long title with a 422 rather than truncating it, so the request must be sized here.
+    /// The reported ceiling is 256; this keeps headroom under it.
+    /// </summary>
+    public const int MaxPullRequestTitleLength = 250;
+
+    /// <summary>
+    /// Last line of defence on the title length. Callers are expected to compose a title that
+    /// already fits (<c>CommitMessageBuilder</c> summarizes the database list for exactly this
+    /// reason); this guarantees the invariant at the API boundary for every caller, present and
+    /// future. Never splits a surrogate pair — a title can carry non-BMP SQL identifiers.
+    /// </summary>
+    public static string ClampTitle(string title)
+    {
+        if (title.Length <= MaxPullRequestTitleLength)
+        {
+            return title;
+        }
+
+        var cut = MaxPullRequestTitleLength - 1;
+        if (char.IsHighSurrogate(title[cut - 1]))
+        {
+            cut--;
+        }
+
+        return string.Concat(title.AsSpan(0, cut), "…");
+    }
 
     /// <summary>The web URL for a commit, used for the "Open in GitHub" links.</summary>
     public static string BuildCommitUrl(string owner, string name, string sha) =>

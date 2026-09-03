@@ -1767,7 +1767,7 @@ public sealed class SyncEngine : ISyncEngine
         SyncRun run, RunContext context, GitWorkspaceContext gitContext, bool allowEmpty, CancellationToken cancellationToken)
     {
         context.Report(SyncPhase.Committing, "Creating commit…");
-        var (subject, body) = CommitMessageBuilder.Build(run, context.Job, context.Changes);
+        var (subject, body) = CommitMessageBuilder.Build(run, context.Job, context.Changes, context.Databases);
         var commit = await _gitWorkspace.CommitAllAsync(gitContext, subject, body, allowEmpty, cancellationToken).ConfigureAwait(false);
 
         if (!commit.Success)
