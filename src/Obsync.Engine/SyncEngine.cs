@@ -171,20 +171,15 @@ public sealed class SyncEngine : ISyncEngine
 
             // A scheduled occurrence came due while a previous run of this job is still active in
             // another process. Policy: skip this occurrence (running it would collide on the job's
-            // git workspace); the next occurrence fires normally. Log-only, like window skips.
+            // git workspace); the next occurrence fires normally.
             _logger.LogWarning(
                 "Job {JobId} ({JobName}) {Trigger} run skipped — a previous run is still active in another process.",
                 job.Id, job.Name, trigger);
-            return new SyncRun
-            {
-                JobId = job.Id,
-                JobName = job.Name,
-                Trigger = trigger,
-                Status = RunStatus.NoChanges,
-                StartedAt = _clock.UtcNow,
-                CompletedAt = _clock.UtcNow,
-                Tags = [.. job.Tags],
-            };
+            return await RecordSkippedOccurrenceAsync(
+                job, trigger,
+                "A previous run of this job was still active in another Obsync process, so this scheduled "
+                + "occurrence was skipped. The next occurrence runs normally.",
+                serverName: null, cancellationToken).ConfigureAwait(false);
         }
 
         // Maintenance window: a SCHEDULED (or catch-up) run outside the allowed window is skipped
@@ -262,16 +257,12 @@ public sealed class SyncEngine : ISyncEngine
                 _logger.LogWarning(
                     "Job {JobId} ({JobName}) {Trigger} run skipped — another job kept the shared repository busy " +
                     "for over {Timeout} minutes.", job.Id, job.Name, trigger, WorkspaceLockTimeout.TotalMinutes);
-                return new SyncRun
-                {
-                    JobId = job.Id,
-                    JobName = job.Name,
-                    Trigger = trigger,
-                    Status = RunStatus.NoChanges,
-                    StartedAt = _clock.UtcNow,
-                    CompletedAt = _clock.UtcNow,
-                    Tags = [.. job.Tags],
-                };
+                return await RecordSkippedOccurrenceAsync(
+                    job, trigger,
+                    $"Another job sharing this repository kept its workspace busy for over "
+                    + $"{WorkspaceLockTimeout.TotalMinutes:N0} minutes, so this scheduled occurrence was skipped. "
+                    + "The next occurrence runs normally.",
+                    connection.ServerName, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -2305,6 +2296,63 @@ public sealed class SyncEngine : ISyncEngine
             $"({first.Schema}.{first.Name} and {identity.Schema}.{identity.Name}). " +
             "Windows file paths are case-insensitive, so Obsync cannot version them as separate files — " +
             "rename one of the objects, or exclude one with an .obsyncignore rule.");
+    }
+
+    /// <summary>
+    /// Records a scheduled occurrence that was dropped because another run held a lock, and returns
+    /// the row that was written.
+    /// </summary>
+    /// <remarks>
+    /// The two contention gates used to return an un-persisted run, which meant a scheduled sync
+    /// simply did not happen and nothing anywhere said so: no history row, no alert (the notify
+    /// call sits below this point and <c>NoChanges</c> would not have qualified anyway), and no
+    /// audit event. The overdue detector could not cover it either — it fires on a next-run time
+    /// left in the past, but reconcile refreshes that from the live trigger every 30 seconds, so
+    /// the UI went on showing a confident future time. Writing the occurrence down is the only
+    /// signal that survives.
+    /// <para>
+    /// The job's run summary is deliberately NOT updated: a skipped occurrence is not a run
+    /// outcome, and overwriting <c>LastStatus</c> would hide the last real sync's result from every
+    /// dashboard tile. The two benign gates — a disabled job, and a run outside its maintenance
+    /// window — stay log-only, because neither means anything went wrong.
+    /// </para>
+    /// </remarks>
+    private async Task<SyncRun> RecordSkippedOccurrenceAsync(
+        SyncJob job, RunTrigger trigger, string reason, string? serverName, CancellationToken cancellationToken)
+    {
+        var at = _clock.UtcNow;
+        var run = new SyncRun
+        {
+            // Same invariant-calendar run key as a real run: the row is shown in History beside
+            // them, and an empty key would render as a blank cell.
+            RunKey = at.LocalDateTime.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture),
+            JobId = job.Id,
+            JobName = job.Name,
+            Trigger = trigger,
+            TriggeredBy = CurrentActor.Name,
+            Status = RunStatus.Skipped,
+            ServerName = serverName ?? string.Empty,
+            Databases = job.DatabaseScope == DatabaseScope.AllUserDatabases
+                ? "All user databases"
+                : string.Join(", ", job.Databases),
+            StartedAt = at,
+            CompletedAt = at,
+            ErrorMessage = reason,
+            Tags = [.. job.Tags],
+        };
+
+        // Never let bookkeeping turn a skipped occurrence into a failed one: the occurrence is
+        // already lost, and throwing here would surface as a run failure for a run that never ran.
+        try
+        {
+            await _runs.InsertAsync(run, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Job {JobId}: the skipped occurrence could not be recorded.", job.Id);
+        }
+
+        return run;
     }
 
     /// <summary>Mutable per-run accumulator passed between the engine stages.</summary>

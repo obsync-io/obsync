@@ -1,4 +1,4 @@
-namespace Obsync.Shared;
+﻿namespace Obsync.Shared;
 
 /// <summary>How Obsync authenticates to a SQL Server instance.</summary>
 public enum SqlAuthenticationMode
@@ -176,6 +176,13 @@ public enum RunStatus
     Warning = 4,
     Failed = 5,
     Cancelled = 6,
+
+    /// <summary>
+    /// A scheduled occurrence that never started, because another run held the job's or the shared
+    /// repository's workspace lock. Recorded so the missed occurrence is visible in History rather
+    /// than vanishing; it does not update the job's run summary, and raises no alert.
+    /// </summary>
+    Skipped = 7,
 }
 
 /// <summary>The kind of change detected for an object during a run.</summary>

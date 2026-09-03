@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.App.Services;
@@ -176,7 +176,16 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         var runErrors = recent
             .Where(r => !string.IsNullOrEmpty(r.ErrorMessage))
             .ToDictionary(r => r.Id, r => r.ErrorMessage!);
-        var attention = AttentionModel.Build(jobs, servers, runErrors, now);
+
+        // Only a job whose NEWEST run was skipped is still waiting: once a real run lands the row
+        // clears itself, so the card reflects the current state rather than accumulating history.
+        // `recent` is already ordered newest-first, so the first row per job is that job's latest.
+        var skippedOccurrences = recent
+            .GroupBy(r => r.JobId)
+            .Where(g => g.First().Status == RunStatus.Skipped)
+            .ToDictionary(g => g.Key, g => g.First().ErrorMessage ?? "another run was using its workspace");
+
+        var attention = AttentionModel.Build(jobs, servers, runErrors, skippedOccurrences, now);
         AttentionItems.Clear();
         foreach (var item in attention.Take(AttentionModel.MaxRows))
         {

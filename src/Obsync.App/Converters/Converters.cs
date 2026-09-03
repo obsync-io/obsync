@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
@@ -18,6 +18,9 @@ public sealed class StatusToBrushConverter : IValueConverter
             RunStatus.Warning => "WarningBrush",
             RunStatus.Failed => "ErrorBrush",
             RunStatus.Cancelled => "TextMutedBrush",
+            // A skipped occurrence is not a failure, but it is not success either — the muted
+            // treatment keeps it from reading as a healthy run in a list of them.
+            RunStatus.Skipped => "TextMutedBrush",
             RunStatus.Running => "AccentBrush",
             _ => "TextMutedBrush",
         };
@@ -59,6 +62,7 @@ public sealed class StatusToBadgeBackgroundConverter : IValueConverter
             RunStatus.Succeeded or RunStatus.NoChanges => "SuccessSoftBrush",
             RunStatus.Warning => "WarningSoftBrush",
             RunStatus.Failed => "ErrorSoftBrush",
+            RunStatus.Skipped => "NeutralSoftBrush",
             RunStatus.Running => "AccentSoftBrush",
             _ => "NeutralSoftBrush",
         };
@@ -82,6 +86,7 @@ public sealed class StatusToTextConverter : IValueConverter
         RunStatus.Running => "Running",
         RunStatus.Pending => "Pending",
         RunStatus.Cancelled => "Cancelled",
+        RunStatus.Skipped => "Skipped",
         _ => "Not run",
     };
 

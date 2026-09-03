@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -365,7 +365,7 @@ public sealed class RunReportWriter : IRunReportWriter
         .nowrap{white-space:nowrap;color:#6b7280}
         .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
         .s-succeeded,.c-added{background:#dcfce7;color:#166534}
-        .s-nochanges{background:#e5e7eb;color:#374151}
+        .s-nochanges,.s-skipped{background:#e5e7eb;color:#374151}
         .s-warning{background:#fef3c7;color:#92400e}
         .s-failed,.s-cancelled{background:#fee2e2;color:#991b1b}
         .s-running,.s-pending{background:#dbeafe;color:#1e40af}

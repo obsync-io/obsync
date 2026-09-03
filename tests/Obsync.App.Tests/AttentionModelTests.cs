@@ -1,4 +1,4 @@
-using Obsync.App.ViewModels;
+﻿using Obsync.App.ViewModels;
 using Obsync.Shared;
 using Obsync.Shared.Models;
 using Xunit;
@@ -13,6 +13,8 @@ namespace Obsync.App.Tests;
 public sealed class AttentionModelTests
 {
     private static readonly DateTimeOffset Now = new(2026, 7, 16, 12, 0, 0, TimeSpan.Zero);
+
+    private static readonly IReadOnlyDictionary<Guid, string> NoSkips = new Dictionary<Guid, string>();
 
     private static SyncJob Job(string name, RunStatus? lastStatus = null, Guid? lastRunId = null,
         DateTimeOffset? nextRunAt = null) => new()
@@ -35,7 +37,7 @@ public sealed class AttentionModelTests
         var runErrors = new Dictionary<Guid, string> { [failedRunId] = "Login failed for user 'svc'.\nStack trace…" };
 
         var items = AttentionModel.Build(
-            [failed, warned, overdue, healthy], [badServer, goodServer], runErrors, Now);
+            [failed, warned, overdue, healthy], [badServer, goodServer], runErrors, NoSkips, Now);
 
         Assert.Equal(4, items.Count);
 
@@ -63,9 +65,48 @@ public sealed class AttentionModelTests
     {
         var failed = Job("Broken", RunStatus.Failed, Guid.NewGuid());
 
-        var items = AttentionModel.Build([failed], [], new Dictionary<Guid, string>(), Now);
+        var items = AttentionModel.Build([failed], [], new Dictionary<Guid, string>(), NoSkips, Now);
 
         Assert.Equal("Job “Broken” failed", Assert.Single(items).Text);
+    }
+
+    /// <summary>
+    /// A dropped scheduled occurrence used to be invisible on every surface: no run row, no alert,
+    /// and the overdue rule structurally cannot catch it, because reconcile keeps the next-run time
+    /// in the future. This row is the signal.
+    /// </summary>
+    [Fact]
+    public void Build_SurfacesASkippedOccurrence_QuotingItsReason()
+    {
+        // Healthy in every other respect: a real run succeeded, and the next run is comfortably
+        // ahead — exactly the state in which the job looked fine while quietly not syncing.
+        var job = Job("Nightly", RunStatus.Succeeded, nextRunAt: Now.AddHours(1));
+        var skips = new Dictionary<Guid, string>
+        {
+            [job.Id] = "Another job sharing this repository kept its workspace busy.\nSecond line.",
+        };
+
+        var row = Assert.Single(AttentionModel.Build([job], [], new Dictionary<Guid, string>(), skips, Now));
+
+        Assert.Equal(AttentionSeverity.Warning, row.Severity);
+        Assert.Equal(
+            "Job “Nightly” skipped a scheduled run — Another job sharing this repository kept its workspace busy.",
+            row.Text); // first line only, like the failed row
+        Assert.Equal(("Open", job.Id), (row.ActionLabel, row.JobId));
+    }
+
+    /// <summary>A job that skipped and then failed shows both — they are different problems.</summary>
+    [Fact]
+    public void Build_ReportsASkipAlongsideAnOrdinaryFailure()
+    {
+        var job = Job("Nightly", RunStatus.Failed, nextRunAt: Now.AddHours(1));
+        var skips = new Dictionary<Guid, string> { [job.Id] = "Workspace busy." };
+
+        var items = AttentionModel.Build([job], [], new Dictionary<Guid, string>(), skips, Now);
+
+        Assert.Equal(2, items.Count);
+        Assert.Contains(items, i => i.Text.Contains("failed", StringComparison.Ordinal));
+        Assert.Contains(items, i => i.Text.Contains("skipped a scheduled run", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -83,6 +124,6 @@ public sealed class AttentionModelTests
             new SqlConnectionProfile { Name = "T", LastTestStatus = ConnectionTestStatus.Untested },
         };
 
-        Assert.Empty(AttentionModel.Build(jobs, servers, new Dictionary<Guid, string>(), Now));
+        Assert.Empty(AttentionModel.Build(jobs, servers, new Dictionary<Guid, string>(), NoSkips, Now));
     }
 }

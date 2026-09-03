@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows.Data;
@@ -72,6 +72,7 @@ public sealed partial class HistoryViewModel : ObservableObject, IAsyncViewModel
         new("Running", RunStatus.Running),
         new("Pending", RunStatus.Pending),
         new("Cancelled", RunStatus.Cancelled),
+        new("Skipped", RunStatus.Skipped),
     ];
 
     public ICollectionView RunsView { get; }

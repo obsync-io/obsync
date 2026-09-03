@@ -1,4 +1,4 @@
-using Obsync.Shared;
+﻿using Obsync.Shared;
 using Obsync.Shared.Models;
 
 namespace Obsync.App.ViewModels;
@@ -30,10 +30,17 @@ internal static class AttentionModel
     /// <param name="runErrors">Error messages of recently loaded runs, keyed by run id — lets a
     /// failed row quote the failure without a per-job query (rows whose run fell outside the
     /// recent window simply omit the quote).</param>
+    /// <param name="skippedOccurrences">
+    /// Reason text per job whose most recent run was a skipped occurrence. A skip deliberately does
+    /// not touch the job's run summary — it is not a run outcome — so this is the only state that
+    /// can surface it. The overdue rule cannot: reconcile keeps the next-run time in the future, so
+    /// a job that quietly lost an occurrence still looks perfectly healthy.
+    /// </param>
     public static IReadOnlyList<AttentionItem> Build(
         IReadOnlyList<SyncJob> jobs,
         IReadOnlyList<SqlConnectionProfile> servers,
         IReadOnlyDictionary<Guid, string> runErrors,
+        IReadOnlyDictionary<Guid, string> skippedOccurrences,
         DateTimeOffset now)
     {
         var items = new List<AttentionItem>();
@@ -56,6 +63,13 @@ internal static class AttentionModel
         foreach (var job in jobs.Where(j => j.IsScheduleOverdue(now)))
         {
             items.Add(new(AttentionSeverity.Warning, $"Job “{job.Name}” missed its scheduled run", "Open", job.Id));
+        }
+
+        foreach (var job in jobs.Where(j => skippedOccurrences.ContainsKey(j.Id)))
+        {
+            items.Add(new(AttentionSeverity.Warning,
+                $"Job “{job.Name}” skipped a scheduled run — {FirstLine(skippedOccurrences[job.Id])}",
+                "Open", job.Id));
         }
 
         foreach (var server in servers.Where(s => s.LastTestStatus == ConnectionTestStatus.Failed))

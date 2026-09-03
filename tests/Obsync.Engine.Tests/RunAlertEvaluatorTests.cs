@@ -1,4 +1,4 @@
-using Obsync.Engine.Alerting;
+﻿using Obsync.Engine.Alerting;
 using Obsync.Shared;
 using Obsync.Shared.Models;
 
@@ -25,6 +25,21 @@ public sealed class RunAlertEvaluatorTests
         Trigger = trigger,
         ObjectsAdded = added,
     };
+
+    /// <summary>
+    /// A skipped occurrence is recorded so it is visible in History and on the dashboard, but it
+    /// must never raise an email or webhook alert: repository contention can drop an occurrence
+    /// every time the schedule comes round, and alerting on each one would be exactly the per-run
+    /// noise that makes an alert channel worth ignoring.
+    /// </summary>
+    [Fact]
+    public void ShouldAlert_IsFalseForASkippedOccurrence_EvenWithEveryToggleOn()
+    {
+        var settings = Settings(onFailure: true, onWarning: true, onChanges: true);
+
+        Assert.False(RunAlertEvaluator.ShouldAlert(settings, Run(RunStatus.Skipped)));
+        Assert.False(RunAlertEvaluator.ShouldAlert(settings, Run(RunStatus.Skipped, RunTrigger.Manual)));
+    }
 
     [Theory]
     // Failed follows the failure toggle.
