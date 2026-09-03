@@ -1,6 +1,6 @@
 # Obsync — Enterprise Capability Roadmap
 
-**Date:** 2026-07-16 · **Assessed against:** `main` @ `a917680` (v0.8.3) · **Status:** Roadmap only — nothing in this document ships code. It exists so that when an enterprise capability is requested, the sequencing, prerequisites, and honest constraints are already worked out.
+**Date:** 2026-07-16 · **Assessed against:** `main` @ `a917680` (v0.8.3) — code references were accurate at that commit and have not been re-verified against later releases · **Status:** Roadmap only — nothing in this document ships code. It exists so that when an enterprise capability is requested, the sequencing, prerequisites, and honest constraints are already worked out.
 
 This is the roadmap referenced by `IMPROVEMENT_ASSESSMENT.md` §28 (AI-assisted features) and §29 (Enterprise capabilities).
 

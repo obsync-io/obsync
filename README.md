@@ -14,7 +14,14 @@ The entire product is built around one clean concept — the **Sync Job**:
 
 ## Status
 
-🚧 Under active development. See the architecture below and the issue tracker for progress.
+Actively maintained. The current release is **v0.9.0** — download the MSI from
+**[Releases](https://github.com/obsync-io/obsync/releases)**, or build it yourself (see
+[Installing](#installing)). See [CHANGELOG.md](CHANGELOG.md) for what shipped in each version and
+the [issue tracker](https://github.com/obsync-io/obsync/issues) for what is planned.
+
+> [!IMPORTANT]
+> If you are running **0.8.0, 0.8.1 or 0.8.2, upgrade.** Scheduled runs never executed in those
+> builds (see the 0.8.3 entry in the changelog). Manual runs were unaffected.
 
 ## Tech stack
 
@@ -26,18 +33,17 @@ The entire product is built around one clean concept — the **Sync Job**:
 | CLI | .NET console app for automation |
 | SQL connectivity | Microsoft.Data.SqlClient |
 | High-fidelity scripting | SQL Server Management Objects (SMO) |
-| Optional schema tooling | DacFx (later) |
 | Scheduling | Quartz.NET |
 | Local state | SQLite (Microsoft.Data.Sqlite + Dapper) |
 | Logging | Serilog |
-| Git | Git CLI (LibGit2Sharp later) |
+| Git | Git CLI (bundled MinGit) |
 | GitHub API | Octokit.NET |
-| Secrets | Windows Credential Manager + DPAPI |
+| Secrets | Windows Credential Manager |
 
 ## Solution layout
 
 ```
-Obsync.sln
+Obsync.slnx
 src/
   Obsync.Shared      Domain models, result types, validation, path mapping, hashing, normalization
   Obsync.Data        SQLite local state: schema, migrations, repositories
@@ -46,16 +52,18 @@ src/
   Obsync.Git         Local Git workspace: clone, pull, diff, commit, push
   Obsync.GitHub      GitHub API integration (Octokit.NET)
   Obsync.Scheduler   Scheduling abstractions over Quartz.NET
-  Obsync.Security    Credential storage (Windows Credential Manager) + DPAPI encryption
+  Obsync.Security    Credential storage (Windows Credential Manager)
   Obsync.Engine      Core orchestration: inventory -> script -> hash -> diff -> commit -> push
   Obsync.Service     Windows Service / Worker host for scheduled jobs
   Obsync.Cli         CLI tool for automation and testing
   Obsync.App         WPF desktop application
 tests/
+  Obsync.Shared.Tests
   Obsync.Engine.Tests
   Obsync.Metadata.Tests
   Obsync.Git.Tests
   Obsync.Integration.Tests
+  Obsync.App.Tests
 ```
 
 Dependencies point inward: `Obsync.Shared` has no project references; infrastructure
@@ -64,8 +72,9 @@ hosts (`App`, `Service`, `Cli`) compose everything via dependency injection.
 
 ## Security
 
-- SQL passwords and GitHub tokens are stored in Windows Credential Manager / encrypted
-  with DPAPI — never in plaintext, `appsettings.json`, or the local SQLite database.
+- SQL passwords and GitHub tokens are stored in **Windows Credential Manager** — never in
+  plaintext, `appsettings.json`, or the local SQLite database. (Credential Manager protects
+  entries with DPAPI at the OS level; Obsync does not implement its own encryption.)
 - Secrets are masked in the UI and excluded from logs.
 - Supported authentication: Windows Integrated, SQL Login, and GitHub fine-grained PAT.
 
@@ -93,8 +102,8 @@ executing *your* jobs, not merely that a process is running.
 
 **How changes apply.** The service reconciles its live schedule against the database every
 30 seconds, so creating, editing, or deleting a job in the app takes effect within half a minute —
-no service restart. (Jobs carry an enabled flag honored by the scheduler and engine; the app has
-no enable/disable toggle yet, so the flag only changes via job import.) "Next Run" is stamped when you save a job and kept
+no service restart. (Pause or resume a job's schedule from the row menu on the Jobs page; a paused job keeps its
+history and can still be run manually.) "Next Run" is stamped when you save a job and kept
 Quartz-accurate by the service. Times are local wall-clock; daylight-saving transitions are handled
 by the scheduler's time-zone-aware triggers.
 

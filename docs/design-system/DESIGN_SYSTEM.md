@@ -123,11 +123,15 @@ An **implicit** `TextBlock` style sets `AppFontFamily`/13 only. It deliberately 
 
 `Icons.xaml`. Glyphs come from the system icon font — `IconFontFamily` = `Segoe Fluent Icons, Segoe MDL2 Assets` (Windows 11 with Windows 10 fallback). No icon images, no third-party icon packs.
 
-Every glyph is a **named string resource** so screens never embed magic characters: `IconDashboard`, `IconJobs`, `IconConnections`, `IconRepositories`, `IconHistory`, `IconSettings`, `IconRun`, `IconEdit`, `IconAdd`, `IconDelete`, `IconBack`, `IconRefresh`, `IconUpdate`, `IconOpenExternal`, `IconExport`, `IconImport`, `IconClose`, `IconCheck`, `IconWarning`, `IconError`, `IconFolder`, `IconDatabase`, `IconBranch`, `IconOpen`, `IconDiff`, `IconCopy`, `IconChevronDown`, `IconChevronUp`, `IconNavToggle`.
+Every glyph is a **named string resource** so screens never embed magic characters: `IconDashboard`, `IconJobs`, `IconConnections`, `IconRepositories`, `IconHistory`, `IconSettings`, `IconRun`, `IconEdit`, `IconAdd`, `IconDelete`, `IconBack`, `IconRefresh`, `IconUpdate`, `IconOpenExternal`, `IconExport`, `IconImport`, `IconClose`, `IconCheck`, `IconWarning`, `IconError`, `IconFolder`, `IconDatabase`, `IconBranch`, `IconOpen`, `IconDiff`, `IconCopy`, `IconChevronDown`, `IconChevronUp`, `IconNavToggle`, `IconPause`, `IconMore`.
 
 Usage: a `TextBlock` with `Style="{StaticResource Icon}"` and `Text="{StaticResource IconXxx}"`. The `Icon` style sets the icon font, 16px, `TextMutedBrush`, centered, ClearType rendering. Override `FontSize`/`Foreground` locally where needed (14 inside buttons, 20–24 in dialogs/empty states; `Foreground="White"` inside a `PrimaryButton`).
 
 Adding a glyph = add one `sys:String` to `Icons.xaml` with a code point from the Segoe Fluent set.
+
+> **Known inconsistency:** `IconPause` and `IconMore` (added in 0.9.0 for the Jobs row menu) are
+> declared in `App.xaml` rather than `Icons.xaml`. They resolve either way, but new glyphs belong
+> in `Icons.xaml` — move these two when that file is next touched.
 
 ### Brand
 
@@ -204,6 +208,8 @@ Reusable `DataTemplate`s in `App.xaml`, driven by converters (also in `App.xaml`
 - **`StatusBadgeTemplate`** (DataContext = `RunStatus`, or null): pill (`RadiusPill`, padding `9,3`) with a 7px dot + 12px SemiBold label. Background from `StatusToBadgeBackground` (soft tint), dot/text from `StatusToBrush`, text from `StatusToText`. **Null handling is contractual:** a never-run job renders a neutral "Not run" badge via `FallbackValue` (`NeutralSoftBrush` / `TextMutedBrush`) — a test asserts the literal "Not run" text so a blank status cell is a build failure.
 - **`ChangeBadgeTemplate`** (DataContext = `ChangeType`): same pill, text-only, colored by `ChangeTypeToBrush`/`ChangeTypeToBadgeBackground` (Added=success, Modified=accent/warning, Deleted=error family).
 - **`ConnectionStatusBadgeTemplate`** (DataContext = `ConnectionTestStatus`): dot + text pill for server test results, via the `ConnectionStatusTo*` converters.
+- **`JobStatusBadgeTemplate`** (DataContext = `SyncJob`): `StatusBadgeTemplate`'s behaviour, except a paused job (`IsPaused`) renders a neutral "Paused" chip instead of its last run's status — pausing never rewrites run history, so the badge must not imply it did.
+- **`NextRunCellTemplate`** (DataContext = `SyncJob`): the next-run timestamp, replaced by an amber dot + "Overdue" plus a corrective tooltip when `IsOverdue`. Status is carried by text as well as colour, per the rule above. Uses the `OverdueDetail` converter for the tooltip.
 - **`TagChipTemplate` + `TagChipsList`** (environment tags): small pill (padding `8,2`, 11px SemiBold) — neutral (`NeutralSoftBrush` + muted text) by default; **production tags render red** (`ErrorSoftBrush` background + `ErrorBrush` text) via an `IsProduction` trigger. `TagChipsList` is the wrapping `ItemsControl` style used on Dashboard, Jobs, Job Workspace, and History.
 
 ---

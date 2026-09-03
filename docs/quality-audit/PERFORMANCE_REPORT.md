@@ -93,8 +93,10 @@ against this report's numbers) was implemented and re-measured. Changes: per-sli
 (the parallel table path never prefetched — the N+1 its own doc claimed to prevent; bounded by a
 25k-table ceiling), streamed object-inventory serialize/hash (the string form previously crossed
 the 95 MB guard at ~380k objects and was skipped forever with a perpetual Warning), single-pass
-byte-identical script normalizer (locked by a frozen reference implementation + 2,000,200
-differential fuzz cases), encode-once hash+write, size-guard before hashing, batched self-heal
+byte-identical script normalizer (locked by a frozen reference implementation + ~3,100
+differential cases committed in `ScriptNormalizerEquivalenceTests`: a 70-input corpus across 16
+option combinations, 2,000 seeded fuzz iterations, a 1 MB script, and an idempotency pass — an
+earlier exploratory run covered far more but is not reproducible from the repository), encode-once hash+write, size-guard before hashing, batched self-heal
 existence probe, slim prior-state projection (~half the resident bytes), chunked multi-row SQLite
 inserts (parameter limit 32,766 confirmed empirically; chunks 200×14 / 350×8 / 560×5), V012 drops
 a strict-prefix-duplicate index, per-run persisted change rows capped at 50k (counters stay exact;

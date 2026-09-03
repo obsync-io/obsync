@@ -1,6 +1,6 @@
 # Obsync — Drift Detection & Environment Comparison Module (Proposal)
 
-**Date:** 2026-07-16 · **Status:** Proposal (no code ships with this document) · **Assessed against:** `main` @ `a917680` (v0.8.3 + performance pass) · **Companion to:** `IMPROVEMENT_ASSESSMENT.md` §24 (drift detection) and §25 (schema compare).
+**Date:** 2026-07-16 · **Status:** Proposal (no code ships with this document) · **Assessed against:** `main` @ `a917680` (v0.8.3 + performance pass) — code references were accurate at that commit and have not been re-verified against later releases · **Companion to:** `IMPROVEMENT_ASSESSMENT.md` §24 (drift detection) and §25 (schema compare).
 
 This document is the architectural proposal called for by §24 of the improvement assessment. It covers **both** the Drift Detection module (baseline-anchored, eventually schedulable) and the interactive **Schema Compare** module (§25) — they are the same comparison engine with two entry points: one anchored to a stored baseline, one run ad hoc between any two sides. Every architectural claim below is grounded in the current codebase, with file and class names cited.
 
@@ -55,7 +55,8 @@ That means a commit is **self-describing**: to know "what did the database look 
 A "baseline" is therefore mostly a **named pointer**, not a copy:
 
 ```sql
--- V013__drift_module.sql (sketch — follows the existing Obsync.Data/Migrations conventions)
+-- V014__drift_module.sql (sketch — follows the existing Obsync.Data/Migrations conventions)
+-- NOTE: V013 shipped in 0.9.0 (server info + repository validation); take the next free slot.
 
 CREATE TABLE drift_baselines (
     id                     TEXT PRIMARY KEY,           -- GUID
@@ -211,7 +212,7 @@ Confidence legend: **High** = mechanism exists and is reused nearly as-is; **Med
 
 ### v1 — DB-vs-Git on demand (+ Git-vs-Git)
 
-Comparison core (maps, classification, evidence store), baseline/comparison/finding persistence (V013), the Drift nav section with list + drill-down reusing `ScriptDiffWindow`, report export, E2E differential + false-positive suites. Watermark reuse for the own-head case only.
+Comparison core (maps, classification, evidence store), baseline/comparison/finding persistence (next free migration slot — V013 shipped in 0.9.0), the Drift nav section with list + drill-down reusing `ScriptDiffWindow`, report export, E2E differential + false-positive suites. Watermark reuse for the own-head case only.
 
 **Effort: 4–7 weeks.** Core comparison + persistence 1.5–2.5 wk (High — pipeline, normalizer, hasher, manifest all exist); UI 1.5–2.5 wk (Medium — new views, but grid/diff/report patterns are established); test suites 1–2 wk (High confidence in approach, the harness exists; the range covers seeding encrypted/CLR/collation fixtures).
 

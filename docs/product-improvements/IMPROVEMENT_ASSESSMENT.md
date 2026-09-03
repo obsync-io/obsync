@@ -118,7 +118,7 @@ Toasts (failure/warning, missed-failure summary at launch, update available) + e
 ## 15. Settings — **P1 · Implement now (scoped)**
 
 - **Current:** per-section Save buttons (consistent), inline status lines, validation on every section; retention options exactly as the brief requests (30/90/180/365/forever); production-tag guard implemented and explained in the UI.
-- **Decision:** per-section Save is **kept** — it is the pattern that already minimizes accidental loss (small blast radius, explicit statuses); converting to page-level save or autosave would be churn without evidence of a problem. *Implement now:* show **approximate history size** next to retention (brief request, cheap), and the storage health items in §16. "Protected environment tags" rename: **Rejected** — "Production tags" is clearer and already consistently used in UI + docs. Git identity options already cover app-default/custom; "use system git config" **Rejected** (service and app would silently diverge).
+- **Decision:** per-section Save is **kept** — it is the pattern that already minimizes accidental loss (small blast radius, explicit statuses); converting to page-level save or autosave would be churn without evidence of a problem. *Implement now:* show **approximate history size** next to retention (brief request, cheap), and the storage health items in §16. — *Status: the storage health items shipped in 0.9.0; the history-size readout did not. Tracked in DEFERRED_IMPROVEMENTS.* "Protected environment tags" rename: **Rejected** — "Production tags" is clearer and already consistently used in UI + docs. Git identity options already cover app-default/custom; "use system git config" **Rejected** (service and app would silently diverge).
 
 ## 16. Network & storage — **P1 · Implement now (scoped)**
 
@@ -139,7 +139,7 @@ Toasts (failure/warning, missed-failure summary at launch, update available) + e
 ## 19. Accessibility & desktop polish — **P0 (defects) · Implement now**
 
 - **Current:** tooltips + automation names on icon actions, Esc/Enter on dialogs, min window size, status = color + text + dot (never color alone). Baseline screenshots show real defects: truncated "Changes" header, clipped Actions column on Jobs, truncated status badges on History at default width.
-- **Decision:** fix the truncation/clipping defects; audit tab order on the two dialogs; keep the existing text+icon status convention. Full DPI matrix (100/125/150/200 %) re-verified via render probes at scale factors; physical-monitor verification remains a human gate (documented).
+- **Decision:** fix the truncation/clipping defects; audit tab order on the two dialogs; keep the existing text+icon status convention. Layout is verified by render probes at the 960 px minimum width (`TableLayoutTests`, `HistoryRunsRenderTests`), which assert no clipped cell or column overflow. **A DPI matrix (100/125/150/200 %) was not implemented** — no test parameterises a scale factor — so DPI verification remains entirely a human gate.
 
 ## 20. Dark mode — **P2 · Planned**
 

@@ -20,7 +20,7 @@ defects**. Two Medium and three Low findings were identified; both Mediums and t
 | SEC-1 | Medium | The Add Server dialog defaulted **Trust server certificate = ON** (the model default is off) — every UI-added server accepted any certificate, disabling MITM protection for the TDS session. | **Fixed** (OBS-22): defaults off + caution text; edit path preserves the stored value. Regression-tested. |
 | SEC-2 | Medium | Raw git stderr is persisted into `runs.error_message`, `run_logs.detail`, audit detail, run reports, and the support bundle. A **manual proxy URL embeds `user:password@host`**, and git/curl proxy failures can echo it — the one credible path for a secret to reach the state DB and exports. | **Fixed** (OBS-19): URL userinfo is redacted (`://***@`) in every stderr-derived failure string before it leaves Obsync.Git. Unit-tested. |
 | SEC-3 | Low | Branch names beginning with `-` reach git as positionals (option-injection; self-inflicted config only, no shell involved — args use `ArgumentList`). | Open (Low). Practical exposure requires the operator to name their own branch like an option; wizard-side rejection is a backlog item. |
-| SEC-4 | Low | `DestinationFolder` allowed `..` traversal outside the clone (operator-authored value; not reachable from SQL-derived names, which are sanitized). | **Fixed** (OBS-35): wizard validation rejects traversal, rooted destination folders, and invalid path characters. |
+| SEC-4 | ~~Low~~ **High** | `DestinationFolder` allowed `..` traversal outside the clone. **The original assessment was wrong**: it stated this was "not reachable from SQL-derived names, which are sanitized", but the *database name* is SQL-derived, was never sanitized, and was composed straight into the repository path — so a database named `..\..\Windows\Temp` redirected every write outside the workspace, as the service account. Object and schema names were sanitized; the database name was not. | **Fixed** (2026-09-03): database names are reduced to a single path component, and every write, copy and delete is now checked for containment against its root. The job-config importer — which bypassed the wizard's checks entirely — validates paths with the same shared rule. The earlier wizard-only fix (OBS-35) closed one route of several. |
 | SEC-5 | Low | `DpapiSecretProtector` is registered but has no callers; README wording implied an app-level DPAPI path. | Documented (this file); the class is a candidate for removal at the owner's call (standing "no dead code" rule). Credential Manager itself uses DPAPI internally, so the user-facing claim is not false. |
 
 ## Verified secure (traced end-to-end, with runtime corroboration where noted)
@@ -31,7 +31,7 @@ namespaced identifiers. Config models carry only the key reference. After the OB
 a feature no longer deletes its stored secret (matching the UI's "leave blank to keep the saved
 one" promise).
 
-**State database.** No table carries a secret column (V001–V011 reviewed); `app_settings` JSON
+**State database.** No table carries a secret column (V001–V013 reviewed); `app_settings` JSON
 payloads for proxy/alerts exclude passwords by model shape. Runtime corroboration: the E2E battery
 greps every committed file for the credential-store token — zero hits (S01).
 
@@ -63,10 +63,18 @@ identifiers and literals.
 **Scripted secrets.** Server logins script with SMO's placeholder hash; `CREATE CREDENTIAL` is
 composed identity-only — no secret material can enter the repository from server-object scripting.
 
-**Path safety.** SQL-derived names are sanitized (invalid chars replaced, length-capped, collision
-suffixed with a stable hash) — verified live with hostile names (space, unicode, `]`, 120+ chars)
-in E2E S01. Atomic writes (`.obsync-tmp` + rename) with the temp pattern excluded from `git add`.
-Operator-authored paths are now validated (SEC-4).
+**Path safety.** Object and schema names are sanitized (invalid chars replaced, length-capped,
+collision suffixed with a stable hash) — verified live with hostile names (space, unicode, `]`,
+120+ chars) in E2E S01. Atomic writes (`.obsync-tmp` + rename) with the temp pattern excluded from
+`git add`.
+
+> **Corrected 2026-09-03.** This section previously said "SQL-derived names are sanitized" without
+> qualification. That was true of object and schema names but **not** of the database name, which
+> was composed into the repository path raw — the omission behind SEC-4's incorrect Low rating.
+> Database names are now sanitized to a single path component, every write/copy/delete is
+> containment-checked against its root, and the job-config importer validates paths with the same
+> rule the wizard uses. Names matching Windows device names (`CON`, `NUL`, `COM1`-`COM9`,
+> `LPT1`-`LPT9`) are also escaped — a file named `CON.sql` made `git add` fail outright.
 
 **TLS & network.** No `ServerCertificateCustomValidationCallback` or accept-any-cert anywhere;
 Octokit, the update check, the proxy test, and webhooks use default certificate validation. SMTP

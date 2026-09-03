@@ -2,6 +2,32 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## Unreleased
+
+**Correctness and safety fixes** from a full code review of the shipped 0.9.0 tree. Each was
+re-confirmed end to end before being changed, and each is covered by regression tests (suite
+726 → 835).
+
+- **Pull request mode works for jobs covering several databases** — the commit subject is also the
+  GitHub pull request title, and it embedded an untruncated database list. Past roughly 10-20
+  databases GitHub rejected the title, and because tracked state only advances on a delivered pull
+  request, the job re-scripted everything and failed identically on every subsequent run while
+  leaking a branch each time. The database list is now summarized (`[Sales, HR, Finance +37 more]`)
+  so the server and timestamp always survive; the full list stays in the commit body.
+- **An hourly interval of 24 or more is rejected instead of silently never running** — it produced
+  a cron step in the hour field, which only accepts 0-23, so the job stayed enabled with no trigger
+  and no log entry, while the scheduler health check went on reporting success. The wizard and the
+  job-config importer now refuse it and point to the Daily cadence or a cron expression, and the
+  service logs an error rather than dropping a job silently.
+- **Scripted files can no longer be written outside the workspace** — a database name is read from
+  `sys.databases` and was composed into the repository path unsanitized, so a name containing `..`
+  redirected writes outside the git clone. Database names are now reduced to a single path
+  component, and every write, copy and delete is checked against its root. Job configuration
+  imported from a file is validated the same way the wizard validates it.
+- **Object and database names matching Windows device names** (`CON`, `NUL`, `COM1`-`COM9`,
+  `LPT1`-`LPT9`) are now escaped. A file named `CON.sql` made `git add` fail outright — failing
+  every run — and a directory named `CON` made git skip it silently.
+
 ## 0.9.0 — 2026-07-16
 
 **Production-trust and clarity release.** A full product-improvement review (assessment, plan, and
@@ -102,11 +128,21 @@ This release also carries the fixes from a full production-readiness audit
 
 ## 0.8.2 — 2026-07-10
 
+> [!WARNING]
+> **Scheduled runs never executed in this release.** Every cron fire crashed before reaching the
+> engine, silently — the service heartbeat stayed healthy and "Next Run" kept advancing. Fixed in
+> 0.8.3; upgrade if you are on this version. Manual runs were unaffected.
+
 - **Modernized installer wizard** — Segoe UI dialog typography, a cleaner brand side panel and
   banner, product-specific page copy with sentence-cased headers, and a more readable Service
   Account page. Purely presentational; install behavior is unchanged.
 
 ## 0.8.1 — 2026-07-10
+
+> [!WARNING]
+> **Scheduled runs never executed in this release.** Every cron fire crashed before reaching the
+> engine, silently — the service heartbeat stayed healthy and "Next Run" kept advancing. Fixed in
+> 0.8.3; upgrade if you are on this version. Manual runs were unaffected.
 
 - **Tabbed Settings** — the Settings page is reorganized into categorized tabs (General, Alerts,
   Network & storage, Security & audit, Diagnostics, About) instead of one long scroll, with a
@@ -117,6 +153,11 @@ This release also carries the fixes from a full production-readiness audit
   at its foot; tooltips carry the labels and the preference persists across sessions.
 
 ## 0.8.0 — 2026-07-10
+
+> [!WARNING]
+> **Scheduled runs never executed in this release.** Every cron fire crashed before reaching the
+> engine, silently — the service heartbeat stayed healthy and "Next Run" kept advancing. Fixed in
+> 0.8.3; upgrade if you are on this version. Manual runs were unaffected.
 
 - **Nothing is silently lost** — tracked object state (hashes, deletions, incremental watermarks)
   now advances only after the run's changes are durably delivered: a commit in direct/local modes,
@@ -152,7 +193,13 @@ This release also carries the fixes from a full production-readiness audit
 
 ## 0.7.0 — 2026-07-10
 
-- **Reliable scheduling** — the launch-blocking scheduling gaps are closed end-to-end:
+> [!NOTE]
+> The heading below overstates what landed. The same commit introduced the defect fixed in 0.8.3:
+> every plain cron fire threw before reaching the engine, so no scheduled run executed in 0.8.0
+> through 0.8.2. The deployment and health work listed here did ship and is accurate.
+
+- **Reliable scheduling** — the deployment and visibility gaps around scheduling are closed
+  (but see the note above — execution itself was broken until 0.8.3):
   - The MSI now registers the Obsync service **automatic (delayed) start** and starts it at install,
     so schedules survive reboots with no manual step (previously manual-start, i.e. never running).
   - **Scheduler health in the app** — the service heartbeats into the job database every 30s;

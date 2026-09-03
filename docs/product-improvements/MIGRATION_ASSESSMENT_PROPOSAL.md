@@ -1,6 +1,6 @@
 # Obsync — Migration Assessment Module Proposal
 
-**Date:** 2026-07-16 · **Status:** Proposal only — no analyzer code ships with this document · **Origin:** `IMPROVEMENT_ASSESSMENT.md` §27 (Migration assessment — P3 · Proposal only) · **Grounded against:** `main` @ `a917680` (v0.8.3 + performance pass)
+**Date:** 2026-07-16 · **Status:** Proposal only — no analyzer code ships with this document · **Origin:** `IMPROVEMENT_ASSESSMENT.md` §27 (Migration assessment — P3 · Proposal only) · **Grounded against:** `main` @ `a917680` (v0.8.3 + performance pass) — code references were accurate at that commit and have not been re-verified against later releases
 
 **Targets covered:** SQL Server → PostgreSQL · SQL Server → AlloyDB for PostgreSQL · SQL Server → BigQuery
 
@@ -360,7 +360,7 @@ Each phase ships independently and is useful alone; there is no big-bang release
 
 This module makes *claims about other people's migrations*. A wrong "Direct" verdict is the migration-assessment equivalent of the sync engine losing data. Before any phase ships:
 
-- **Dedicated rules with dedicated fixtures.** Every matrix row and every syntax rule requires a fixture database (or fixture script corpus) containing a planted instance of the construct, plus negative fixtures (the construct inside comments, strings, and near-miss identifiers). A rule without a fixture does not merge — same discipline as the existing 561-test + E2E bar.
+- **Dedicated rules with dedicated fixtures.** Every matrix row and every syntax rule requires a fixture database (or fixture script corpus) containing a planted instance of the construct, plus negative fixtures (the construct inside comments, strings, and near-miss identifiers). A rule without a fixture does not merge — same discipline as the existing test + E2E bar.
 - **Cross-verification against authority.** Type-matrix verdicts are sourced to vendor documentation (PostgreSQL docs, Google's official migration mapping) and at least one verdict-per-class validated empirically on a live PG/BQ instance during development (dev-time validation; the shipped module still never connects to targets).
 - **External review.** At least one person with real SQL Server→PostgreSQL migration experience and one with BigQuery warehouse experience review the matrix and rule catalog before P1/P2 ship. The project must acquire or contract this expertise; shipping without it would produce exactly the shallow analyzer the improvement assessment rejected.
 - **Version-stamped rule catalog.** Every report names the catalog version that produced it, so a verdict can be traced to the rule text that made it.
@@ -377,7 +377,7 @@ Relative to recent Obsync feature work (the reporting stack, the security-review
 | P3 | M | Medium | UI drill-down work; the model itself is arithmetic |
 | P4 | S–M | High | persistence + diffing, patterns exist |
 
-These are bands with confidence, per §7.5's own standard — no date commitments. The overall sequencing recommendation stands as in the improvement assessment: this remains **P3** behind the v0.9.0 P0/P1 work, and P0 (PoC) should only start once a pilot user with a real migration question exists — building this without one would be speculation.
+These are bands with confidence, per §7.5's own standard — no date commitments. The overall sequencing recommendation stands as in the improvement assessment: this remains **P3** behind the v0.9.0 P0/P1 work (which has since shipped), and P0 (PoC) should only start once a pilot user with a real migration question exists — building this without one would be speculation.
 
 ---
 

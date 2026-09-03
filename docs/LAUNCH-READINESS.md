@@ -1,8 +1,15 @@
 # Launch readiness — evidence-based assessment
 
+> [!IMPORTANT]
+> **Historical record — assessed 2026-07-10 against commit `3384b5a`, before 0.8.3 and 0.9.0
+> shipped.** It is kept for the audit trail and is *not* a current statement of readiness. Figures
+> below (a 477-test suite, the open backlog in §3, the gates in §4) were accurate on that date and
+> several have since been superseded — see [CHANGELOG.md](../CHANGELOG.md) for what actually
+> shipped. Two later audits corrected findings recorded here; the corrections are noted inline.
+
 *Assessed 2026-07-10 against commit `3384b5a` (four parallel code audits over engine/consistency,
 Git/GitHub, data/security/ops, and UI truthfulness, plus a measured benchmark of the real pipeline).
-This document tracks what was found, what was fixed, and what remains. Update it as items close.*
+This document tracks what was found, what was fixed, and what remains.*
 
 **Verdict: conditionally ready.** The launch-blocking defects found by this pass are fixed and
 regression-tested. What remains before flipping the switch is *human verification that cannot be
@@ -33,7 +40,7 @@ ship with, documented below.
 | 15 | P2 | >100 MB generated file would wedge the branch behind a misleading push error | Skip-and-report at ~95 MB; specific push-failure explanations for GH001 (file size) and GH006 (protected branch) | Guard in `ApplyItemAsync` |
 | 16 | P2 | A failed options/permissions/security-review catalog read failed the whole run after all objects had scripted | Fail-soft reported skips (same policy as docs/reference data) | Artifact generator refactor |
 | 17 | P2 | Stale views while the service runs jobs; closing the app mid-run without warning; history cap silent; decline-vs-running message wrong; no background-thread crash logging; raw git stderr in banners | All addressed in the App batch (activation refresh, closing confirm, cap caption, outcome enum, AppDomain/TaskScheduler handlers, explained push reasons) | 166 App tests |
-| 18 | P2 | Scheduling non-functional in real deployments (service manual-start LocalSystem, no health signal, no missed-run policy, no cross-process duplicate guard, unsafe stale-run cleanup) | Fixed earlier this cycle (`ef96254`): auto-start + heartbeat + health banners + catch-up + job run lock + lock-probing recovery | 477-test suite; scheduling test batch |
+| 18 | P2 | Scheduling non-functional in real deployments (service manual-start LocalSystem, no health signal, no missed-run policy, no cross-process duplicate guard, unsafe stale-run cleanup) | Deployment and health work landed in `ef96254`. **The "verified" claim in this row was wrong**: that same commit introduced the defect fixed in 0.8.3 — every plain cron fire threw before reaching the engine, so no scheduled run executed in 0.8.0-0.8.2. | ~~477-test suite~~ — the cited suite did not cover a scheduled fire reaching the engine and could not have caught this. Now covered by `SyncQuartzJobTests` and `CronTranslatorTests`. |
 
 Also: CLI reported a hardcoded wrong version (fixed); unreferenced DacFx package removed; the
 internal AI build-prompt file removed from the public repo.
