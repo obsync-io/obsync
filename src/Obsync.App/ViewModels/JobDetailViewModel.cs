@@ -440,9 +440,15 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
     /// <summary>True when a change has a browsable GitHub location: DirectCommit and PullRequest
     /// jobs with a repository. Export-only jobs have no repository at all, and local-commit-only
-    /// work was never pushed — the button hides for those instead of doing nothing (or lying).</summary>
+    /// work was never pushed — the button hides for those instead of doing nothing (or lying).
+    /// A run whose push failed is the same situation and hides too — it produced a commit but no
+    /// URL, because the commit never reached GitHub, so linking a change would show the branch's
+    /// stale content as though it were the change. A job with no runs yet keeps the affordance:
+    /// nothing has failed, and the button describes what this job type can do.</summary>
     public bool CanOpenChangesInGitHub =>
-        _repository is not null && Job?.CommitMode is CommitMode.DirectCommit or CommitMode.PullRequest;
+        _repository is not null
+        && Job?.CommitMode is CommitMode.DirectCommit or CommitMode.PullRequest
+        && LatestRun is not { CommitSha: not null, CommitUrl: null };
 
     [RelayCommand]
     private void OpenChange(ObjectChange? change)

@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Obsync.Shared.Results;
 
@@ -173,7 +173,7 @@ public sealed partial class GitWorkspace : IGitWorkspace
         // failed), DO NOT hard-reset to origin — that would silently discard the committed changes.
         // Just make sure we're on the branch; the engine will re-push the pending commit(s).
         if (localBranchExists
-            && await AheadCountAsync(context.LocalPath, context.Branch, remoteBranchExists, cancellationToken).ConfigureAwait(false) > 0)
+            && await IsAheadOfOriginAsync(context.LocalPath, context.Branch, remoteBranchExists, cancellationToken).ConfigureAwait(false))
         {
             var stay = await _git.RunAsync(context.LocalPath, ["checkout", context.Branch], cancellationToken).ConfigureAwait(false);
             return stay.Success
@@ -301,16 +301,37 @@ public sealed partial class GitWorkspace : IGitWorkspace
         var remoteBranchExists = (await _git.RunAsync(
             context.LocalPath, ["rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{context.Branch}"], cancellationToken)
             .ConfigureAwait(false)).Success;
-        return await AheadCountAsync(context.LocalPath, context.Branch, remoteBranchExists, cancellationToken).ConfigureAwait(false) > 0;
+        return await IsAheadOfOriginAsync(context.LocalPath, context.Branch, remoteBranchExists, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Number of local commits on the branch that are not yet on origin.</summary>
-    private async Task<int> AheadCountAsync(string localPath, string branch, bool remoteBranchExists, CancellationToken cancellationToken)
+    /// <summary>
+    /// True when the branch carries local commits that are not yet on origin — or when that cannot
+    /// be determined.
+    /// </summary>
+    /// <remarks>
+    /// The unknown case is deliberately folded in with "yes". This answer gates the destructive
+    /// branch of <see cref="PrepareAsync"/> (<c>checkout -f -B</c> onto origin, then
+    /// <c>clean -fd</c>), so reading a failed <c>rev-list</c> as "nothing unpushed" would discard a
+    /// commit that only exists here — the exact loss the gate was written to prevent. Erring the
+    /// other way costs at most a redundant push of an already-current branch, which git answers
+    /// with "Everything up-to-date".
+    /// </remarks>
+    private async Task<bool> IsAheadOfOriginAsync(
+        string localPath, string branch, bool remoteBranchExists, CancellationToken cancellationToken)
     {
         // With no remote branch every local commit is un-pushed; otherwise count origin/branch..branch.
         var range = remoteBranchExists ? $"origin/{branch}..{branch}" : branch;
         var result = await _git.RunAsync(localPath, ["rev-list", "--count", range], cancellationToken).ConfigureAwait(false);
-        return result.Success && int.TryParse(result.StandardOutput.Trim(), out var count) ? count : 0;
+
+        if (result.Success && int.TryParse(result.StandardOutput.Trim(), out var count))
+        {
+            return count > 0;
+        }
+
+        _logger.LogWarning(
+            "Could not count unpushed commits on '{Branch}' ({Error}); assuming there are some so that " +
+            "nothing local is discarded.", branch, Summarize(result.StandardError));
+        return true;
     }
 
     public async Task<GitCommitResult> CommitAllAsync(

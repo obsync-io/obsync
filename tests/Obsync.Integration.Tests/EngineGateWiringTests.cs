@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -34,6 +34,7 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
 
     private ServiceProvider _provider = null!;
     private FakeScriptProvider _scripts = null!;
+    private IGitWorkspace _git = null!;
     private SyncJob _job = null!;
 
     public async Task InitializeAsync()
@@ -41,7 +42,8 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
         Directory.CreateDirectory(_root);
         _scripts = new FakeScriptProvider();
 
-        var gitWorkspace = Substitute.For<IGitWorkspace>();
+        _git = Substitute.For<IGitWorkspace>();
+        var gitWorkspace = _git;
         gitWorkspace.PrepareAsync(Arg.Any<GitWorkspaceContext>(), Arg.Any<CancellationToken>())
             .Returns(Result.Success());
         gitWorkspace.HasUnpushedCommitsAsync(Arg.Any<GitWorkspaceContext>(), Arg.Any<CancellationToken>())
@@ -120,6 +122,27 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
     private Task<SyncRun> RunAsync(RunTrigger trigger = RunTrigger.Manual) =>
         _provider.GetRequiredService<ISyncEngine>().RunJobAsync(_job.Id, trigger);
 
+    /// <summary>
+    /// Takes the job's cross-process lock, standing in for a run already in flight elsewhere.
+    /// Polls rather than trying once: the engine's own lock file is DeleteOnClose, and Windows
+    /// keeps the directory entry until the last handle closes, so an acquire immediately after a
+    /// run can transiently fail. The product polls for the same reason (JobRunLock.WaitAsync).
+    /// </summary>
+    private static IDisposable AcquireJobLock(Guid jobId)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            if (JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, jobId) is { } handle)
+            {
+                return handle;
+            }
+
+            Thread.Sleep(20);
+        }
+
+        throw new InvalidOperationException("The test could not take the job's run lock.");
+    }
+
     private static RawScriptedObject Proc(string name) =>
         RawScriptedObject.Scripted(
             new ScriptedObjectIdentity(SqlObjectType.StoredProcedure, "dbo", name),
@@ -185,9 +208,7 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
     {
         _scripts.Items = [Proc("Foo")];
 
-        // Stand in for a run already in flight in another process.
-        using var held = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, _job.Id);
-        Assert.NotNull(held);
+        using var held = AcquireJobLock(_job.Id);
 
         var run = await RunAsync(RunTrigger.Scheduled);
 
@@ -214,9 +235,8 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
 
         var before = (await _provider.GetRequiredService<IJobRepository>().GetAsync(_job.Id))!.RunSummary;
 
-        using (var held = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, _job.Id))
+        using (AcquireJobLock(_job.Id))
         {
-            Assert.NotNull(held);
             Assert.Equal(RunStatus.Skipped, (await RunAsync(RunTrigger.Scheduled)).Status);
         }
 
@@ -235,12 +255,125 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
     {
         _scripts.Items = [Proc("Foo")];
 
-        using var held = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, _job.Id);
-        Assert.NotNull(held);
+        using var held = AcquireJobLock(_job.Id);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(RunTrigger.Manual));
 
         Assert.Empty(await _provider.GetRequiredService<IRunRepository>().GetForJobAsync(_job.Id, 10));
+    }
+
+    // --- Direct-mode push failure and stranded-commit recovery -------------------------------
+
+    private void SetPush(bool ok) =>
+        _git.PushAsync(Arg.Any<GitWorkspaceContext>(), Arg.Any<CancellationToken>())
+            .Returns(ok
+                ? Result.Success()
+                : Result.Failure("remote: error: GH006: Protected branch update failed for refs/heads/main."));
+
+    private void SetUnpushed(bool has) =>
+        _git.HasUnpushedCommitsAsync(Arg.Any<GitWorkspaceContext>(), Arg.Any<CancellationToken>()).Returns(has);
+
+    private void SetCommitProduced(bool produced) =>
+        _git.CommitAllAsync(
+                Arg.Any<GitWorkspaceContext>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(),
+                Arg.Any<CancellationToken>())
+            .Returns(produced ? GitCommitResult.Committed("abc1234def5678") : GitCommitResult.NoChanges());
+
+    private async Task DirectModeAsync()
+    {
+        _job.CommitMode = CommitMode.DirectCommit;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+    }
+
+    /// <summary>
+    /// A commit that never reached GitHub must not be advertised as a GitHub link. The URL is
+    /// assigned right after the commit, long before the push is attempted, and it is persisted to
+    /// the run row that the History view, the exported report, the alert email and the webhook
+    /// payload all read.
+    /// </summary>
+    [Fact]
+    public async Task AFailedDirectPush_LeavesNoGitHubCommitUrl_ButKeepsTheSha()
+    {
+        await DirectModeAsync();
+        _scripts.Items = [Proc("Foo")];
+        SetCommitProduced(true);
+        SetPush(ok: false);
+
+        var run = await RunAsync();
+
+        Assert.Equal(RunStatus.Warning, run.Status);
+        Assert.Null(run.CommitUrl);
+        Assert.Equal("abc1234def5678", run.CommitSha); // the commit is real, just not delivered
+        Assert.Contains("push", run.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+
+        var persisted = Assert.Single(await _provider.GetRequiredService<IRunRepository>().GetForJobAsync(_job.Id, 10));
+        Assert.Null(persisted.CommitUrl);
+    }
+
+    /// <summary>A push that works still gets its link — the fix must not remove the ordinary case.</summary>
+    [Fact]
+    public async Task ASuccessfulDirectPush_StillRecordsTheCommitUrl()
+    {
+        await DirectModeAsync();
+        _scripts.Items = [Proc("Foo")];
+        SetCommitProduced(true);
+        SetPush(ok: true);
+
+        var run = await RunAsync();
+
+        Assert.Equal(RunStatus.Succeeded, run.Status);
+        Assert.Equal("https://github.com/o/n/commit/abc1234def5678", run.CommitUrl);
+    }
+
+    /// <summary>
+    /// The recovery the engine's own comment promises — "the stranded commit is preserved and
+    /// re-pushed by the next run" — had no engine-level coverage: every fixture stubbed
+    /// HasUnpushedCommitsAsync to false, so a refactor could detach it and the suite would stay
+    /// green. This drives the no-new-changes run and asserts the push is retried.
+    /// </summary>
+    [Fact]
+    public async Task ALaterRunWithNoChanges_RepushesAStrandedCommit()
+    {
+        await DirectModeAsync();
+        _scripts.Items = [Proc("Foo")];
+        SetCommitProduced(true);
+        SetPush(ok: false);
+        SetUnpushed(true);
+        Assert.Equal(RunStatus.Warning, (await RunAsync()).Status);
+
+        // Second run: the object is unchanged, so nothing new is committed — but the commit from
+        // the first run is still sitting in the local clone.
+        _git.ClearReceivedCalls();
+        SetCommitProduced(false);
+        SetPush(ok: true);
+
+        var recovered = await RunAsync();
+
+        Assert.Equal(RunStatus.Succeeded, recovered.Status);
+        await _git.Received(1).PushAsync(Arg.Any<GitWorkspaceContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The mirror image: with nothing stranded, a no-change run must not push. Without this the
+    /// test above would pass against an engine that pushed unconditionally.
+    /// </summary>
+    [Fact]
+    public async Task ALaterRunWithNoChangesAndNothingStranded_DoesNotPush()
+    {
+        await DirectModeAsync();
+        _scripts.Items = [Proc("Foo")];
+        SetCommitProduced(true);
+        SetPush(ok: true);
+        SetUnpushed(false);
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        _git.ClearReceivedCalls();
+        SetCommitProduced(false);
+
+        var second = await RunAsync();
+
+        Assert.Equal(RunStatus.NoChanges, second.Status);
+        await _git.DidNotReceive().PushAsync(Arg.Any<GitWorkspaceContext>(), Arg.Any<CancellationToken>());
     }
 
     private sealed class FakeScriptProvider : IObjectScriptProvider

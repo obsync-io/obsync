@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -119,7 +119,13 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
 
     public bool ShowSingle => !IsLoading && !HasError && !ShowSplit && SelectedChange is not null;
 
-    public bool CanOpenOnGitHub => (_repository is not null && FullSha is not null) || _commitUrl is not null;
+    /// <summary>
+    /// A run whose commit never reached GitHub carries no commit URL — Local Commit Only by design,
+    /// and a failed push because the commit lives only in the local clone. Its SHA is not resolvable
+    /// on github.com either, so a blob link for a file at that SHA 404s just as the commit link
+    /// would; the repository-plus-SHA route offered exactly that.
+    /// </summary>
+    public bool CanOpenOnGitHub => _commitUrl is not null;
 
     public async Task LoadAsync(
         SyncRun run, IReadOnlyList<ObjectChange> changes, GitRepositoryProfile? repository, ObjectChange? preselect)

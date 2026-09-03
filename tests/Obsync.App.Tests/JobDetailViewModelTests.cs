@@ -1,4 +1,4 @@
-using NSubstitute;
+﻿using NSubstitute;
 using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.Data.Repositories;
@@ -19,14 +19,17 @@ public sealed class JobDetailViewModelTests
 {
     private static JobDetailViewModel NewViewModel(
         IJobRepository jobs, IRepositoryProfileRepository repositories,
-        IJobRunCoordinator? coordinator = null, IAuditWriter? audit = null)
+        IJobRunCoordinator? coordinator = null, IAuditWriter? audit = null, IRunRepository? runs = null)
     {
         var settings = Substitute.For<IAppSettingsRepository>();
         settings.GetProductionTagsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
 
-        var runs = Substitute.For<IRunRepository>();
-        runs.GetForJobAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<SyncRun>>([]));
+        if (runs is null)
+        {
+            runs = Substitute.For<IRunRepository>();
+            runs.GetForJobAsync(Arg.Any<Guid>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<IReadOnlyList<SyncRun>>([]));
+        }
 
         // The detail page binds to the coordinator's shared per-job run state on load.
         if (coordinator is null)
@@ -91,6 +94,42 @@ public sealed class JobDetailViewModelTests
         await vm.LoadAsync(job.Id);
 
         Assert.True(vm.CanOpenChangesInGitHub);
+    }
+
+    /// <summary>
+    /// A direct-mode commit whose push failed exists only in the local clone, so a change link
+    /// would resolve to the branch's stale content and present it as the change. The URL is the
+    /// signal: the engine clears it when the push fails.
+    /// </summary>
+    [Fact]
+    public async Task OpenInGitHub_IsHidden_WhenTheLatestRunsCommitNeverReachedGitHub()
+    {
+        var job = new SyncJob
+        {
+            Name = "Direct",
+            CommitMode = CommitMode.DirectCommit,
+            RepositoryProfileId = Guid.NewGuid(),
+            Databases = ["db"],
+        };
+        var (jobs, repositories) = RepositoriesFor(job);
+        var runs = Substitute.For<IRunRepository>();
+        runs.GetForJobAsync(job.Id, Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<SyncRun>>(
+            [
+                new SyncRun
+                {
+                    JobId = job.Id,
+                    Status = RunStatus.Warning,
+                    CommitSha = "abc1234def5678",
+                    CommitUrl = null, // the push failed
+                    StartedAt = DateTimeOffset.UtcNow,
+                },
+            ]));
+
+        var vm = NewViewModel(jobs, repositories, runs: runs);
+        await vm.LoadAsync(job.Id);
+
+        Assert.False(vm.CanOpenChangesInGitHub);
     }
 
     [Fact]

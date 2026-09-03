@@ -1901,6 +1901,12 @@ public sealed class SyncEngine : ISyncEngine
         if (push.IsFailure)
         {
             run.Status = RunStatus.Warning;
+            // The commit exists only in the local clone, so a github.com link built from its SHA
+            // would 404. Clearing it here covers every consumer at once: the persisted run row, the
+            // job-detail commit link, the exported HTML report, the alert email and the webhook
+            // payload all read this field. The SHA itself stays -- the commit is real, just not
+            // delivered -- and it is rendered as plain text wherever the URL is absent.
+            run.CommitUrl = null;
             // The banner/toast show ErrorMessage — give them the explained, actionable reason;
             // the raw git stderr stays available in the log entry's technical details.
             var reason = ExplainPushFailure(push.Error);
