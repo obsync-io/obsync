@@ -620,8 +620,12 @@
 
                         <StackPanel Visibility="{Binding ShowHourly, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="EVERY N HOURS" Style="{StaticResource Caption}" />
-                            <TextBox Text="{Binding IntervalHours, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,16"
-                                     MaxLength="3" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                            <!-- Capped at two digits: the scheduler expresses this as a step in the cron
+                                 hour field, which only accepts 1-23. Longer gaps belong to Daily or Cron. -->
+                            <TextBox Text="{Binding IntervalHours, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4"
+                                     MaxLength="2" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                            <TextBlock Text="1-23 hours. For a once-a-day sync use the Daily cadence; for a longer gap use Cron."
+                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16" />
                         </StackPanel>
 
                         <StackPanel Visibility="{Binding ShowDayTime, Converter={StaticResource BoolToVisibility}}">

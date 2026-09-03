@@ -11,6 +11,14 @@ public sealed class ScheduleProfile
     /// <summary>Interval in hours for <see cref="ScheduleKind.Hourly"/> (1 = every hour).</summary>
     public int IntervalHours { get; set; } = 1;
 
+    /// <summary>
+    /// Largest schedulable hourly interval. The Quartz translation puts the interval in a step of
+    /// the cron HOUR field (<c>0 0 0/N * * ?</c>), and a step there accepts only 0-23 — a larger
+    /// value yields an expression Quartz rejects, which would leave the job enabled but never
+    /// triggered.
+    /// </summary>
+    public const int MaxHourlyInterval = 23;
+
     /// <summary>Local time of day for <see cref="ScheduleKind.Daily"/> / <see cref="ScheduleKind.Weekly"/>.</summary>
     public TimeOnly TimeOfDay { get; set; } = new(23, 0);
 
@@ -157,6 +165,19 @@ public sealed class ScheduleProfile
         new(DateTime.SpecifyKind(wallClock, DateTimeKind.Local));
 
     /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
+    /// <summary>
+    /// Why this schedule cannot be turned into a trigger, or null when it can. Every entry point
+    /// that persists a schedule checks this, so the app, the job-config importer, and the service
+    /// can never disagree about what is schedulable — the disagreement is what let an unschedulable
+    /// job be saved with a confident "next run" it would never honour.
+    /// </summary>
+    public string? UnschedulableReason() =>
+        Kind == ScheduleKind.Hourly && IntervalHours > MaxHourlyInterval
+            ? $"An hourly interval must be {MaxHourlyInterval} hours or less. For a once-a-day sync choose the "
+                + "Daily cadence; for a longer gap use a Cron expression (for example '0 0 3 1/2 * ?' runs at "
+                + "03:00 every second day)."
+            : null;
+
     public string Describe()
     {
         var cadence = Kind switch

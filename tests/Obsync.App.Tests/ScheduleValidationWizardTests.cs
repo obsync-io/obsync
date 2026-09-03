@@ -196,4 +196,42 @@ public sealed class ScheduleValidationWizardTests
 
         Assert.NotNull(built.Saved());
     }
+
+    [Theory]
+    [InlineData(24)]
+    [InlineData(48)]
+    [InlineData(99)]
+    public async Task Save_HourlyIntervalBeyondTwentyThree_BlocksAtScheduleStep(int interval)
+    {
+        // The regression: this saved cleanly, showed a confident next-run of the next midnight, and
+        // then never fired — the cron step lives in the hour field, which only accepts 0-23.
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Hourly;
+        vm.IntervalHours = interval;
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Null(built.Saved());
+        Assert.Equal(4, vm.CurrentStep);
+        Assert.Contains("hourly interval", vm.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(6)]
+    [InlineData(23)]
+    public async Task Save_HourlyIntervalWithinRange_Saves(int interval)
+    {
+        var built = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var vm = await ValidExportJobAsync(built);
+        vm.SelectedScheduleKind = ScheduleKind.Hourly;
+        vm.IntervalHours = interval;
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        var saved = built.Saved();
+        Assert.NotNull(saved);
+        Assert.Equal(interval, saved.Schedule.IntervalHours);
+    }
 }

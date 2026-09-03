@@ -161,6 +161,14 @@ public sealed class JobConfigPorter : IJobConfigPorter
             return JobImportResult.Failure("This file is not a valid Obsync job export (it has no job name).");
         }
 
+        // The wizard rejects an unschedulable cadence; import must too. An imported job starts with
+        // no NextRunAt, so one that cannot be triggered would sit enabled and idle with nothing —
+        // not even the overdue badge, which needs a next-run time — ever reporting it.
+        if (file.Schedule.UnschedulableReason() is { } scheduleError)
+        {
+            return JobImportResult.Failure($"This job's schedule can't be run as exported. {scheduleError}");
+        }
+
         // Re-attach the server profile: by profile name first, then by server name.
         var connections = await _connections.GetAllAsync(cancellationToken).ConfigureAwait(false);
         var connection =

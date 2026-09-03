@@ -764,6 +764,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
             && !TimeOnly.TryParseExact(TimeOfDay, "HH:mm", out _) => "Enter a valid time of day (HH:mm).",
         4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowStart, "HH:mm", out _) => "Enter a valid window start time (HH:mm).",
         4 when MaintenanceWindowEnabled && !TimeOnly.TryParseExact(WindowEnd, "HH:mm", out _) => "Enter a valid window end time (HH:mm).",
+        // The shared rule the importer and the scheduler also use: a schedule this rejects would be
+        // saved as enabled, show a next-run time, and never fire.
+        4 when BuildSchedule().UnschedulableReason() is { } scheduleError => scheduleError,
         4 when ValidateScheduleAgainstWindow() is { } windowError => windowError,
         _ => null,
     };

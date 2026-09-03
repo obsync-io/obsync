@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
@@ -35,6 +36,13 @@ public interface ISyncJobScheduler
 public sealed class SyncJobScheduler : ISyncJobScheduler
 {
     private const string Group = "obsync";
+
+    /// <summary>
+    /// Cadences already reported as unschedulable, keyed by job. Reconcile revisits every job every
+    /// 30 seconds, so without this an unschedulable job would log on every tick; with it the job is
+    /// reported once and again only if its cadence changes.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, string> _reportedUnschedulable = new();
 
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly IJobRepository _jobs;
@@ -94,6 +102,12 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
         var cron = CronTranslator.ToCron(job.Schedule);
         var hasCron = !string.IsNullOrWhiteSpace(cron) && CronExpression.IsValidExpression(cron);
 
+        // A cadence that did not translate leaves the job enabled with no trigger. Report it: the
+        // "never fires" check below cannot, because it is gated on hasCron being true, and nulling
+        // NextRunAt (further down) also blinds the app's overdue detection — so without this the
+        // job simply stops, and every health surface goes on reporting success.
+        ReportIfUnschedulable(job, cron, hasCron);
+
         // A syntactically valid cron can still never fire (e.g. a past year, Feb 31). Quartz's
         // ScheduleJob throws for such a trigger, so degrade to unscheduled instead.
         if (hasCron && CronTranslator.NextFire(cron!, DateTimeOffset.UtcNow) is null)
@@ -142,6 +156,35 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
                 new JobDataMap { [SyncQuartzJob.TriggerKey] = nameof(RunTrigger.Startup) },
                 cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Logs a job whose cadence cannot become a trigger, once per distinct cadence. A genuinely
+    /// manual job has no cron by design and is not reported; anything else that fails to translate
+    /// is a job the user believes is scheduled.
+    /// </summary>
+    private void ReportIfUnschedulable(SyncJob job, string? cron, bool hasCron)
+    {
+        if (hasCron || job.Schedule.Kind == ScheduleKind.Manual)
+        {
+            _reportedUnschedulable.TryRemove(job.Id, out _);
+            return;
+        }
+
+        var signature = $"{job.Schedule.Kind}|{cron}";
+        if (_reportedUnschedulable.TryGetValue(job.Id, out var reported) && reported == signature)
+        {
+            return;
+        }
+
+        _reportedUnschedulable[job.Id] = signature;
+        _logger.LogError(
+            "Job {Name}: its {Kind} schedule did not translate into a valid trigger (cron '{Cron}'). " +
+            "The job is enabled but will NOT run. {Reason}",
+            job.Name,
+            job.Schedule.Kind,
+            string.IsNullOrWhiteSpace(cron) ? "(none)" : cron,
+            job.Schedule.UnschedulableReason() ?? "Review the job's schedule in Obsync.");
     }
 
     public async Task UnscheduleJobAsync(Guid jobId, CancellationToken cancellationToken = default)
@@ -215,7 +258,10 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
                 }
                 else if (!job.Schedule.RunOnStartup)
                 {
-                    // Switched to manual-only → drop the trigger.
+                    // Switched to manual-only → drop the trigger. A cadence edited into something
+                    // that no longer translates lands here too, and removing a live trigger for a
+                    // job the user still believes is scheduled must not be mistaken for that.
+                    ReportIfUnschedulable(job, cron, hasCron);
                     await scheduler.DeleteJob(jobKey, cancellationToken).ConfigureAwait(false);
                     await _jobs.UpdateNextRunAtAsync(job.Id, null, cancellationToken).ConfigureAwait(false);
                 }

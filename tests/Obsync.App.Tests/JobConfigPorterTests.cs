@@ -166,4 +166,36 @@ public sealed class JobConfigPorterTests
         Assert.False(result.IsSuccess);
         Assert.Contains("not a valid Obsync job export", result.Error);
     }
+
+    [Fact]
+    public async Task Import_HourlyIntervalBeyondTwentyThree_FailsWithAnActionableError()
+    {
+        // The importer bypassed every wizard check, and an imported job starts with no next-run
+        // time — so an unschedulable one sat enabled and idle with nothing, not even the overdue
+        // badge (which needs a next-run time), ever reporting it.
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Schedule = new ScheduleProfile { Kind = ScheduleKind.Hourly, IntervalHours = 48 };
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("hourly interval", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_SchedulableHourlyJob_Succeeds()
+    {
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Schedule = new ScheduleProfile { Kind = ScheduleKind.Hourly, IntervalHours = 6 };
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(6, Assert.Single(_saved).Schedule.IntervalHours);
+    }
 }
