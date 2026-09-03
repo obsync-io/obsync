@@ -190,4 +190,37 @@ public sealed class SyncJob
         && !IsRunning
         && RunSummary.NextRunAt is { } next
         && next < now - ScheduleOverdueGrace;
+
+    /// <summary>
+    /// Why this job's paths cannot be used safely, or null when they can. Companion to
+    /// <see cref="ScheduleProfile.UnschedulableReason"/>: every entry point that persists a job
+    /// checks it, so the wizard and the job-config importer cannot drift apart. The wizard's own
+    /// per-field rules are stricter and stay where they are — this is the floor that every route
+    /// must clear, including a hand-authored export file.
+    /// </summary>
+    public string? UnsafePathReason()
+    {
+        if (HasTraversal(DestinationFolder) || Path.IsPathRooted(DestinationFolder.Trim()))
+        {
+            return "The repository folder must be a relative path inside the repository "
+                + "(no drive letter, no '..').";
+        }
+
+        // Database names become path components, so a traversing one would escape the workspace.
+        foreach (var database in Databases.Concat(ExcludedDatabases))
+        {
+            if (HasSeparatorOrTraversal(database))
+            {
+                return $"The database name \"{database}\" is not a valid name — it contains a path separator or '..'.";
+            }
+        }
+
+        return null;
+    }
+
+    private static bool HasTraversal(string? path) =>
+        path is not null && path.Split('/', '\\').Any(segment => segment.Trim() == "..");
+
+    private static bool HasSeparatorOrTraversal(string? name) =>
+        name is not null && (name.Contains('/') || name.Contains('\\') || name.Trim() == ".." || name.Trim() == ".");
 }

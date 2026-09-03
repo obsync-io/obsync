@@ -684,9 +684,21 @@ public sealed class SyncEngine : ISyncEngine
         // The dynamic scope always nests a per-database folder — the resolved set can grow over
         // time, and flipping a single-database layout to nested later would move every file. A
         // fixed list keeps the existing rule: nest only when more than one database is selected.
+        // The database name comes from sys.databases, so it is server-controlled: sanitized into
+        // exactly one path component it cannot add segments, and a name like "..\..\Windows\Temp"
+        // can no longer redirect every write in this database outside the workspace.
         var dbFolder = context.Job.DatabaseScope == DatabaseScope.AllUserDatabases || context.Databases.Count > 1
-            ? RepositoryLayout.Combine(context.Job.DestinationFolder, database)
+            ? RepositoryLayout.Combine(context.Job.DestinationFolder, ObjectFilePathMapper.SanitizePathSegment(database))
             : context.Job.DestinationFolder;
+
+        // Once per database rather than once per object: if the composed folder escapes, so would
+        // every object under it, and the folder is the thing worth naming in the error.
+        if (RepositoryLayout.ResolveWithin(localPath, dbFolder) is null)
+        {
+            throw new InvalidOperationException(
+                $"The repository folder '{dbFolder}' resolves outside the workspace. " +
+                "Check the job's destination folder.");
+        }
 
         // Export Only writes a full snapshot: an empty prior map makes every object "Added" (so all
         // are written), the deletion pass a no-op, and no object_states are consulted.
@@ -717,7 +729,7 @@ public sealed class SyncEngine : ISyncEngine
         // mid-run can at worst cause one redundant write.
         var existingFiles = new Lazy<HashSet<string>>(() =>
         {
-            var dbRoot = Path.Combine(localPath, dbFolder.Replace('/', Path.DirectorySeparatorChar));
+            var dbRoot = ResolveOrThrow(localPath, dbFolder);
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (Directory.Exists(dbRoot))
             {
@@ -805,7 +817,7 @@ public sealed class SyncEngine : ISyncEngine
             var scriptBytes = Encoding.UTF8.GetBytes(script);
             var hash = _hasher.ComputeHash(scriptBytes);
             var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
-            var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var absolutePath = ResolveOrThrow(localPath, repoRelativePath);
 
             if (!isArtifact && wantInventoryEntries)
             {
@@ -820,11 +832,7 @@ public sealed class SyncEngine : ISyncEngine
             // stale duplicate tree; the state row follows to the new path with this run's upsert.
             if (hasPrior && !string.Equals(priorState!.FilePath, repoRelativePath, StringComparison.OrdinalIgnoreCase))
             {
-                var oldAbsolute = Path.Combine(localPath, priorState.FilePath.Replace('/', Path.DirectorySeparatorChar));
-                if (File.Exists(oldAbsolute))
-                {
-                    File.Delete(oldAbsolute);
-                }
+                DeleteRecordedFile(context, localPath, priorState.FilePath);
             }
 
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
@@ -980,16 +988,12 @@ public sealed class SyncEngine : ISyncEngine
                 }
 
                 var repoRelativePath = RepositoryLayout.Combine(dbFolder, RepositoryLayout.ObjectInventoryFile);
-                var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                var absolutePath = ResolveOrThrow(localPath, repoRelativePath);
                 var hasPrior = prior.TryGetValue(key, out var priorState);
 
                 if (hasPrior && !string.Equals(priorState!.FilePath, repoRelativePath, StringComparison.OrdinalIgnoreCase))
                 {
-                    var oldAbsolute = Path.Combine(localPath, priorState.FilePath.Replace('/', Path.DirectorySeparatorChar));
-                    if (File.Exists(oldAbsolute))
-                    {
-                        File.Delete(oldAbsolute);
-                    }
+                    DeleteRecordedFile(context, localPath, priorState.FilePath);
                 }
 
                 var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
@@ -1032,8 +1036,7 @@ public sealed class SyncEngine : ISyncEngine
 
                 if (!string.IsNullOrWhiteSpace(context.Job.LocalExportPath))
                 {
-                    var exportPath = Path.Combine(
-                        context.Job.LocalExportPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    var exportPath = ResolveOrThrow(context.Job.LocalExportPath, repoRelativePath);
                     EnsureDirectory(context, Path.GetDirectoryName(exportPath)!);
                     File.Copy(absolutePath, exportPath, overwrite: true);
                 }
@@ -1269,7 +1272,7 @@ public sealed class SyncEngine : ISyncEngine
             var scriptBytes = Encoding.UTF8.GetBytes(script);
             var hash = _hasher.ComputeHash(scriptBytes);
             var repoRelativePath = RepositoryLayout.Combine(serverRoot, relativePath);
-            var absolutePath = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            var absolutePath = ResolveOrThrow(localPath, repoRelativePath);
 
             if (!isArtifact)
             {
@@ -1684,11 +1687,7 @@ public sealed class SyncEngine : ISyncEngine
         var deletedIds = new List<long>();
         foreach (var state in candidates)
         {
-            var absolute = Path.Combine(localPath, state.FilePath.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(absolute))
-            {
-                File.Delete(absolute);
-            }
+            DeleteRecordedFile(context, localPath, state.FilePath);
 
             context.IncrementDeleted();
             context.AddChange(new ObjectChange
@@ -1992,8 +1991,10 @@ public sealed class SyncEngine : ISyncEngine
 
         foreach (var relative in candidates)
         {
-            var path = Path.Combine(localPath, relative.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(path))
+            // Read-only, but still contained: a destination folder that escapes would otherwise
+            // pick up an .obsyncignore from outside the workspace.
+            var path = RepositoryLayout.ResolveWithin(localPath, relative);
+            if (path is null || !File.Exists(path))
             {
                 continue;
             }
@@ -2057,18 +2058,52 @@ public sealed class SyncEngine : ISyncEngine
         }
     }
 
+    /// <summary>
+    /// Composes an absolute path beneath <paramref name="root"/>, failing the run if it would
+    /// escape. The input boundaries (wizard, importer, and the per-database check) carry the
+    /// actionable messages; this is the assertion that nothing slipped past them.
+    /// </summary>
+    private static string ResolveOrThrow(string root, string relativePath) =>
+        RepositoryLayout.ResolveWithin(root, relativePath)
+        ?? throw new InvalidOperationException(
+            $"Refusing to use the path '{relativePath}': it resolves outside '{root}'.");
+
+    /// <summary>
+    /// Deletes a file recorded by an earlier run, skipping one whose stored path escapes the
+    /// workspace. Stored state is re-checked rather than trusted: a row written by an older build
+    /// could carry a traversing path, and this is the only code that destroys data rather than
+    /// creating it. Skipping is the safe outcome — refusing to delete leaves a stale file, while
+    /// trusting the row would delete an arbitrary one.
+    /// </summary>
+    private static void DeleteRecordedFile(RunContext context, string root, string storedPath)
+    {
+        var absolute = RepositoryLayout.ResolveWithin(root, storedPath);
+        if (absolute is null)
+        {
+            context.Log(
+                SyncLogLevel.Warning,
+                $"Skipped deleting '{storedPath}' — the recorded path resolves outside the workspace.");
+            return;
+        }
+
+        if (File.Exists(absolute))
+        {
+            File.Delete(absolute);
+        }
+    }
+
     private static async Task WriteFileAsync(
         RunContext context, string localPath, string repoRelativePath, byte[] utf8Content,
         string? localExportRoot, string dbFolder, string relativePath, CancellationToken cancellationToken)
     {
-        var absolute = Path.Combine(localPath, repoRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var absolute = ResolveOrThrow(localPath, repoRelativePath);
         EnsureDirectory(context, Path.GetDirectoryName(absolute)!);
         await WriteAtomicAsync(absolute, utf8Content, cancellationToken).ConfigureAwait(false);
 
         if (!string.IsNullOrWhiteSpace(localExportRoot))
         {
-            var exportRelative = RepositoryLayout.Combine(dbFolder, relativePath).Replace('/', Path.DirectorySeparatorChar);
-            var exportPath = Path.Combine(localExportRoot, exportRelative);
+            // The export mirror is an independent root, so it gets its own containment check.
+            var exportPath = ResolveOrThrow(localExportRoot, RepositoryLayout.Combine(dbFolder, relativePath));
             EnsureDirectory(context, Path.GetDirectoryName(exportPath)!);
             await WriteAtomicAsync(exportPath, utf8Content, cancellationToken).ConfigureAwait(false);
         }

@@ -755,6 +755,11 @@ public sealed partial class CreateJobViewModel : ObservableObject
         3 when !string.IsNullOrWhiteSpace(LocalExportPath)
             && (HasInvalidPathChars(LocalExportPath) || !Path.IsPathRooted(LocalExportPath.Trim())) =>
             "The local export path must be a full path (e.g. D:\\exports) without invalid characters.",
+        // Leaving the folder blank builds one from the server profile's name, which is free text —
+        // so the rule above, gated on the box being filled in, would never see it.
+        3 when string.IsNullOrWhiteSpace(DestinationFolder) && HasParentSegment(FolderPreview) =>
+            "The server name would build a repository folder containing '..'. Rename the server profile, "
+            + "or enter a repository folder explicitly.",
         4 when SelectedScheduleKind == ScheduleKind.Cron && string.IsNullOrWhiteSpace(CronExpression) => "Enter a cron expression.",
         4 when SelectedScheduleKind == ScheduleKind.Cron && !Quartz.CronExpression.IsValidExpression(CronExpression.Trim()) =>
             "The cron expression is not valid Quartz syntax (seconds minutes hours day-of-month month day-of-week [year]).",

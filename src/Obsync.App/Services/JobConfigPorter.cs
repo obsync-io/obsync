@@ -202,6 +202,8 @@ public sealed class JobConfigPorter : IJobConfigPorter
 
         var job = new SyncJob
         {
+            // Assigned before the path check below so the rule sees the values as they will be
+            // persisted.
             Name = UniqueName(file.Name.Trim(), existingNames),
             Description = file.Description,
             Enabled = file.Enabled,
@@ -223,6 +225,14 @@ public sealed class JobConfigPorter : IJobConfigPorter
             CreatedAt = _clock.UtcNow,
             UpdatedAt = _clock.UtcNow,
         };
+
+        // The wizard rejects a traversing destination folder; import bypassed every one of those
+        // checks while writing an immediately-runnable, enabled job. An export file is attacker-
+        // authored — the operator was invited to open it — so its paths get the same rule.
+        if (job.UnsafePathReason() is { } pathError)
+        {
+            return JobImportResult.Failure($"This job's configuration can't be used as exported. {pathError}");
+        }
 
         await _jobs.UpsertAsync(job, cancellationToken).ConfigureAwait(false);
         await _audit.WriteAsync(AuditAction.JobCreated, "Job", job.Id.ToString(), job.Name, "Imported from file", cancellationToken)

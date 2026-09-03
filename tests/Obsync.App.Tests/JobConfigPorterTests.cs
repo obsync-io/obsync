@@ -198,4 +198,55 @@ public sealed class JobConfigPorterTests
         Assert.True(result.IsSuccess);
         Assert.Equal(6, Assert.Single(_saved).Schedule.IntervalHours);
     }
+
+    [Theory]
+    [InlineData(@"..\..\..\Users\Public\Startup")]
+    [InlineData("environments/../../secrets")]
+    [InlineData(@"C:\Windows\Temp")]
+    public async Task Import_TraversingDestinationFolder_FailsWithAnActionableError(string folder)
+    {
+        // The wizard rejects these; import bypassed every one of its checks while writing an
+        // immediately-runnable, enabled job from an operator-supplied file.
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.DestinationFolder = folder;
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("repository folder", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_TraversingDatabaseName_FailsWithAnActionableError()
+    {
+        // Database names become path components, so this reaches path composition without needing
+        // a hostile SQL Server at all — just a hand-edited export file.
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Databases = ["Real", @"..\..\..\.."];
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("database name", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_OrdinaryPaths_StillSucceed()
+    {
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.DestinationFolder = "environments/prod/PROD-SQL01";
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("environments/prod/PROD-SQL01", Assert.Single(_saved).DestinationFolder);
+    }
 }

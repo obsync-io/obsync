@@ -28,6 +28,41 @@ public sealed class ObjectFilePathMapper : IObjectFilePathMapper
     private static readonly SearchValues<char> InvalidChars =
         SearchValues.Create(new string(Path.GetInvalidFileNameChars()));
 
+    /// <summary>
+    /// Win32 device names. A path component that matches one — with or without an extension — is
+    /// not a normal file: <c>git add</c> fails outright on <c>CON.sql</c> (exit 128, nothing
+    /// staged, so the whole run fails), and a directory named <c>CON</c> makes git skip it with a
+    /// warning and exit 0, which reads to the engine as "no changes". Both are reachable from a SQL
+    /// object or database simply named <c>CON</c>.
+    /// </summary>
+    private static readonly string[] ReservedDeviceNames =
+    [
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    /// <summary>
+    /// Turns an arbitrary name into exactly ONE safe path component. Used for names that are not
+    /// object identities — notably the database name, which is composed into the repository path
+    /// and, unsanitized, let a name like <c>..\..\Windows\Temp</c> redirect writes outside the
+    /// workspace. Separators become <c>_</c> here, so the result can never add a path segment.
+    /// </summary>
+    public static string SanitizePathSegment(string name)
+    {
+        var segment = Sanitize(name, out var changed);
+
+        if (segment.Length > MaxStemLength)
+        {
+            segment = segment[..MaxStemLength];
+            changed = true;
+        }
+
+        // Same rule as an object stem: if sanitizing altered the name, a stable suffix keeps two
+        // different names that sanitize alike (".." and ".", or two long shared-prefix names) apart.
+        return changed ? $"{segment}_{StableSuffix(name)}" : segment;
+    }
+
     public string MapRelativePath(ScriptedObjectIdentity identity)
     {
         var descriptor = SqlObjectTypeCatalog.Get(identity.Type);
@@ -90,12 +125,33 @@ public sealed class ObjectFilePathMapper : IObjectFilePathMapper
             return "_";
         }
 
+        if (IsReservedDeviceName(result))
+        {
+            changed = true;
+            return $"_{result}";
+        }
+
         return result;
     }
 
-    private static string StableSuffix(ScriptedObjectIdentity identity)
+    /// <summary>
+    /// True when a component would be interpreted as a Win32 device. The reservation is decided by
+    /// the text before the first '.' (so <c>CON.sql</c> and <c>CON.foo.sql</c> both count), with
+    /// trailing spaces ignored — but <c>CONX</c>, <c>CON1</c> and <c>COM0</c> are ordinary names.
+    /// </summary>
+    private static bool IsReservedDeviceName(string component)
     {
-        var seed = $"{identity.Type}|{identity.Schema}|{identity.Name}";
+        var dot = component.IndexOf('.');
+        var stem = (dot < 0 ? component : component[..dot]).TrimEnd(' ');
+
+        return ReservedDeviceNames.Contains(stem, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string StableSuffix(ScriptedObjectIdentity identity) =>
+        StableSuffix($"{identity.Type}|{identity.Schema}|{identity.Name}");
+
+    private static string StableSuffix(string seed)
+    {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(seed));
         return Convert.ToHexStringLower(hash.AsSpan(0, 4));
     }
