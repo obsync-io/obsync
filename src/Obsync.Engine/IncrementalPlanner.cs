@@ -45,7 +45,11 @@ internal static class IncrementalPlanner
     /// <item><c>FilterableTypes</c> — watermarked types with no safety violation. A violation is
     /// an old (<c>modify_date &lt; watermark</c>), un-ignored object with NO prior state — e.g. the
     /// schema filter or selection changed and an old object is newly in scope; filtering would
-    /// silently never script it, so that type gets a full scan this run instead.</item>
+    /// silently never script it, so that type gets a full scan this run instead. An object marked
+    /// <c>DefinitionUnavailable</c> is exempt: a CLR or <c>WITH ENCRYPTION</c> module can never
+    /// acquire a prior state, so counting it would violate its type on every run forever — turning
+    /// a rule meant to catch a one-off scope change into a permanent full scan of every procedure
+    /// and function definition, which is the very cost the watermark exists to avoid.</item>
     /// <item><c>NewWatermarks</c> — the per-type max <c>modify_date</c> across the snapshot; a
     /// type with no snapshot rows is absent (it keeps its old watermark).</item>
     /// </list>
@@ -93,7 +97,7 @@ internal static class IncrementalPlanner
             {
                 candidates.Add(new IncrementalSkip(item, prior));
             }
-            else
+            else if (!item.DefinitionUnavailable)
             {
                 violatedTypes.Add(item.Type);
             }

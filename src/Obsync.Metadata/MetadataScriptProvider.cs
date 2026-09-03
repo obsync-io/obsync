@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Data.SqlClient;
@@ -86,7 +86,8 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         // the skip-report path below, exactly like encrypted modules.
         var sql = new StringBuilder(
             $"""
-             SELECT s.name, o.name, o.object_id, m.definition
+             SELECT s.name, o.name, o.object_id, m.definition,
+                    CASE WHEN m.object_id IS NULL THEN 1 ELSE 0 END
              FROM sys.objects o
              LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id
              JOIN sys.schemas s ON s.schema_id = o.schema_id
@@ -117,7 +118,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
                     reader.GetString(0), reader.GetString(1));
                 yield return RawScriptedObject.Skipped(
                     new ScriptedObjectIdentity(type, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)),
-                    "The module definition is unavailable (encrypted with WITH ENCRYPTION, or a CLR object).");
+                    UnavailableReason("module", reader.GetInt32(4) == 1));
                 continue;
             }
 
@@ -136,7 +137,8 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         // sys.sql_modules row and must surface as a reported skip, not vanish.
         var sql = new StringBuilder(
             """
-            SELECT ps.name, t.name, t.object_id, m.definition
+            SELECT ps.name, t.name, t.object_id, m.definition,
+                   CASE WHEN m.object_id IS NULL THEN 1 ELSE 0 END
             FROM sys.triggers t
             JOIN sys.objects po ON po.object_id = t.parent_id
             JOIN sys.schemas ps ON ps.schema_id = po.schema_id
@@ -160,7 +162,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             {
                 yield return RawScriptedObject.Skipped(
                     new ScriptedObjectIdentity(SqlObjectType.Trigger, reader.GetString(0), reader.GetString(1), reader.GetInt32(2)),
-                    "The trigger definition is unavailable (encrypted or CLR).");
+                    UnavailableReason("trigger", reader.GetInt32(4) == 1));
                 continue;
             }
 
@@ -178,7 +180,8 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         // LEFT JOIN so a CLR DDL trigger (no sys.sql_modules row) surfaces as a reported skip.
         const string sql =
             """
-            SELECT t.name, t.object_id, m.definition
+            SELECT t.name, t.object_id, m.definition,
+                   CASE WHEN m.object_id IS NULL THEN 1 ELSE 0 END
             FROM sys.triggers t
             LEFT JOIN sys.sql_modules m ON m.object_id = t.object_id
             WHERE t.is_ms_shipped = 0 AND t.parent_class = 0
@@ -193,7 +196,7 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
             {
                 yield return RawScriptedObject.Skipped(
                     new ScriptedObjectIdentity(SqlObjectType.DatabaseDdlTrigger, string.Empty, reader.GetString(0), reader.GetInt32(1)),
-                    "The DDL trigger definition is unavailable (encrypted or CLR).");
+                    UnavailableReason("DDL trigger", reader.GetInt32(3) == 1));
                 continue;
             }
 
@@ -375,6 +378,22 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
 
     // >= (not >) so an object modified in the same datetime tick as the watermark is re-read;
     // the engine's snapshot pass has already marked every filtered-out object as seen.
+    /// <summary>
+    /// The reason text for a module whose definition the catalog will not return, told apart by
+    /// cause. The two are genuinely different problems and were previously reported with one
+    /// hedged sentence ("encrypted with WITH ENCRYPTION, or a CLR object"), which left the reader
+    /// unable to tell an unfixable situation from a gap in Obsync.
+    /// </summary>
+    /// <param name="noun">What to call the object in the sentence — "module", "trigger", …</param>
+    /// <param name="isClr">
+    /// True when the object has no <c>sys.sql_modules</c> row at all, which is how a CLR (SQLCLR)
+    /// module presents; an encrypted T-SQL module does have a row, with a null definition.
+    /// </param>
+    internal static string UnavailableReason(string noun, bool isClr) => isClr
+        ? $"This {noun} is a CLR (SQLCLR) object, so it has no T-SQL definition to script. Its "
+          + "assembly is versioned separately when Assemblies are part of the job's object selection."
+        : $"This {noun} was created WITH ENCRYPTION, so SQL Server will not return its definition.";
+
     private static void AppendWatermarkFilter(StringBuilder sql, string column, DateTime? watermark, bool prefixWhere = false)
     {
         if (watermark is not null)

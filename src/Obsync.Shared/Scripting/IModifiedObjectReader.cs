@@ -8,7 +8,19 @@ namespace Obsync.Shared.Scripting;
 /// The date is the server-local catalog value, treated as an opaque monotonic watermark — it is
 /// stored and compared verbatim, never converted between time zones.
 /// </summary>
-public sealed record ModifiedObjectSnapshotItem(SqlObjectType Type, string Schema, string Name, DateTime ModifyDate);
+/// <param name="DefinitionUnavailable">
+/// True for a module the server will never hand over a T-SQL definition for: a CLR (SQLCLR) module,
+/// which has no <c>sys.sql_modules</c> row at all, or one created <c>WITH ENCRYPTION</c>, whose row
+/// has a null definition. Such an object can never acquire a tracked state, so the planner must not
+/// read its missing state as a reason to stop filtering its whole type — see
+/// <c>IncrementalPlanner.Plan</c>. Always false for types that are not module-based.
+/// </param>
+public sealed record ModifiedObjectSnapshotItem(
+    SqlObjectType Type,
+    string Schema,
+    string Name,
+    DateTime ModifyDate,
+    bool DefinitionUnavailable = false);
 
 /// <summary>
 /// Reads a lightweight modification snapshot of a database — every object of the requested types

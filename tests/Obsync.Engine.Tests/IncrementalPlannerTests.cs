@@ -1,4 +1,4 @@
-using Obsync.Shared.Models;
+﻿using Obsync.Shared.Models;
 using Obsync.Shared.Objects;
 using Obsync.Shared.Scripting;
 
@@ -34,6 +34,11 @@ public sealed class IncrementalPlannerTests
 
     private static Dictionary<SqlObjectType, DateTime> Watermarks(params SqlObjectType[] types) =>
         types.ToDictionary(t => t, _ => Watermark);
+
+    /// <summary>A module the server will never return a definition for: CLR, or WITH ENCRYPTION.</summary>
+    private static ModifiedObjectSnapshotItem Unscriptable(
+        SqlObjectType type, string name, DateTime modifyDate, string schema = "dbo") =>
+        new(type, schema, name, modifyDate, DefinitionUnavailable: true);
 
     private static bool NotIgnored(SqlObjectType type, string schema, string name) => false;
 
@@ -145,6 +150,102 @@ public sealed class IncrementalPlannerTests
         Assert.Contains(SqlObjectType.View, plan.FilterableTypes);
         var skip = Assert.Single(plan.SkippedItems); // the violated type's candidate is dropped too
         Assert.Equal(otherType, skip.Item);
+    }
+
+    /// <summary>
+    /// A CLR or WITH ENCRYPTION module can never acquire a prior state, so counting it as a
+    /// violation forced a full scan of every procedure and function definition on every run,
+    /// forever — the rising watermark guarantees it stays old. The violation rule exists to catch a
+    /// one-off scope change, not to be permanently tripped by an object that will never be
+    /// scriptable.
+    /// </summary>
+    [Fact]
+    public void OldUnscriptableModuleWithoutPriorState_DoesNotViolateItsType()
+    {
+        var skippable = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
+        var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [skippable, clr],
+            Prior(skippable),
+            Watermarks(SqlObjectType.StoredProcedure),
+            NotIgnored);
+
+        Assert.Contains(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+        // The scriptable object is still pre-skipped, which is the whole point: the fast path holds.
+        var skip = Assert.Single(plan.SkippedItems);
+        Assert.Equal(skippable, skip.Item);
+    }
+
+    /// <summary>
+    /// The exemption must be narrow. An ordinary object with no prior state still violates, or the
+    /// rule that stops a newly-in-scope object from being silently skipped forever is lost.
+    /// </summary>
+    [Fact]
+    public void TheExemptionAppliesOnlyToUnscriptableObjects()
+    {
+        var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
+        var newlyInScope = Item(SqlObjectType.Function, "fn_NewlyInScope", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [clr, newlyInScope],
+            Prior(),
+            Watermarks(SqlObjectType.StoredProcedure, SqlObjectType.Function),
+            NotIgnored);
+
+        Assert.Contains(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+        Assert.DoesNotContain(SqlObjectType.Function, plan.FilterableTypes);
+    }
+
+    /// <summary>
+    /// An unscriptable module that somehow does have a prior state keeps the ordinary skip path —
+    /// the exemption changes who violates, not who is skippable.
+    /// </summary>
+    [Fact]
+    public void UnscriptableObjectWithPriorState_IsStillASkipCandidate()
+    {
+        var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [clr],
+            Prior(clr),
+            Watermarks(SqlObjectType.StoredProcedure),
+            NotIgnored);
+
+        Assert.Contains(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+        Assert.Equal(clr, Assert.Single(plan.SkippedItems).Item);
+    }
+
+    /// <summary>An unscriptable module still counts toward its type's new watermark.</summary>
+    [Fact]
+    public void UnscriptableObject_StillContributesToTheNewWatermark()
+    {
+        var plan = IncrementalPlanner.Plan(
+            [Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Newer)],
+            Prior(),
+            Watermarks(SqlObjectType.StoredProcedure),
+            NotIgnored);
+
+        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure]);
+    }
+
+    /// <summary>
+    /// An ignored unscriptable module takes the ignore path unchanged — the ignore check runs
+    /// first and is deliberately independent of modify_date.
+    /// </summary>
+    [Fact]
+    public void IgnoredUnscriptableObject_IsStillReportedAsIgnored()
+    {
+        var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [clr],
+            Prior(),
+            Watermarks(SqlObjectType.StoredProcedure),
+            (_, _, name) => name == "usp_ClrProc");
+
+        Assert.Equal(clr, Assert.Single(plan.IgnoredItems));
+        Assert.Contains(SqlObjectType.StoredProcedure, plan.FilterableTypes);
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.Data.SqlClient;
 using Obsync.Shared.Models;
 using Obsync.Shared.Objects;
 using Obsync.Shared.Scripting;
@@ -26,10 +26,21 @@ public sealed class ModifiedObjectReader : IModifiedObjectReader
         [SqlObjectType.View] = ["V"],
         [SqlObjectType.StoredProcedure] = ["P", "PC"],
         [SqlObjectType.Function] = ["FN", "IF", "TF", "FS", "FT"],
-        [SqlObjectType.Trigger] = ["TR"],
+        // TA (CLR DML trigger) belongs here too: ReadDmlTriggersAsync has no type filter, so the
+        // provider yields CLR triggers and a snapshot without them would not mirror it.
+        [SqlObjectType.Trigger] = ["TR", "TA"],
         [SqlObjectType.Synonym] = ["SN"],
         [SqlObjectType.Sequence] = ["SO"],
     };
+
+    /// <summary>
+    /// Type codes whose definition lives in <c>sys.sql_modules</c>. Only these can be reported as
+    /// definition-unavailable: every other type has no row there by design, and reading a missing
+    /// row as "unscriptable" would exempt tables, synonyms and sequences from the violation rule
+    /// that legitimately protects them.
+    /// </summary>
+    private static readonly HashSet<string> ModuleCodes =
+        new(["V", "P", "PC", "FN", "IF", "TF", "FS", "FT", "TR", "TA"], StringComparer.Ordinal);
 
     public async Task<IReadOnlyList<ModifiedObjectSnapshotItem>> GetSnapshotAsync(
         SqlConnectionProfile profile, string? password, string database,
@@ -72,11 +83,17 @@ public sealed class ModifiedObjectReader : IModifiedObjectReader
         var schemaClause = schemas is null
             ? string.Empty
             : $" AND s.name IN ({string.Join(", ", schemas.Select((_, i) => $"@sf{i}"))})";
+        // The LEFT JOIN answers one question only: will the server hand over a definition for this
+        // module? A CLR module has no sys.sql_modules row; a WITH ENCRYPTION module has one with a
+        // null definition. Both are projected to a bit server-side, so the nvarchar(max) definition
+        // itself never crosses the wire -- this stays the cheap snapshot query it was.
         command.CommandText =
             $"""
-             SELECT o.type, s.name, o.name, o.modify_date
+             SELECT o.type, s.name, o.name, o.modify_date,
+                    CASE WHEN m.definition IS NULL THEN 1 ELSE 0 END
              FROM sys.objects o
              JOIN sys.schemas s ON s.schema_id = o.schema_id
+             LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id
              WHERE o.type IN ({placeholders}) AND (o.is_ms_shipped = 0 OR o.type = 'SO'){schemaClause};
              """;
         command.CommandTimeout = commandTimeoutSeconds;
@@ -96,8 +113,10 @@ public sealed class ModifiedObjectReader : IModifiedObjectReader
         {
             // sys.objects.type is char(2), so single-letter codes carry a trailing space.
             var code = reader.GetString(0).TrimEnd();
+            var definitionUnavailable = ModuleCodes.Contains(code) && reader.GetInt32(4) == 1;
             items.Add(new ModifiedObjectSnapshotItem(
-                codeToType[code], reader.GetString(1), reader.GetString(2), reader.GetDateTime(3)));
+                codeToType[code], reader.GetString(1), reader.GetString(2), reader.GetDateTime(3),
+                definitionUnavailable));
         }
 
         return items;
