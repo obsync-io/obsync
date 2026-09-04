@@ -1,4 +1,6 @@
 using Obsync.Data.Repositories;
+using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 
 namespace Obsync.Data;
 
@@ -10,7 +12,7 @@ namespace Obsync.Data;
 public static class RunRetention
 {
     public static async Task<int> CleanupAsync(
-        IAppSettingsRepository settings, IRunRepository runs, DateTimeOffset now,
+        IAppSettingsRepository settings, IRunRepository runs, IAuditWriter audit, DateTimeOffset now,
         CancellationToken cancellationToken = default)
     {
         var days = await settings.GetRunRetentionDaysAsync(cancellationToken).ConfigureAwait(false);
@@ -19,6 +21,23 @@ public static class RunRetention
             return 0;
         }
 
-        return await runs.DeleteRunsBeforeAsync(now.AddDays(-days), cancellationToken).ConfigureAwait(false);
+        var cutoff = now.AddDays(-days);
+        var deleted = await runs.DeleteRunsBeforeAsync(cutoff, cancellationToken).ConfigureAwait(false);
+
+        // Audited here rather than in the callers so both hosts are covered by one edit, and so the
+        // actor is whichever identity actually did the pruning — the interactive user for the app's
+        // startup pass, the service account for the daily one. Silent only when nothing was removed.
+        if (deleted > 0)
+        {
+            await audit.WriteAsync(
+                AuditAction.RunHistoryPruned,
+                entityType: "RunHistory",
+                entityId: null,
+                entityName: null,
+                detail: $"Deleted {deleted} run(s) started before {cutoff:u} (retention {days} days).",
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return deleted;
     }
 }

@@ -10,10 +10,41 @@ public static class ObsyncPaths
     /// resolves via the shell's known-folder API and deliberately ignores a <c>%LOCALAPPDATA%</c>
     /// env-var override, so this dedicated variable is the only reliable redirection.)
     /// </summary>
-    public static string Root { get; } =
-        Environment.GetEnvironmentVariable("OBSYNC_DATA_ROOT") is { Length: > 0 } overrideRoot
-            ? overrideRoot
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Obsync");
+    public static string Root { get; } = ResolveRoot(Environment.GetEnvironmentVariable("OBSYNC_DATA_ROOT"));
+
+    /// <summary>
+    /// Applies the <c>OBSYNC_DATA_ROOT</c> override, or falls back to the per-user default.
+    /// <para>
+    /// The override must be FULLY QUALIFIED. A relative value resolves against the current
+    /// directory, which differs per host — the app's install folder versus <c>C:\Windows\System32</c>
+    /// for a service — so the two hosts would silently use different databases, and the app would
+    /// then report the service as running under the wrong account. Surrounding quotes and
+    /// whitespace are tolerated because this is typically pasted into the Windows environment
+    /// editor. Anything unusable falls back to the default rather than throwing: this runs in a
+    /// static initializer, so throwing here kills the process before any logger exists.
+    /// </para>
+    /// <para>
+    /// Note it must also be a MACHINE-scoped variable to reach a service — a service process
+    /// inherits only the system environment.
+    /// </para>
+    /// </summary>
+    internal static string ResolveRoot(string? overrideRoot)
+    {
+        var trimmed = overrideRoot?.Trim().Trim('"').Trim();
+        if (!string.IsNullOrEmpty(trimmed) && Path.IsPathFullyQualified(trimmed))
+        {
+            try
+            {
+                return Path.GetFullPath(trimmed);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Unusable path — fall through to the default.
+            }
+        }
+
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Obsync");
+    }
 
     /// <summary>The local SQLite state database file.</summary>
     public static string DatabasePath => Path.Combine(Root, "obsync.db");

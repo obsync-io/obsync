@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!--
+    The installer source is the subject under test, copied next to the test assembly so the tests
+    read a deterministic path instead of walking up from the output directory.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\packaging\Obsync.wxs" Link="Obsync.wxs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

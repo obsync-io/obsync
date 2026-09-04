@@ -124,6 +124,22 @@ public enum AuditAction
 
     /// <summary>A running job was cancelled by the user.</summary>
     RunCancelled,
+
+    /// <summary>
+    /// Run history past the retention window was pruned. One event per prune, not per row —
+    /// a prune is a single housekeeping action, and per-row events would flood the audit trail
+    /// (which is itself never pruned) with thousands of rows for one operation.
+    /// </summary>
+    RunHistoryPruned,
+
+    /// <summary>
+    /// A run left Running by a dead process was recorded as Failed by crash recovery. This is the
+    /// run-outcome event the engine never got to write, so it is one per recovered run.
+    /// </summary>
+    RunRecovered,
+
+    /// <summary>The Obsync scheduler service started or stopped.</summary>
+    ServiceLifecycle,
     ServerAdded,
     ServerEdited,
     ServerDeleted,

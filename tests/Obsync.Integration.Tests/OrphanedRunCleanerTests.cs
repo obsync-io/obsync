@@ -3,6 +3,7 @@ using Obsync.Data;
 using Obsync.Data.DependencyInjection;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.Integration.Tests;
@@ -18,10 +19,13 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
     private readonly string _locksRoot = Path.Combine(Path.GetTempPath(), $"obsync-locks-{Guid.NewGuid():N}");
     private ServiceProvider _provider = null!;
 
+    private IAuditWriter Audit => _provider.GetRequiredService<IAuditWriter>();
+
     public async Task InitializeAsync()
     {
         var services = new ServiceCollection();
         services.AddSingleton(typeof(Microsoft.Extensions.Logging.ILogger<>), typeof(Microsoft.Extensions.Logging.Abstractions.NullLogger<>));
+        services.AddSingleton<IClock, SystemClock>(); // AuditWriter stamps its own timestamp
         services.AddObsyncData(_dbPath);
         _provider = services.BuildServiceProvider();
         await _provider.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
@@ -65,7 +69,7 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
         var run = await RunningRunAsync();
         await runs.InsertAsync(run);
 
-        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, _locksRoot, DateTimeOffset.UtcNow);
+        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, Audit, _locksRoot, DateTimeOffset.UtcNow);
 
         // The failed run is returned mirroring its persisted state, so hosts can alert on it.
         var recovered = Assert.Single(cleaned);
@@ -90,7 +94,7 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
         using var liveRun = JobRunLock.TryAcquire(_locksRoot, run.JobId);
         Assert.NotNull(liveRun);
 
-        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, _locksRoot, DateTimeOffset.UtcNow);
+        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, Audit, _locksRoot, DateTimeOffset.UtcNow);
 
         Assert.Empty(cleaned);
         var reloaded = await runs.GetAsync(run.Id);
@@ -106,9 +110,41 @@ public sealed class OrphanedRunCleanerTests : IAsyncLifetime
         run.CompletedAt = DateTimeOffset.UtcNow.AddHours(-1);
         await runs.InsertAsync(run);
 
-        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, _locksRoot, DateTimeOffset.UtcNow);
+        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, Audit, _locksRoot, DateTimeOffset.UtcNow);
 
         Assert.Empty(cleaned);
         Assert.Equal(RunStatus.Succeeded, (await runs.GetAsync(run.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task RecoveringARun_WritesOneAuditEventNamingIt()
+    {
+        // Crash recovery rewrites a run's recorded outcome from a process other than the one that
+        // ran it. Without an audit row, a compliance export cannot show that happened or by whom.
+        var runs = _provider.GetRequiredService<IRunRepository>();
+        var run = await RunningRunAsync();
+        await runs.InsertAsync(run);
+
+        var cleaned = await OrphanedRunCleaner.CleanAsync(runs, Audit, _locksRoot, DateTimeOffset.UtcNow);
+        Assert.Single(cleaned);
+
+        var events = await Audit.GetAllAsync();
+        var recovered = Assert.Single(events, e => e.Action == AuditAction.RunRecovered);
+        Assert.Equal(run.Id.ToString(), recovered.EntityId);
+        Assert.Equal(run.JobName, recovered.EntityName);
+        Assert.Equal(CurrentActor.Name, recovered.Actor);
+    }
+
+    [Fact]
+    public async Task ALiveRun_WritesNoAuditEvent()
+    {
+        var runs = _provider.GetRequiredService<IRunRepository>();
+        var run = await RunningRunAsync();
+        await runs.InsertAsync(run);
+
+        using var liveRun = JobRunLock.TryAcquire(_locksRoot, run.JobId);
+        await OrphanedRunCleaner.CleanAsync(runs, Audit, _locksRoot, DateTimeOffset.UtcNow);
+
+        Assert.DoesNotContain(await Audit.GetAllAsync(), e => e.Action == AuditAction.RunRecovered);
     }
 }

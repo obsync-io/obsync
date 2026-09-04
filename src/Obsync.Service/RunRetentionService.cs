@@ -1,5 +1,6 @@
 using Obsync.Data;
 using Obsync.Data.Repositories;
+using Obsync.Shared.Abstractions;
 
 namespace Obsync.Service;
 
@@ -13,12 +14,15 @@ public sealed class RunRetentionService : BackgroundService
 
     private readonly IAppSettingsRepository _settings;
     private readonly IRunRepository _runs;
+    private readonly IAuditWriter _audit;
     private readonly ILogger<RunRetentionService> _logger;
 
-    public RunRetentionService(IAppSettingsRepository settings, IRunRepository runs, ILogger<RunRetentionService> logger)
+    public RunRetentionService(
+        IAppSettingsRepository settings, IRunRepository runs, IAuditWriter audit, ILogger<RunRetentionService> logger)
     {
         _settings = settings;
         _runs = runs;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -29,7 +33,7 @@ public sealed class RunRetentionService : BackgroundService
         {
             try
             {
-                var deleted = await RunRetention.CleanupAsync(_settings, _runs, DateTimeOffset.UtcNow, stoppingToken)
+                var deleted = await RunRetention.CleanupAsync(_settings, _runs, _audit, DateTimeOffset.UtcNow, stoppingToken)
                     .ConfigureAwait(false);
                 if (deleted > 0)
                 {

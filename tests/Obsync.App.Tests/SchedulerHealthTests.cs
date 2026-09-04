@@ -185,4 +185,37 @@ public sealed class SchedulerHealthTests
 
         Assert.Equal(expected, SchedulerHealthService.NeedsScheduler(job));
     }
+
+    [Fact]
+    public void AFreshHeartbeat_OutranksTheSCMSayingTheServiceIsNotInstalled()
+    {
+        // "Reinstall Obsync" is the most destructive advice this surface can give, and it was being
+        // produced while something was demonstrably scheduling into this database — reachable when
+        // the scheduler lives on another host behind a shared data root, or when the SCM cannot be
+        // read at all. A fresh beacon is positive proof and must win.
+        var health = SchedulerHealthService.Evaluate(null, null, Heartbeat(TimeSpan.FromSeconds(10)), Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.Healthy, health.Status);
+        Assert.True(health.CanExecuteSchedules);
+    }
+
+    [Fact]
+    public void AFreshHeartbeat_DoesNotOutrankAServiceTheSCMReportsAsStopped()
+    {
+        // SCM is authoritative for a service it can see: a beacon under 90s old is just residue
+        // from a service killed moments ago, so this must stay NotRunning.
+        var health = SchedulerHealthService.Evaluate(
+            ServiceControllerStatus.Stopped, Me, Heartbeat(TimeSpan.FromSeconds(10)), Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.NotRunning, health.Status);
+        Assert.False(health.CanExecuteSchedules);
+    }
+
+    [Fact]
+    public void NotInstalled_StillWins_WhenNothingHasEverHeartbeated()
+    {
+        var health = SchedulerHealthService.Evaluate(null, null, null, Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.NotInstalled, health.Status);
+    }
 }

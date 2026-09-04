@@ -1,5 +1,6 @@
 using Obsync.Data.Repositories;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.Data;
@@ -16,7 +17,8 @@ public static class OrphanedRunCleaner
     /// <summary>Fails orphaned Running rows; returns the runs it failed (mirroring the persisted
     /// state) so the caller can alert on them — the process that ran them died before it could.</summary>
     public static async Task<IReadOnlyList<SyncRun>> CleanAsync(
-        IRunRepository runs, string locksRoot, DateTimeOffset nowUtc, CancellationToken cancellationToken = default)
+        IRunRepository runs, IAuditWriter audit, string locksRoot, DateTimeOffset nowUtc,
+        CancellationToken cancellationToken = default)
     {
         const string reason = "Run interrupted — the process running it exited before it finished.";
 
@@ -33,6 +35,17 @@ public static class OrphanedRunCleaner
             run.CompletedAt = nowUtc;
             run.ErrorMessage = reason;
             cleaned.Add(run);
+
+            // Per run, not a summary: this IS the run-outcome audit event the engine never got to
+            // write, so it belongs beside RunCompleted/RunFailed. The count is bounded by the jobs
+            // that were executing when the process died — single digits.
+            await audit.WriteAsync(
+                AuditAction.RunRecovered,
+                entityType: "Run",
+                entityId: run.Id.ToString(),
+                entityName: run.JobName,
+                detail: $"Run {run.RunKey} was recorded as Failed by crash recovery — {reason}",
+                cancellationToken).ConfigureAwait(false);
         }
 
         return cleaned;

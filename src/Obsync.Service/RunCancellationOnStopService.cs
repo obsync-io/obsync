@@ -15,8 +15,10 @@ namespace Obsync.Service;
 /// </summary>
 public sealed class RunCancellationOnStopService : IHostedService
 {
-    /// <summary>How long to wait for interrupted runs to persist their Cancelled result.</summary>
-    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>How long to wait for interrupted runs to persist their Cancelled result. Kept well
+    /// inside the host's ShutdownTimeout so Quartz's own WaitForJobsToComplete still has a budget
+    /// after this returns.</summary>
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(20);
 
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly ILogger<RunCancellationOnStopService> _logger;
@@ -46,11 +48,28 @@ public sealed class RunCancellationOnStopService : IHostedService
                 await scheduler.Interrupt(context.JobDetail.Key, cancellationToken).ConfigureAwait(false);
             }
 
-            var deadline = DateTime.UtcNow + DrainTimeout;
-            while (DateTime.UtcNow < deadline
-                && (await scheduler.GetCurrentlyExecutingJobs(cancellationToken).ConfigureAwait(false)).Count > 0)
+            // The drain runs on its OWN deadline, linked to the host's. Draining directly on the
+            // host token let this consume the entire ShutdownTimeout and leave Quartz's
+            // WaitForJobsToComplete nothing — and an exhausted host budget surfaces as an exception
+            // out of Host.StopAsync, which Program.cs reports to the SCM as a fatal exit, turning a
+            // deliberate Stop-Service into a "failure" that trips the MSI's 60s auto-restart.
+            using var drain = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            drain.CancelAfter(DrainTimeout);
+
+            try
             {
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+                while ((await scheduler.GetCurrentlyExecutingJobs(drain.Token).ConfigureAwait(false)).Count > 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), drain.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Distinct from the catch below: the interrupts WERE issued, only the wait expired.
+                // Logging that as "could not cancel" sent support after the wrong thing.
+                _logger.LogWarning(
+                    "Timed out after {Timeout}s waiting for in-flight runs to cancel; Quartz will wait for the rest.",
+                    DrainTimeout.TotalSeconds);
             }
         }
         catch (Exception ex)

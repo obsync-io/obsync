@@ -162,7 +162,32 @@ public sealed class SyncEngine : ISyncEngine
         // Cross-process run lock: the app, the scheduler service, and the CLI all execute jobs
         // against the same database and git workspace, so the same job must never run twice at
         // once across processes. Held until this method returns (after final persistence).
-        using var runLock = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, job.Id);
+        IDisposable? acquired;
+        try
+        {
+            acquired = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, job.Id);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Not contention — Obsync cannot open its OWN lock file (a read-only leftover, or a
+            // deny ACE on the locks folder). This used to be indistinguishable from "held", so
+            // every occurrence skipped forever while blaming a run that does not exist. Recorded
+            // as Failed rather than Skipped because only a failure alerts, and because it IS one.
+            _logger.LogError(
+                ex, "Job {JobId}: the run lock under {LocksRoot} could not be opened.", job.Id, ObsyncPaths.LocksRoot);
+
+            var denied = $"Obsync could not open its run-lock file in {ObsyncPaths.LocksRoot}. Check the folder's "
+                + "permissions and remove any read-only leftover .lock files.";
+            if (trigger == RunTrigger.Manual)
+            {
+                throw new InvalidOperationException(denied, ex);
+            }
+
+            return await RecordOccurrenceAsync(
+                job, trigger, RunStatus.Failed, denied, serverName: null, cancellationToken).ConfigureAwait(false);
+        }
+
+        using var runLock = acquired;
         if (runLock is null)
         {
             if (trigger == RunTrigger.Manual)
@@ -178,8 +203,8 @@ public sealed class SyncEngine : ISyncEngine
             _logger.LogWarning(
                 "Job {JobId} ({JobName}) {Trigger} run skipped — a previous run is still active in another process.",
                 job.Id, job.Name, trigger);
-            return await RecordSkippedOccurrenceAsync(
-                job, trigger,
+            return await RecordOccurrenceAsync(
+                job, trigger, RunStatus.Skipped,
                 "A previous run of this job was still active in another Obsync process, so this scheduled "
                 + "occurrence was skipped. The next occurrence runs normally.",
                 serverName: null, cancellationToken).ConfigureAwait(false);
@@ -268,8 +293,8 @@ public sealed class SyncEngine : ISyncEngine
                 _logger.LogWarning(
                     "Job {JobId} ({JobName}) {Trigger} run skipped — another job kept the shared repository busy " +
                     "for over {Timeout} minutes.", job.Id, job.Name, trigger, WorkspaceLockTimeout.TotalMinutes);
-                return await RecordSkippedOccurrenceAsync(
-                    job, trigger,
+                return await RecordOccurrenceAsync(
+                    job, trigger, RunStatus.Skipped,
                     $"Another job sharing this repository kept its workspace busy for over "
                     + $"{WorkspaceLockTimeout.TotalMinutes:N0} minutes, so this scheduled occurrence was skipped. "
                     + "The next occurrence runs normally.",
@@ -2408,8 +2433,9 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     /// <summary>
-    /// Records a scheduled occurrence that was dropped because another run held a lock, and returns
-    /// the row that was written.
+    /// Records a scheduled occurrence that never became a real run — dropped because another run
+    /// held a lock (<see cref="RunStatus.Skipped"/>), or refused because Obsync could not open its
+    /// own lock file (<see cref="RunStatus.Failed"/>, which alerts) — and returns the row written.
     /// </summary>
     /// <remarks>
     /// The two contention gates used to return an un-persisted run, which meant a scheduled sync
@@ -2426,8 +2452,9 @@ public sealed class SyncEngine : ISyncEngine
     /// window — stay log-only, because neither means anything went wrong.
     /// </para>
     /// </remarks>
-    private async Task<SyncRun> RecordSkippedOccurrenceAsync(
-        SyncJob job, RunTrigger trigger, string reason, string? serverName, CancellationToken cancellationToken)
+    private async Task<SyncRun> RecordOccurrenceAsync(
+        SyncJob job, RunTrigger trigger, RunStatus status, string reason, string? serverName,
+        CancellationToken cancellationToken)
     {
         var at = _clock.UtcNow;
         var run = new SyncRun
@@ -2439,7 +2466,7 @@ public sealed class SyncEngine : ISyncEngine
             JobName = job.Name,
             Trigger = trigger,
             TriggeredBy = CurrentActor.Name,
-            Status = RunStatus.Skipped,
+            Status = status,
             ServerName = serverName ?? string.Empty,
             Databases = job.DatabaseScope == DatabaseScope.AllUserDatabases
                 ? "All user databases"

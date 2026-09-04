@@ -5,6 +5,7 @@ using Obsync.Data.Repositories;
 using Obsync.Engine.Alerting;
 using Obsync.Scheduler;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 
 namespace Obsync.Service;
@@ -22,6 +23,7 @@ public sealed class JobSchedulingBootstrapper : IHostedService
     private readonly IRunRepository _runs;
     private readonly IAppSettingsRepository _settings;
     private readonly IRunAlertService _alerts;
+    private readonly IAuditWriter _audit;
     private readonly ILogger<JobSchedulingBootstrapper> _logger;
 
     public JobSchedulingBootstrapper(
@@ -30,6 +32,7 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         IRunRepository runs,
         IAppSettingsRepository settings,
         IRunAlertService alerts,
+        IAuditWriter audit,
         ILogger<JobSchedulingBootstrapper> logger)
     {
         _databaseInitializer = databaseInitializer;
@@ -37,6 +40,7 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         _runs = runs;
         _settings = settings;
         _alerts = alerts;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -54,7 +58,7 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         // Crash recovery: fail "Running" rows whose owning process died (lock no longer held), so a
         // service or machine crash mid-run leaves an honest Failed entry instead of a stuck one.
         var recovered = await OrphanedRunCleaner.CleanAsync(
-            _runs, ObsyncPaths.LocksRoot, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            _runs, _audit, ObsyncPaths.LocksRoot, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
         if (recovered.Count > 0)
         {
             _logger.LogWarning("Recovered {Count} run(s) interrupted by an earlier crash.", recovered.Count);
@@ -83,6 +87,29 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         _logger.LogInformation(
             "Obsync service started and jobs scheduled. Running as {Domain}\\{User}.",
             Environment.UserDomainName, Environment.UserName);
+
+        // The audit trail should show when unattended execution became available, and under which
+        // identity. AuditWriter stamps CurrentActor itself, so the service account is recorded
+        // without being passed in. A kill or power loss produces no matching stop event by
+        // construction — a start with no preceding stop IS the evidence of an unclean shutdown,
+        // which is more useful than fabricating one.
+        await WriteLifecycleAuditAsync("Service started; scheduling is active.", cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Best-effort lifecycle audit: bookkeeping must never abort start or block shutdown.</summary>
+    private async Task WriteLifecycleAuditAsync(string detail, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _audit.WriteAsync(
+                AuditAction.ServiceLifecycle, "Service", entityId: null, entityName: "Obsync scheduler",
+                detail, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not write the service lifecycle audit event.");
+        }
     }
 
     /// <summary>
@@ -114,6 +141,9 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         {
             _logger.LogWarning(ex, "Could not clear the scheduler heartbeat on shutdown.");
         }
+
+        await WriteLifecycleAuditAsync("Service stopped; scheduled jobs will not run.", cancellationToken)
+            .ConfigureAwait(false);
     }
 }
 

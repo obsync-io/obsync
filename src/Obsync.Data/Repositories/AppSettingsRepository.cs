@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Dapper;
 using Obsync.Shared;
 using Obsync.Shared.Models;
@@ -174,7 +175,23 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     public async Task<SchedulerHeartbeat?> GetSchedulerHeartbeatAsync(CancellationToken cancellationToken = default)
     {
         var json = await GetValueAsync(SchedulerHeartbeatKey, cancellationToken).ConfigureAwait(false);
-        return string.IsNullOrEmpty(json) ? null : ObsyncJson.Deserialize<SchedulerHeartbeat>(json);
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return ObsyncJson.Deserialize<SchedulerHeartbeat>(json);
+        }
+        catch (JsonException)
+        {
+            // Degrade a corrupt beacon to "no beacon" — a state every caller already handles. This
+            // is read on the load path of the dashboard, the job list, job detail and the Create
+            // Job wizard, none of which catch; the wizard awaits it before the window is shown, so
+            // a throw here replaced the whole wizard with a raw JSON parser error.
+            return null;
+        }
     }
 
     public Task SetSchedulerHeartbeatAsync(SchedulerHeartbeat? heartbeat, CancellationToken cancellationToken = default) =>

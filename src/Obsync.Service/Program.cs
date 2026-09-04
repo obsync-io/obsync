@@ -11,28 +11,20 @@ using Quartz;
 using Serilog;
 using Serilog.Events;
 
-ObsyncPaths.EnsureCreated();
-
-var loggerConfiguration = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .WriteTo.Console()
-    .WriteTo.File(
-        Path.Combine(ObsyncPaths.LogsRoot, "service-.log"),
-        rollingInterval: RollingInterval.Day,
-        retainedFileCountLimit: 31);
-
+// A bootstrap logger BEFORE anything touches a path. Creating the data directories can fail (an
+// OBSYNC_DATA_ROOT on a disconnected volume, a denied ACL), and Serilog's default logger is a
+// silent no-op — so doing this after the file sink was configured meant such a failure produced no
+// log file, no event-log entry, and no Log.Fatal. The SCM's "did not respond to the start request
+// in a timely fashion" was the only trace. The event-log sink is what makes it visible for a
+// service, and neither sink here depends on ObsyncPaths.
+var bootstrapLogger = new LoggerConfiguration().MinimumLevel.Information().WriteTo.Console();
 if (WindowsServiceHelpers.IsWindowsService())
 {
-    // Warnings and errors also land in the Windows Application event log for ops visibility. The
-    // "Obsync" source is registered by the MSI (elevated), so the sink never has to create it —
-    // console/dev runs skip the sink entirely and need no registration.
-    loggerConfiguration = loggerConfiguration.WriteTo.EventLog(
-        source: "Obsync",
-        manageEventSource: false,
-        restrictedToMinimumLevel: LogEventLevel.Warning);
+    bootstrapLogger = bootstrapLogger.WriteTo.EventLog(
+        source: "Obsync", manageEventSource: false, restrictedToMinimumLevel: LogEventLevel.Warning);
 }
 
-Log.Logger = loggerConfiguration.CreateLogger();
+Log.Logger = bootstrapLogger.CreateLogger();
 
 // Non-zero so the SCM treats a fatal crash as a failure and applies the recovery actions the MSI
 // configures (restart after 60s, three times).
@@ -44,9 +36,38 @@ IHost? host = null;
 
 try
 {
+    ObsyncPaths.EnsureCreated();
+
+    // Now that the log directory exists, swap in the full logger with the rolling file sink.
+    var loggerConfiguration = new LoggerConfiguration()
+        .MinimumLevel.Information()
+        .WriteTo.Console()
+        .WriteTo.File(
+            Path.Combine(ObsyncPaths.LogsRoot, "service-.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 31);
+
+    if (WindowsServiceHelpers.IsWindowsService())
+    {
+        // Warnings and errors also land in the Windows Application event log for ops visibility.
+        // The "Obsync" source is registered by the MSI (elevated), so the sink never has to create
+        // it — console/dev runs skip the sink entirely and need no registration.
+        loggerConfiguration = loggerConfiguration.WriteTo.EventLog(
+            source: "Obsync",
+            manageEventSource: false,
+            restrictedToMinimumLevel: LogEventLevel.Warning);
+    }
+
+    Log.Logger = loggerConfiguration.CreateLogger();
+
     var builder = Host.CreateApplicationBuilder(args);
 
     builder.Services.AddWindowsService(options => options.ServiceName = "Obsync");
+
+    // The 30s default has to cover the in-flight run drain AND Quartz's WaitForJobsToComplete, and
+    // the drain alone could consume all of it. One budget shared by every hosted service, so it is
+    // set here rather than being divided up implicitly by stop order.
+    builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(90));
     builder.Services.AddSerilog();
 
     builder.Services.AddObsyncSecurity();

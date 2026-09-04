@@ -101,7 +101,22 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
         DateTimeOffset nowUtc,
         string currentActor)
     {
-        if (serviceStatus is null)
+        // A heartbeat dated in the FUTURE is never fresh. An unbounded comparison reports a dead
+        // scheduler as healthy until the wall clock catches up (a fast RTC corrected by NTP, or a
+        // restored VM snapshot).
+        var age = heartbeat is null ? (TimeSpan?)null : nowUtc - heartbeat.TimestampUtc;
+        var isFresh = age is { } a && a >= TimeSpan.Zero && a <= HeartbeatFreshness;
+
+        // A fresh heartbeat is positive proof that a scheduler is alive and writing to THIS
+        // database, so it outranks "the SCM has no such service" — which can also mean the
+        // scheduler lives on another host behind a shared data root, or that the SCM could not be
+        // read at all. "Reinstall Obsync" is the most destructive advice this surface can give, and
+        // it must never be produced while something is demonstrably scheduling.
+        //
+        // It deliberately does NOT outrank a service the SCM can see and reports as stopped: that
+        // is authoritative, and a beacon under 90s old is just residue from a service killed
+        // moments ago.
+        if (serviceStatus is null && !isFresh)
         {
             return new SchedulerHealth(
                 SchedulerHealthStatus.NotInstalled,
@@ -119,7 +134,7 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
                 "has finished starting.");
         }
 
-        if (serviceStatus != ServiceControllerStatus.Running)
+        if (serviceStatus is not null && serviceStatus != ServiceControllerStatus.Running)
         {
             // Both causes that survive a *successful* install are logon problems, because the MSI
             // starts the service with Wait="no" so a failed start never fails the install: a blank
@@ -133,11 +148,7 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
                 "which also grants the \"Log on as a service\" right — then start it.");
         }
 
-        // A heartbeat dated in the FUTURE is never fresh. An unbounded comparison reports a dead
-        // scheduler as healthy until the wall clock catches up (a fast RTC corrected by NTP, or a
-        // restored VM snapshot).
-        var age = heartbeat is null ? (TimeSpan?)null : nowUtc - heartbeat.TimestampUtc;
-        if (age is { } fresh && fresh >= TimeSpan.Zero && fresh <= HeartbeatFreshness)
+        if (isFresh)
         {
             // Freshness alone does NOT prove the service can do this user's work. The heartbeat
             // lands in this database, which is normally per-user — but a machine-wide

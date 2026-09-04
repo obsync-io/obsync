@@ -38,6 +38,26 @@
            Scope="perMachine"
            Compressed="yes">
 
+    <!-- Schedule left at WiX's default (afterInstallValidate): verified in the built MSI as
+         RemoveExistingProducts at 1401, so the old product is fully uninstalled (StopServices 1900,
+         DeleteServices 2000) before InstallInitialize (1500) and the "Obsync" service is created
+         fresh at InstallServices (5800). Two costs, both accepted:
+           * The delete/create window spans the whole file copy of the new build, so anything
+             holding an SCM handle to "Obsync" (services.msc left open) keeps the delete pending and
+             CreateService fails with ERROR_SERVICE_MARKED_FOR_DELETE (1072). That fails the upgrade
+             LOUDLY and rolls back — close services.msc and rerun.
+           * If the nested uninstall fails after its DeleteServices, its rollback recreates the
+             service without a password (the SCM never hands one back). That is the same state a
+             normal upgrade already lands in and that the product already handles, and no
+             rescheduling can fix it — no MSI rollback can restore an LSA secret.
+         Schedule="afterInstallExecute" (RemoveExistingProducts at 6501) was considered and
+         rejected. It would reconfigure the service instead of recreating it, but it runs the OLD
+         product's uninstall — including its DeleteServices — AFTER the new service is installed and
+         started, leaving correctness to component reference counting. INSTALL.md allows upgrading
+         into a DIFFERENT folder, where the old client points at the old path: the old install tree
+         and its PATH entry are orphaned with nothing tracking them, and any gap in service
+         refcounting silently deletes the service Obsync exists to run. A loud, retryable 1072 beats
+         a silently missing service. -->
     <MajorUpgrade DowngradeErrorMessage="A newer version of Obsync is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
@@ -316,17 +336,20 @@
         <!-- Obsync: label heights are 12 units — a Segoe UI 9 line does not fit the classic 10-unit
              label, and an overflowing MSI Text control path-ellipsizes text containing backslashes
              ("Account ...\user):") instead of clipping or wrapping when that happens. -->
-        <Control Id="AccountLabel" Type="Text" X="36" Y="98" Width="304" Height="12" NoPrefix="no" Text="&amp;Account (DOMAIN\user or .\user):"
+        <Control Id="AccountLabel" Type="Text" TabSkip="no" X="36" Y="98" Width="304" Height="12" NoPrefix="no" Text="&amp;Account (DOMAIN\user or .\user):"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="AccountEdit" Type="Edit" X="36" Y="112" Width="304" Height="16" Property="SERVICE_ACCOUNT_NAME"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
-        <Control Id="PasswordLabel" Type="Text" X="36" Y="132" Width="304" Height="12" NoPrefix="no" Text="&amp;Password:"
+        <Control Id="PasswordLabel" Type="Text" TabSkip="no" X="36" Y="132" Width="304" Height="12" NoPrefix="no" Text="&amp;Password:"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="PasswordEdit" Type="Edit" Password="yes" X="36" Y="146" Width="304" Height="16" Property="SERVICE_ACCOUNT_PWD"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
 
         <!-- Obsync: two short paragraphs read better than one dense block. The first explains the
-             per-user credential-vault constraint; the second covers the gMSA case. -->
+             per-user credential-vault constraint; the second covers the gMSA case.
+             VaultNote wraps to exactly 2 lines in its 2-line box (verified 96-192 DPI) with about
+             two characters of slack, so growing the string means growing the box: 18 units are
+             free above BottomLine — VaultNote Y=168 Height=36, GmsaNote Y=208. -->
         <Control Id="VaultNote" Type="Text" X="20" Y="172" Width="330" Height="24" NoPrefix="yes"
                  Text="Scheduled jobs read credentials from this account's Windows Credential Manager vault, so choose the same account you use to run the Obsync app." />
         <Control Id="GmsaNote" Type="Text" X="20" Y="202" Width="330" Height="24" NoPrefix="yes"
@@ -348,12 +371,16 @@
       <!-- Obsync: shown when "This account" is selected with a blank password for an account that
            is not one of the passwordless kinds. Same shape as ObsyncAccountRequiredDlg, one line
            taller because the text names the exception. -->
-      <Dialog Id="ObsyncPasswordRequiredDlg" Width="260" Height="110" Title="[ProductName] Setup">
-        <Control Id="OK" Type="PushButton" X="100" Y="83" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
+      <!-- Wider than ObsyncAccountRequiredDlg: at 194x55 units this text wraps to five Segoe UI 9
+           lines and the box holds four, and the clipped line contains a backslash, so MSI
+           path-ellipsizes it rather than clipping cleanly. 234x60 holds five with a line to spare
+           at every tested DPI, and the 18-unit right margin matches the sibling dialog. -->
+      <Dialog Id="ObsyncPasswordRequiredDlg" Width="300" Height="110" Title="[ProductName] Setup">
+        <Control Id="OK" Type="PushButton" X="122" Y="83" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
-        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="55" NoPrefix="yes"
+        <Control Id="Text" Type="Text" X="48" Y="15" Width="234" Height="60" NoPrefix="yes"
                  Text="Enter the password for this account. Without one the service is installed but cannot start. Only a group Managed Service Account (DOMAIN\name$) or a built-in service account logs on without a password." />
       </Dialog>
     </UI>

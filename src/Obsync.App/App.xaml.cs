@@ -7,6 +7,7 @@ using Obsync.App.Views;
 using Obsync.Data;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Serilog;
 
 namespace Obsync.App;
@@ -66,7 +67,8 @@ public partial class App : Application
             // executing in the scheduler service is never falsely marked failed.
             var now = DateTimeOffset.UtcNow;
             var runs = _host.Services.GetRequiredService<IRunRepository>();
-            var recovered = await OrphanedRunCleaner.CleanAsync(runs, ObsyncPaths.LocksRoot, now);
+            var audit = _host.Services.GetRequiredService<IAuditWriter>();
+            var recovered = await OrphanedRunCleaner.CleanAsync(runs, audit, ObsyncPaths.LocksRoot, now);
 
             // Crash-recovered failures still alert — the process that ran them died before it
             // could. Best-effort, like the engine's own post-run alerting.
@@ -86,7 +88,7 @@ public partial class App : Application
             // Apply the run-history retention setting (0 = keep forever). The service also prunes
             // daily; doing it here keeps app-only installs tidy too.
             await RunRetention.CleanupAsync(
-                _host.Services.GetRequiredService<IAppSettingsRepository>(), runs, now);
+                _host.Services.GetRequiredService<IAppSettingsRepository>(), runs, audit, now);
 
             var window = _host.Services.GetRequiredService<MainWindow>();
             mainViewModel = _host.Services.GetRequiredService<MainViewModel>();

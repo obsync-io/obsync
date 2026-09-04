@@ -22,6 +22,7 @@
     <Project Path="tests/Obsync.Git.Tests/Obsync.Git.Tests.csproj" />
     <Project Path="tests/Obsync.Integration.Tests/Obsync.Integration.Tests.csproj" />
     <Project Path="tests/Obsync.Metadata.Tests/Obsync.Metadata.Tests.csproj" />
+    <Project Path="tests/Obsync.Packaging.Tests/Obsync.Packaging.Tests.csproj" />
     <Project Path="tests/Obsync.Shared.Tests/Obsync.Shared.Tests.csproj" />
   </Folder>
 </Solution>
