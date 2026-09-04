@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Obsync.Shared;
 
 namespace Obsync.Git;
 
@@ -122,16 +123,23 @@ public sealed class GitCommandRunner : IGitCommandRunner
         var result = new GitCommandResult(process.ExitCode, stdout.ToString(), stderr.ToString());
         if (!result.Success)
         {
-            // Redacted args: tokens are passed via http.extraheader values which we never log.
             _logger.LogDebug("git {Args} exited {Code}", string.Join(' ', RedactArguments(arguments)), result.ExitCode);
         }
 
         return result;
     }
 
-    private static IEnumerable<string> RedactArguments(IReadOnlyList<string> arguments) =>
+    /// <summary>
+    /// Strips credentials from a logged command line. The two <c>-c</c> forms below are kept for
+    /// older call paths, but the value that actually still reaches argv is the <b>remote URL</b> —
+    /// clone and remote set-url take it positionally, so an operator who put credentials in a
+    /// repository profile's RemoteUrl had them logged verbatim. The token itself never appears here:
+    /// it travels as a GIT_CONFIG_* environment variable precisely so it stays off the command line.
+    /// Internal for tests.
+    /// </summary>
+    internal static IEnumerable<string> RedactArguments(IReadOnlyList<string> arguments) =>
         arguments.Select(a =>
             a.StartsWith("http.extraheader=", StringComparison.OrdinalIgnoreCase) ? "http.extraheader=***" :
             a.StartsWith("http.proxy=", StringComparison.OrdinalIgnoreCase) ? "http.proxy=***" :
-            a);
+            SecretRedactor.Scrub(a) ?? a);
 }

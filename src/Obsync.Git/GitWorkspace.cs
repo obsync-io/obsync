@@ -1,5 +1,5 @@
-﻿using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using Obsync.Shared;
 using Obsync.Shared.Results;
 
 namespace Obsync.Git;
@@ -452,16 +452,14 @@ public sealed partial class GitWorkspace : IGitWorkspace
 
     /// <summary>
     /// Condenses git stderr into persistable failure text. These strings outlive the run
-    /// (runs.error_message, run logs, reports, support bundles), and git/curl echo URLs verbatim —
-    /// a manual proxy URL may embed <c>user:password@host</c> — so URL userinfo is redacted first.
-    /// Internal for tests.
+    /// (runs.error_message, run logs, reports, support bundles), so any credential a tool echoed back
+    /// is scrubbed first — see <see cref="SecretRedactor"/> for which shapes and why. Current git
+    /// strips URL userinfo before echoing it, but that is git's choice, not a guarantee this code can
+    /// make: the scrub is what makes it one. Internal for tests.
     /// </summary>
     internal static string Summarize(string error)
     {
-        var redacted = UrlCredentials().Replace(error.Trim(), "://***@");
+        var redacted = SecretRedactor.Scrub(error.Trim()) ?? string.Empty;
         return redacted.Length <= 500 ? redacted : redacted[..500] + "…";
     }
-
-    [GeneratedRegex(@"://[^/:@\s]+:[^/@\s]+@", RegexOptions.IgnoreCase)]
-    private static partial Regex UrlCredentials();
 }

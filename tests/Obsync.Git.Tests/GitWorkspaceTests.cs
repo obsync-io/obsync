@@ -457,6 +457,39 @@ public sealed class GitWorkspaceTests : IDisposable
         Assert.Contains("http://***@proxy:8080/", summarized);
     }
 
+    [Fact]
+    public void Summarize_RedactsATokenOnlyRemoteUrl()
+    {
+        // The previous rule required a user:password pair, so it missed the single-token form —
+        // which is the one GitHub's own documentation produces. Current git strips userinfo before
+        // echoing it, but that is git's behaviour rather than a guarantee this code can make.
+        const string token = "ghp_000000000000000000000000000000000000";
+
+        var summarized = GitWorkspace.Summarize(
+            $"fatal: unable to access 'https://{token}@github.com/x/y.git/': The requested URL returned error: 403");
+
+        Assert.DoesNotContain(token, summarized);
+        Assert.Contains("https://***@github.com/x/y.git", summarized);
+        Assert.Contains("403", summarized); // still diagnostic
+    }
+
+    [Fact]
+    public void RedactArguments_ScrubsCredentialsFromAPositionalRemoteUrl()
+    {
+        // The remote URL is the one credential-carrying value still on the command line: clone and
+        // remote set-url take it positionally. The token itself is never here — it travels as a
+        // GIT_CONFIG_* environment variable so it stays out of process-creation auditing.
+        const string token = "ghp_000000000000000000000000000000000000";
+
+        var redacted = GitCommandRunner.RedactArguments(
+            ["clone", "--filter=blob:none", $"https://{token}@github.com/x/y.git", @"C:\ws"]).ToList();
+
+        Assert.DoesNotContain(redacted, a => a.Contains(token, StringComparison.Ordinal));
+        Assert.Contains("https://***@github.com/x/y.git", redacted);
+        Assert.Equal("clone", redacted[0]); // ordinary arguments untouched
+        Assert.Equal(@"C:\ws", redacted[3]);
+    }
+
     private static GitWorkspaceContext NewContext(string remote, string localPath) => new()
     {
         RemoteUrl = remote,

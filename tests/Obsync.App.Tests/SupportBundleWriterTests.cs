@@ -91,6 +91,40 @@ public sealed class SupportBundleWriterTests : IAsyncLifetime, IDisposable
         Assert.Contains("git version 2.45.0", systemInfo); // GitVersion pulled from the diagnostics
     }
 
+    [Fact]
+    public async Task WriteAsync_ScrubsCredentialsFromARemoteUrl()
+    {
+        // The bundle is the artifact a user attaches to a bug report, and RemoteUrl is free text an
+        // operator can put anything into — it was serialized verbatim, so a credential pasted there
+        // reached the zip whatever the git-layer redaction did. The Settings screen promises
+        // "Secrets are never included"; this is what makes that true for this field.
+        const string token = "ghp_000000000000000000000000000000000000";
+        var repo = new GitRepositoryProfile
+        {
+            Name = "history",
+            Owner = "acme",
+            RepositoryName = "sql-history",
+            RemoteUrl = $"https://{token}@github.com/acme/sql-history.git",
+        };
+        await _provider.GetRequiredService<IRepositoryProfileRepository>().UpsertAsync(repo);
+
+        var writer = new SupportBundleWriter(
+            _provider.GetRequiredService<IJobRepository>(),
+            _provider.GetRequiredService<IConnectionProfileRepository>(),
+            _provider.GetRequiredService<IRepositoryProfileRepository>(),
+            _provider.GetRequiredService<IRunRepository>(),
+            SystemClock.Instance,
+            _provider.GetRequiredService<IAppSettingsRepository>());
+
+        await writer.WriteAsync(_zipPath, []);
+
+        using var zip = ZipFile.OpenRead(_zipPath);
+        var config = ReadEntry(zip, "config.json");
+        Assert.DoesNotContain(token, config);
+        Assert.Contains("***@github.com/acme/sql-history.git", config); // still identifies the remote
+        Assert.Contains("acme", config); // and the rest of the profile survives
+    }
+
     private static string ReadEntry(ZipArchive zip, string name)
     {
         using var reader = new StreamReader(zip.GetEntry(name)!.Open());

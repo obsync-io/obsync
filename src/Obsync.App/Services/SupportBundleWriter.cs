@@ -91,11 +91,25 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
         FreeDiskBytes = SafeFreeDisk(),
     };
 
+    /// <summary>
+    /// Serializes one entry, scrubbing credential material from the rendered JSON.
+    ///
+    /// The bundle is emailed to strangers, so it does not get to assume its inputs are clean. The
+    /// assumption above — that config models carry no secrets — holds for every field the product
+    /// sets, but <c>RemoteUrl</c> is free text an operator can put anything into, and it was written
+    /// out verbatim. Scrubbing the rendered text rather than named fields means a credential added to
+    /// some other field later is caught too, without anyone having to remember this file exists.
+    ///
+    /// Applied after serialization deliberately: the replacements only ever shorten a JSON string
+    /// value and introduce no structural characters, so the document stays well-formed.
+    /// </summary>
     private static async Task WriteJsonEntryAsync(ZipArchive archive, string entryName, object content, CancellationToken cancellationToken)
     {
+        var json = JsonSerializer.Serialize(content, Json);
         var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
         await using var entryStream = entry.Open();
-        await JsonSerializer.SerializeAsync(entryStream, content, Json, cancellationToken).ConfigureAwait(false);
+        await using var writer = new StreamWriter(entryStream);
+        await writer.WriteAsync((SecretRedactor.Scrub(json) ?? json).AsMemory(), cancellationToken).ConfigureAwait(false);
     }
 
     // Copy only the app/service log globs (never the state database), newest first, capped.
