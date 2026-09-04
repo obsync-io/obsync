@@ -75,6 +75,11 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
     {
         var server = SmoConnection.BuildServer(request);
         await SmoConnection.ConnectWithRetryAsync(server, request.MaxRetries, _logger, cancellationToken).ConfigureAwait(false);
+
+        // Return the pooled connection when this enumerator is disposed. Without it the primary
+        // connection stayed checked out for the process lifetime — one per database, plus the
+        // server pass — while only the slice workers were ever disconnected.
+        using var lease = SmoConnection.Lease(server, _logger);
         ApplyLockTimeout(server, request);
 
         var database = server.Databases[request.Database]
@@ -99,9 +104,17 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
                 && watermarks.TryGetValue(type, out var floor) ? floor : (DateTime?)null;
 
             var work = new List<(string Schema, string Name, IScriptable Instance)>();
+
+            // Counted here because the ceiling below is about what PREFETCH loads, not what this run
+            // scripts. PrefetchObjects takes a database and a CLR type and nothing else — there is no
+            // overload that narrows it — so it bulk-loads child metadata for every object of the type
+            // in the database regardless of how few made it into `work`. Free to count: this loop has
+            // already forced SMO to populate the whole collection.
+            var inCollection = 0;
             foreach (var obj in typeMap.GetCollection(database))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                inCollection++;
 
                 if (!ShouldScript(obj, type, typeMap, schemaFilter, out var schema, out var name))
                 {
@@ -123,7 +136,11 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
                 // Prefetch only pays off for a full sweep of a heavy collection; a watermark has
                 // already narrowed the list, and lazy loading per object is cheaper than bulk
                 // prefetching children for every table in the database.
-                if (watermark is null)
+                //
+                // The ceiling applies here too. It did not, and this is the branch a narrow schema
+                // filter selects: ComputeSliceCount returns 1 below 32 selected objects, so a filter
+                // picking 20 tables out of 500k took the unbounded path and prefetched all 500k.
+                if (watermark is null && inCollection <= PrefetchCeiling)
                 {
                     Prefetch(database, typeMap, options, type);
                 }
@@ -161,7 +178,8 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
             // child metadata per table PER SLICE — hence the ceiling: past ~25k tables the 8-way
             // duplicated prefetch would hold gigabytes, so huge sweeps stay lazy (and slow) rather
             // than risking memory; the startup log above sets that expectation.
-            var prefetch = watermark is null && work.Count <= PrefetchCeiling;
+            // Gated on the collection size, not the selected size: prefetch loads the former.
+            var prefetch = watermark is null && inCollection <= PrefetchCeiling;
             await foreach (var raw in ScriptPartitionedAsync(
                 request, type, typeMap, names, sliceCount, prefetch, cancellationToken)
                 .ConfigureAwait(false))

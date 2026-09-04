@@ -16,6 +16,7 @@ public static class MetadataServiceCollectionExtensions
         services.TryAddSingleton<ISecurityAnalysisReader, SecurityAnalysisReader>();
         services.TryAddSingleton<IReferenceDataReader, ReferenceDataReader>();
         services.TryAddSingleton<IModifiedObjectReader, ModifiedObjectReader>();
+        services.TryAddSingleton<IUnsupportedObjectReader, UnsupportedObjectReader>();
         services.AddSingleton<IObjectScriptProvider, MetadataScriptProvider>();
         return services;
     }

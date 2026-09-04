@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
@@ -60,6 +60,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly ISecurityAnalysisReader _securityReader;
     private readonly IReferenceDataReader _referenceDataReader;
     private readonly IModifiedObjectReader _modifiedObjects;
+    private readonly IUnsupportedObjectReader _unsupportedObjects;
     private readonly IGitWorkspace _gitWorkspace;
     private readonly IGitHubService _gitHub;
     private readonly IProxyProvider _proxy;
@@ -89,6 +90,7 @@ public sealed class SyncEngine : ISyncEngine
         ISecurityAnalysisReader securityReader,
         IReferenceDataReader referenceDataReader,
         IModifiedObjectReader modifiedObjects,
+        IUnsupportedObjectReader unsupportedObjects,
         IGitWorkspace gitWorkspace,
         IGitHubService gitHub,
         IProxyProvider proxy,
@@ -117,6 +119,7 @@ public sealed class SyncEngine : ISyncEngine
         _securityReader = securityReader;
         _referenceDataReader = referenceDataReader;
         _modifiedObjects = modifiedObjects;
+        _unsupportedObjects = unsupportedObjects;
         _gitWorkspace = gitWorkspace;
         _gitHub = gitHub;
         _proxy = proxy;
@@ -950,13 +953,37 @@ public sealed class SyncEngine : ISyncEngine
 
         // A single producer streams from the providers (one SqlDataReader at a time) into a bounded
         // channel; the worker pool normalizes, hashes, diffs, and writes objects in parallel.
-        await ChannelPipeline.RunAsync(
-            StreamProvidersAsync(context, database, types, workers, incrementalWatermarks, cancellationToken),
-            (raw, ct) => raw.SkipReason is not null
-                ? RecordSkipAsync(raw)
-                : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
-            workers,
-            cancellationToken).ConfigureAwait(false);
+        var partialScan = false;
+        try
+        {
+            await ChannelPipeline.RunAsync(
+                StreamProvidersAsync(context, database, types, workers, incrementalWatermarks, cancellationToken),
+                (raw, ct) => raw.SkipReason is not null
+                    ? RecordSkipAsync(raw)
+                    : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
+                workers,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && SqlTransientErrors.IsTransient(ex))
+        {
+            // A TRANSIENT reader failure partway through used to fail the whole RUN, not just this
+            // database: the exception escaped to the top, FinalizeAsync never ran, and nothing was
+            // committed — discarding the databases that had already finished too. The retry helper
+            // only wraps opening the reader, and the stream cannot be resumed once rows have been
+            // applied, so containment is the honest remedy. This mirrors what the SMO provider
+            // already does with a per-object failure.
+            //
+            // Only transient failures are caught, deliberately. A lock timeout or deadlock says
+            // nothing about the data; the case-twin guard and the like are considered safety stops
+            // whose whole purpose is to fail the run, and they must keep doing so.
+            partialScan = true;
+            context.IncrementFailed();
+            skipped.Add($"{database} — scripting stopped partway: {ex.Message}");
+            context.Log(
+                SyncLogLevel.Warning,
+                $"Scripting {database} stopped partway; the database was left incomplete and its deletions were suspended.",
+                ex.ToString());
+        }
 
         // A reference table that cannot be scripted this run is reported like a scripting skip:
         // counted as failed and marked "seen" so its committed file is never deleted by a blip.
@@ -1117,6 +1144,8 @@ public sealed class SyncEngine : ISyncEngine
             context, database, inventorySnapshot, prior, seen, changesBeforeDatabase, ApplyItemAsync, cancellationToken)
             .ConfigureAwait(false);
 
+        await ReportUnsupportedObjectsAsync(context, database, cancellationToken).ConfigureAwait(false);
+
         if (!skipped.IsEmpty)
         {
             var details = skipped.ToList();
@@ -1145,7 +1174,23 @@ public sealed class SyncEngine : ISyncEngine
             }
         }
 
-        ApplyDeletions(context, run.Trigger, database, localPath, prior, seen, types);
+        if (partialScan)
+        {
+            // An incomplete scan cannot tell an object that was dropped from one the stream never
+            // reached, and the deletion pass reads "not seen" as "gone" — so running it here would
+            // delete the committed files of everything after the failure point. Suspending it uses
+            // the same stop the mass-deletion breaker does, and dropping this database's staged
+            // watermarks keeps the next run a full scan rather than one that starts after the
+            // objects it never captured.
+            context.DeletionSuspensionReason ??=
+                $"Scripting {database} stopped partway, so deletions were suspended for it — an incomplete scan " +
+                "cannot distinguish a dropped object from one that was never reached. The next run re-scans it in full.";
+            context.PendingWatermarks.Remove(database);
+        }
+        else
+        {
+            ApplyDeletions(context, run.Trigger, database, localPath, prior, seen, types);
+        }
 
         // A type that had skips must not advance its watermark: the skipped object's change may
         // predate the new watermark, and advancing past it would hide the change from every later
@@ -2303,6 +2348,43 @@ public sealed class SyncEngine : ISyncEngine
     /// case-sensitive database collation can produce the pair at all.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Reports the objects in a database that Obsync does not script.
+    ///
+    /// Nothing did this before, and the absence was total: an object of an uncatalogued type is
+    /// unreachable at every stage, so a database full of Service Broker queues and certificates
+    /// produced a run reporting zero skips, zero warnings and a Succeeded status. Silence read as
+    /// complete coverage. The count is folded into the same "skipped" total the per-object failures
+    /// use, so it reaches the run status, the run report and the alert payload without new
+    /// machinery — an object Obsync cannot capture is skipped, whatever the reason.
+    /// </summary>
+    private async Task ReportUnsupportedObjectsAsync(
+        RunContext context, string database, CancellationToken cancellationToken)
+    {
+        var groups = await _unsupportedObjects.ReadAsync(
+            context.Connection, context.SqlPassword, database,
+            context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+            cancellationToken).ConfigureAwait(false);
+
+        // Defensive on a diagnostic path: a census that returns nothing must be a no-op, never a
+        // reason the run behaves differently.
+        if (groups is null or { Count: 0 })
+        {
+            return;
+        }
+
+        var total = groups.Sum(g => g.Count);
+        for (var i = 0; i < total; i++)
+        {
+            context.IncrementFailed();
+        }
+
+        context.Log(
+            SyncLogLevel.Warning,
+            $"{total:N0} object(s) in {database} are of types Obsync does not script and were not captured.",
+            string.Join("\n", groups.OrderByDescending(g => g.Count).Select(g => $"{g.TypeName} × {g.Count:N0}")));
+    }
+
     internal static void GuardAgainstCaseTwin(
         ConcurrentDictionary<string, ScriptedObjectIdentity> identities,
         string key,

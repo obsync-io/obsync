@@ -130,6 +130,41 @@ public sealed class ScheduleWindowNextRunGridTests
     }
 
     [Fact]
+    public void ExistingLocalTime_MovesPastTheHourThatSpringForwardRemoves()
+    {
+        // 2026-03-08 02:30 does not occur in this zone — the clock jumps 02:00 to 03:00. Building a
+        // DateTimeOffset from it anyway lands on the far side of the gap, so a 02:30 job resolved to
+        // 03:30 and a window admitting 02:00-03:00 then rejected the very occurrence it was meant to
+        // allow. The first time that does exist is 03:00, which is when the clock reaches it.
+        var pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+
+        var resolved = ScheduleProfile.ExistingLocalTime(new DateTime(2026, 3, 8, 2, 30, 0), pacific);
+
+        Assert.False(pacific.IsInvalidTime(DateTime.SpecifyKind(resolved, DateTimeKind.Unspecified)));
+        Assert.Equal(new DateTime(2026, 3, 8, 3, 0, 0), DateTime.SpecifyKind(resolved, DateTimeKind.Unspecified));
+    }
+
+    [Fact]
+    public void ExistingLocalTime_LeavesATimeThatExistsAlone()
+    {
+        // The other side: over-correcting would move every ordinary occurrence.
+        var pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+        var ordinary = new DateTime(2026, 6, 1, 2, 30, 0);
+
+        Assert.Equal(ordinary, DateTime.SpecifyKind(ScheduleProfile.ExistingLocalTime(ordinary, pacific), DateTimeKind.Unspecified));
+    }
+
+    [Fact]
+    public void ExistingLocalTime_LeavesTheRepeatedHourAlone()
+    {
+        // Fall back repeats 01:30 rather than removing it, so it is a valid time and must not move.
+        var pacific = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+        var ambiguous = new DateTime(2026, 11, 1, 1, 30, 0);
+
+        Assert.Equal(ambiguous, DateTime.SpecifyKind(ScheduleProfile.ExistingLocalTime(ambiguous, pacific), DateTimeKind.Unspecified));
+    }
+
+    [Fact]
     public void Hourly_WithoutAWindow_IsUnchanged()
     {
         // The first candidate was always correct; only the advance loop was wrong. This pins that

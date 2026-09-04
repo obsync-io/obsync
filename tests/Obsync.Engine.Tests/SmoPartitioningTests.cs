@@ -40,4 +40,19 @@ public sealed class SmoPartitioningTests
 
         Assert.True(slices.Max(s => s.Count) - slices.Min(s => s.Count) <= 1);
     }
+
+    [Fact]
+    public void PrefetchCeiling_IsAboutWhatPrefetchLoads_NotWhatTheRunScripts()
+    {
+        // The gate compared the FILTERED work list against a ceiling whose own comment describes the
+        // cost of prefetching every table in the DATABASE — PrefetchObjects takes a database and a
+        // CLR type and has no overload that narrows it. So a schema filter selecting 400 tables out
+        // of 500k passed a ceiling of 25k and then bulk-loaded all 500k, on every slice connection.
+        // This pins the two numbers apart so they cannot be conflated again.
+        const int inCollection = 500_000;
+        const int selected = 400;
+
+        Assert.True(selected <= SmoScriptProvider.PrefetchCeiling, "the filtered count would have allowed prefetch");
+        Assert.False(inCollection <= SmoScriptProvider.PrefetchCeiling, "the collection size must refuse it");
+    }
 }

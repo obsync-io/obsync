@@ -161,32 +161,6 @@ public sealed class JobConfigPorter : IJobConfigPorter
             return JobImportResult.Failure("This file is not a valid Obsync job export (it has no job name).");
         }
 
-        // The wizard rejects an unschedulable cadence; import must too. An imported job starts with
-        // no NextRunAt, so one that cannot be triggered would sit enabled and idle with nothing —
-        // not even the overdue badge, which needs a next-run time — ever reporting it.
-        if (file.Schedule.UnschedulableReason() is { } scheduleError)
-        {
-            return JobImportResult.Failure($"This job's schedule can't be run as exported. {scheduleError}");
-        }
-
-        // The branch reaches git as a bare positional, and the wizard has rejected malformed names
-        // since it was written — but import never did, and an export file is attacker-authored by
-        // this method's own reasoning below. Same shared rule, same place as the other floors.
-        if (file.CommitMode != CommitMode.ExportOnly
-            && !string.IsNullOrWhiteSpace(file.Branch)
-            && !GitRefName.IsValidBranchName(file.Branch.Trim()))
-        {
-            return JobImportResult.Failure(
-                $"This job's branch name (\"{file.Branch.Trim()}\") is not a valid git branch name, so the job could not run.");
-        }
-
-        // Same reasoning for the maintenance window, which import checked for no cadence at all: a
-        // schedule the window can never admit builds a healthy trigger and is skipped every single
-        // occurrence, so importing one produced an enabled job that quietly never ran.
-        if (ScheduleWindowGuard.ConflictReason(file.Schedule, _clock.UtcNow) is { } windowError)
-        {
-            return JobImportResult.Failure($"This job's schedule can't be run as exported. {windowError}");
-        }
 
         // Re-attach the server profile: by profile name first, then by server name.
         var connections = await _connections.GetAllAsync(cancellationToken).ConfigureAwait(false);
@@ -245,12 +219,13 @@ public sealed class JobConfigPorter : IJobConfigPorter
             UpdatedAt = _clock.UtcNow,
         };
 
-        // The wizard rejects a traversing destination folder; import bypassed every one of those
-        // checks while writing an immediately-runnable, enabled job. An export file is attacker-
-        // authored — the operator was invited to open it — so its paths get the same rule.
-        if (job.UnsafePathReason() is { } pathError)
+        // Import bypassed every wizard check while writing an immediately-runnable, enabled job, and
+        // an export file is attacker-authored — the operator was merely invited to open it. Every
+        // rule now comes from one place, because they were added here one at a time as each gap was
+        // found separately, which is exactly how they drift.
+        if (JobSafetyFloor.FirstProblem(job, _clock.UtcNow) is { } problem)
         {
-            return JobImportResult.Failure($"This job's configuration can't be used as exported. {pathError}");
+            return JobImportResult.Failure($"This job can't be used as exported. {problem}");
         }
 
         await _jobs.UpsertAsync(job, cancellationToken).ConfigureAwait(false);

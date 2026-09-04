@@ -164,6 +164,29 @@ public sealed class JobsViewModelTests
     }
 
     [Fact]
+    public async Task Duplicate_RefusesAJobThatCannotRunAsItStands()
+    {
+        // Duplicate was the third route that writes a job and applied none of the rules the wizard
+        // and importer do — a JSON round-trip straight to the repository. A job saved before those
+        // rules existed could seed a fresh one carrying the same fault.
+        var source = new SyncJob
+        {
+            Name = "Nightly",
+            Branch = "main",
+            Schedule = new ScheduleProfile { Kind = ScheduleKind.Hourly, IntervalHours = 48 },
+        };
+        var vm = NewViewModel(source);
+        await vm.LoadAsync();
+
+        await vm.DuplicateCommand.ExecuteAsync(source);
+
+        Assert.Contains("can't be duplicated", vm.StatusMessage);
+        Assert.Contains("hourly interval", vm.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        await _jobs.DidNotReceive().UpsertAsync(
+            Arg.Is<SyncJob>(j => j.Id != source.Id), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Duplicate_CreatesAPausedDeepCopy_WithFreshIdentityAndBlankHistory()
     {
         var source = new SyncJob

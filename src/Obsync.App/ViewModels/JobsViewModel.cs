@@ -210,6 +210,18 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         copy.Id = Guid.NewGuid();
         copy.Name = DuplicateName(job.Name, Jobs.Select(j => j.Name));
         copy.Enabled = false;
+
+        // Duplicate is the third route that writes a job, and it applied none of the rules the other
+        // two do — a JSON round-trip of the source, straight to the repository. A job saved before
+        // those rules existed could therefore still seed a fresh one that inherits the same problem.
+        // Refusing here rather than warning: the copy would carry the fault whatever the user did
+        // next, and the source job is the thing to fix.
+        if (JobSafetyFloor.FirstProblem(copy, _clock.UtcNow) is { } problem)
+        {
+            StatusMessage = $"“{job.Name}” can't be duplicated as it stands. {problem}";
+            return;
+        }
+
         copy.RunSummary = new JobRunSummary();
         copy.CreatedAt = copy.UpdatedAt = _clock.UtcNow;
         await _jobs.UpsertAsync(copy);

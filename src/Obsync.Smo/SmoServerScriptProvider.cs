@@ -41,6 +41,11 @@ public sealed class SmoServerScriptProvider : IServerObjectScriptProvider
         var server = SmoConnection.BuildServer(request);
         await SmoConnection.ConnectWithRetryAsync(server, request.MaxRetries, _logger, cancellationToken).ConfigureAwait(false);
 
+        // Return the pooled connection when this enumerator is disposed. Without it the primary
+        // connection stayed checked out for the process lifetime — one per database, plus the
+        // server pass — while only the slice workers were ever disconnected.
+        using var lease = SmoConnection.Lease(server, _logger);
+
         // Bound how long SMO's metadata reads wait on locks (fail fast on a busy server). 0 = unset.
         if (request.SqlLockTimeoutSeconds > 0)
         {

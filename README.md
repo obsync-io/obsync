@@ -48,7 +48,7 @@ src/
   Obsync.Shared      Domain models, result types, validation, path mapping, hashing, normalization
   Obsync.Data        SQLite local state: schema, migrations, repositories
   Obsync.Metadata    Raw SQL Server metadata readers (Microsoft.Data.SqlClient)
-  Obsync.Smo         SMO scripter for full object-type coverage and high fidelity
+  Obsync.Smo         SMO scripter for the catalogued object types, at high fidelity
   Obsync.Git         Local Git workspace: clone, pull, diff, commit, push
   Obsync.GitHub      GitHub API integration (Octokit.NET)
   Obsync.Scheduler   Scheduling abstractions over Quartz.NET

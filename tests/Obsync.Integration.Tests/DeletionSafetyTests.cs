@@ -68,6 +68,12 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
         services.AddSingleton(Substitute.For<ISecurityAnalysisReader>());
         services.AddSingleton(Substitute.For<IReferenceDataReader>());
         services.AddSingleton(Substitute.For<IModifiedObjectReader>());
+        var unsupported = Substitute.For<IUnsupportedObjectReader>();
+        unsupported.ReadAsync(
+                Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<int>(),
+                Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UnsupportedObjectGroup>>([]));
+        services.AddSingleton(unsupported);
         services.AddSingleton(Substitute.For<IRunAlertService>());
         services.AddSingleton<ICredentialStore>(new FakeCredentialStore());
         services.Configure<ObsyncEngineOptions>(o => o.WorkspacesRoot = Path.Combine(_root, "workspaces"));

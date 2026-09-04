@@ -14,6 +14,36 @@ namespace Obsync.Smo;
 /// </summary>
 internal static class SmoConnection
 {
+    /// <summary>
+    /// Disconnects <paramref name="server"/> when the scope ends, however it ends.
+    ///
+    /// An explicit <c>Connect()</c> pins the pooled connection open: SMO's own auto-return-to-pool
+    /// is disabled once a caller connects deliberately, so the underlying connection stays checked
+    /// out until someone disconnects. The slice workers already do this in a <c>finally</c>; the two
+    /// primary connections did not, leaking one per database per run plus one for the server pass,
+    /// and leaving those sessions open on the SQL Server for as long as they survived.
+    ///
+    /// A scope rather than a try/finally because both callers are <c>async IAsyncEnumerable</c>
+    /// iterators — this disposes when the enumerator does, including on an early break.
+    /// </summary>
+    public static IDisposable Lease(SmoServer server, ILogger logger) => new ConnectionLease(server, logger);
+
+    private sealed class ConnectionLease(SmoServer server, ILogger logger) : IDisposable
+    {
+        public void Dispose()
+        {
+            try
+            {
+                server.ConnectionContext.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                // Best-effort teardown; a failed disconnect must not mask the caller's outcome.
+                logger.LogDebug("Disconnecting an SMO connection failed: {Message}", ex.Message);
+            }
+        }
+    }
+
     /// <summary>Builds an unconnected SMO server from the request's profile (no database — server-level).</summary>
     public static SmoServer BuildServer(ScriptRequest request)
     {

@@ -204,7 +204,35 @@ public sealed class ScheduleProfile
 
     /// <summary>A local wall-clock time as a DateTimeOffset, with the UTC offset in effect at THAT date.</summary>
     private static DateTimeOffset Local(DateTime wallClock) =>
-        new(DateTime.SpecifyKind(wallClock, DateTimeKind.Local));
+        new(ExistingLocalTime(wallClock, TimeZoneInfo.Local));
+
+    /// <summary>
+    /// <paramref name="wallClock"/> if the zone has such a time, else the first minute after the gap
+    /// that it does.
+    ///
+    /// On the spring-forward date an hour of wall-clock time does not occur. Constructing a
+    /// DateTimeOffset from one anyway yields an instant on the far side of the gap — so a 02:30 daily
+    /// job resolved to 03:30, which a maintenance window admitting 02:00–03:00 then rejected, and the
+    /// preview reported a time inside an hour that never happened. Moving to the first time that does
+    /// exist matches what the clock does, and makes the window see the instant the run really takes.
+    ///
+    /// A minute at a time rather than by a computed offset: gaps are not all an hour (Lord Howe
+    /// shifts thirty minutes), and this is obviously correct at the cost of a loop that only ever
+    /// spins on one date a year. Takes the zone as a parameter so the behaviour is testable off a
+    /// machine that observes DST at all.
+    /// </summary>
+    internal static DateTime ExistingLocalTime(DateTime wallClock, TimeZoneInfo zone)
+    {
+        // Probed as Unspecified on purpose: IsInvalidTime answers false for a Local-kind value unless
+        // the zone IS the system-local one, so asking with Local kind silently never detects a gap.
+        var probe = DateTime.SpecifyKind(wallClock, DateTimeKind.Unspecified);
+        for (var i = 0; zone.IsInvalidTime(probe) && i < 180; i++)
+        {
+            probe = probe.AddMinutes(1);
+        }
+
+        return DateTime.SpecifyKind(probe, DateTimeKind.Local);
+    }
 
     /// <summary>
     /// Why this schedule cannot be turned into a trigger, or null when it can. Every entry point
