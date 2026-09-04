@@ -93,6 +93,16 @@ public sealed class ScheduleProfile
     /// </summary>
     public DateTimeOffset? GetNextRun(DateTimeOffset fromUtc)
     {
+        // A window that can never admit this schedule has no next run to report, and saying so is
+        // the whole difference between "here is when it runs" and "I stopped looking". Answering it
+        // exactly, up front, is also what makes the bounded loops below unable to give up: they now
+        // only ever run for a schedule that HAS an occurrence to find, so their bounds are backstops
+        // rather than verdicts.
+        if (NeverRunsInsideItsWindow())
+        {
+            return null;
+        }
+
         // Work in the local wall-clock domain and convert at the end: building candidates with
         // TODAY'S offset would mislabel a fire time that falls on the other side of a DST
         // transition (Local() applies the offset in effect at the candidate's own date).
@@ -118,7 +128,7 @@ public sealed class ScheduleProfile
                     candidate = NextHourlyFireAfter(candidate, step);
                 }
 
-                return Local(candidate);
+                return AdmittedOrNull(candidate);
             }
 
             case ScheduleKind.Daily:
@@ -136,7 +146,7 @@ public sealed class ScheduleProfile
                     candidate = candidate.AddDays(1);
                 }
 
-                return Local(candidate);
+                return AdmittedOrNull(candidate);
             }
 
             case ScheduleKind.Weekly:
@@ -153,7 +163,7 @@ public sealed class ScheduleProfile
                     candidate = candidate.AddDays(7);
                 }
 
-                return Local(candidate);
+                return AdmittedOrNull(candidate);
             }
 
             default:
@@ -162,6 +172,15 @@ public sealed class ScheduleProfile
     }
 
     private static DateTime At(DateTime date, TimeOnly time) => date.Date + time.ToTimeSpan();
+
+    /// <summary>
+    /// The candidate as a local instant, or null when the maintenance window still does not admit it.
+    /// Only a loop that gave up can land here, which the pre-check in <see cref="GetNextRun"/> makes
+    /// unreachable — but handing back the out-of-window candidate anyway is exactly what made "here is
+    /// the next run" indistinguishable from "I stopped looking", so it is not done.
+    /// </summary>
+    private DateTimeOffset? AdmittedOrNull(DateTime candidate) =>
+        MaintenanceWindowEnabled && !IsWithinMaintenanceWindow(Local(candidate)) ? null : Local(candidate);
 
     /// <summary>
     /// The first Hourly occurrence strictly after <paramref name="hour"/> (a whole hour), on the grid
@@ -199,6 +218,14 @@ public sealed class ScheduleProfile
                 + "Daily cadence; for a longer gap use a Cron expression (for example '0 0 3 1/2 * ?' runs at "
                 + "03:00 every second day)."
             : null;
+
+    /// <summary>
+    /// Whether an enabled maintenance window can never admit this schedule, so it has no next run at
+    /// all. The verdict behind <see cref="MaintenanceWindowConflictReason"/>, named for the callers
+    /// that want the answer rather than the explanation — <see cref="GetNextRun"/> and the Jobs list.
+    /// Kept as a wrapper so there is exactly one definition of what "never runs" means.
+    /// </summary>
+    public bool NeverRunsInsideItsWindow() => MaintenanceWindowConflictReason() is not null;
 
     /// <summary>
     /// Why an enabled maintenance window can never admit this schedule, or null when at least one

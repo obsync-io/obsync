@@ -91,11 +91,26 @@
                         <TextBlock Text="Overdue" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}"
                                    VerticalAlignment="Center" />
                     </StackPanel>
+                    <StackPanel x:Name="NeverRuns" Orientation="Horizontal" Visibility="Collapsed"
+                                ToolTip="This job's maintenance window can never admit its schedule, so no run will ever start. Edit the schedule or the window.">
+                        <Ellipse Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                 Fill="{StaticResource WarningBrush}" />
+                        <TextBlock Text="Never runs" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
                 </Grid>
                 <DataTemplate.Triggers>
                     <DataTrigger Binding="{Binding IsOverdue}" Value="True">
                         <Setter TargetName="Stamp" Property="Visibility" Value="Collapsed" />
                         <Setter TargetName="Overdue" Property="Visibility" Value="Visible" />
+                    </DataTrigger>
+                    <!-- Declared after Overdue so it wins: a schedule its window can never admit is
+                         not running late, it is misconfigured, and reconcile keeps refreshing the
+                         next-run stamp from Quartz (which ignores the window) either way. -->
+                    <DataTrigger Binding="{Binding NeverRuns}" Value="True">
+                        <Setter TargetName="Stamp" Property="Visibility" Value="Collapsed" />
+                        <Setter TargetName="Overdue" Property="Visibility" Value="Collapsed" />
+                        <Setter TargetName="NeverRuns" Property="Visibility" Value="Visible" />
                     </DataTrigger>
                 </DataTemplate.Triggers>
             </DataTemplate>

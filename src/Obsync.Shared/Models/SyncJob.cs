@@ -175,6 +175,15 @@ public sealed class SyncJob
     /// </summary>
     public bool IsOverdue { get; set; }
 
+    /// <summary>
+    /// True when this job is enabled but its maintenance window can never admit its schedule, so it
+    /// will not run at all. Driven by the schedule rather than by the cached next-run time on
+    /// purpose: the service's reconcile refreshes that time from Quartz, which does not know about
+    /// the window, so a starved job otherwise shows a confident date it will never honour. Computed,
+    /// not persisted — the schedule is the whole input.
+    /// </summary>
+    public bool NeverRuns => Enabled && Schedule.NeverRunsInsideItsWindow();
+
     /// <summary>How far past its cached next-run time a schedule may drift before it counts as
     /// overdue — absorbs scheduler startup, reconcile latency, and run-lock waits.</summary>
     public static readonly TimeSpan ScheduleOverdueGrace = TimeSpan.FromMinutes(5);

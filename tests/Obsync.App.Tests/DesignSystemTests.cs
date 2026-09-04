@@ -125,6 +125,67 @@ public sealed class DesignSystemTests
         Assert.Equal("Not run", renderedText);
     }
 
+    [Theory]
+    [InlineData(true, "NeverRuns")]
+    [InlineData(false, "Stamp")]
+    public void NextRunCell_ShowsNeverRuns_ForAScheduleItsWindowCanNeverAdmit(bool starved, string expectedVisible)
+    {
+        // A starved job keeps a confident next-run stamp, because the service's reconcile refreshes
+        // it from Quartz every 30s and Quartz does not know about the maintenance window. So the
+        // cell has to be driven by the schedule, not by the stamp — and a mistyped binding would
+        // fail silently, leaving the misleading date on screen.
+        Exception? error = null;
+        Visibility neverRuns = default, stamp = default;
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var app = Application.Current ?? CreateApp();
+                var template = (DataTemplate)app.FindResource("NextRunCellTemplate");
+                var job = new Obsync.Shared.Models.SyncJob
+                {
+                    Name = "Nightly",
+                    Enabled = true,
+                    Schedule = new Obsync.Shared.Models.ScheduleProfile
+                    {
+                        Kind = ScheduleKind.Weekly,
+                        DayOfWeek = DayOfWeek.Sunday,
+                        TimeOfDay = new TimeOnly(23, 0),
+                        MaintenanceWindowEnabled = true,
+                        WindowStart = new TimeOnly(22, 0),
+                        WindowEnd = new TimeOnly(5, 0),
+                        // Weekdays-only never admits a Sunday 23:00 occurrence; AnyDay always does.
+                        DayScope = starved ? MaintenanceDayScope.WeekdaysOnly : MaintenanceDayScope.AnyDay,
+                    },
+                    RunSummary = new Obsync.Shared.Models.JobRunSummary { NextRunAt = DateTimeOffset.UtcNow.AddHours(3) },
+                };
+
+                var content = new ContentControl { Content = job, ContentTemplate = template };
+                _ = new Window { Width = 240, Height = 60, Content = content };
+                content.Measure(new Size(240, 60));
+                content.Arrange(new Rect(0, 0, 240, 60));
+                content.UpdateLayout();
+
+                var presenter = (ContentPresenter)VisualTreeHelper.GetChild(content, 0);
+                neverRuns = ((FrameworkElement)template.FindName("NeverRuns", presenter)).Visibility;
+                stamp = ((FrameworkElement)template.FindName("Stamp", presenter)).Visibility;
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.True(error is null, $"Rendering the next-run cell threw: {error}");
+        Assert.Equal(expectedVisible == "NeverRuns" ? Visibility.Visible : Visibility.Collapsed, neverRuns);
+        Assert.Equal(expectedVisible == "Stamp" ? Visibility.Visible : Visibility.Collapsed, stamp);
+    }
+
     private static string? FirstTextBlockText(DependencyObject root)
     {
         if (root is TextBlock { Text.Length: > 0 } tb)

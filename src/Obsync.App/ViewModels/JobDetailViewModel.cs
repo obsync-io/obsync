@@ -217,7 +217,12 @@ public sealed partial class JobDetailViewModel : ObservableObject
         ScheduleText = job.Schedule.Describe();
         Status = job.RunSummary.LastStatus;
         LastRunText = job.RunSummary.LastRunAt is { } at ? at.LocalDateTime.ToString("g") : "Never run";
-        NextRunText = job.RunSummary.NextRunAt is { } next ? next.LocalDateTime.ToString("g") : "—";
+        // "Never runs" beats any stamp: reconcile refreshes the cached time from Quartz, which does
+        // not consult the maintenance window, so a starved job would otherwise show a date it cannot
+        // honour rather than the reason it is idle.
+        NextRunText = job.NeverRuns
+            ? "Never runs — the maintenance window can never admit this schedule"
+            : job.RunSummary.NextRunAt is { } next ? next.LocalDateTime.ToString("g") : "—";
         job.IsRunning = _coordinator.IsRunning(job.Id);
         IsOverdue = job.IsScheduleOverdue(_clock.UtcNow);
 

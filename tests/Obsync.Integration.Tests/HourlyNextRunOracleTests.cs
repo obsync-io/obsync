@@ -79,12 +79,10 @@ public sealed class HourlyNextRunOracleTests
                 WindowEnd = end,
             };
 
-            // A window that admits no occurrence at all is refused at save time, so it is not a
-            // configuration this method is ever asked about in production.
-            if (schedule.MaintenanceWindowConflictReason() is not null)
-            {
-                continue;
-            }
+            // Starved windows are included deliberately. The oracle runs out of occurrences and
+            // returns null for them, and GetNextRun now says null too instead of handing back the
+            // last out-of-window candidate — so the two agree on "never", not just on "when".
+            var starved = schedule.MaintenanceWindowConflictReason() is not null;
 
             for (var hour = 0; hour < 24; hour++)
             {
@@ -93,9 +91,8 @@ public sealed class HourlyNextRunOracleTests
                 var predicted = schedule.GetNextRun(from);
                 var actual = TrueNextInWindow(schedule, from);
 
-                Assert.NotNull(predicted);
-                Assert.NotNull(actual);
-                Assert.Equal(actual!.Value, predicted!.Value);
+                Assert.Equal(starved, predicted is null);
+                Assert.Equal(actual, predicted);
             }
         }
     }

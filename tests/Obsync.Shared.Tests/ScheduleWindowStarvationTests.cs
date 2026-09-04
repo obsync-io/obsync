@@ -215,6 +215,160 @@ public sealed class ScheduleWindowStarvationTests
         Assert.Contains("never", schedule.MaintenanceWindowConflictReason());
     }
 
+    // --- A starved schedule has no next run, and says so ------------------------------------------
+
+    [Fact]
+    public void GetNextRun_WeeklyStarvedByTheDayScope_IsNullRatherThanADateFourteenMonthsOut()
+    {
+        // The reported case. The advance loop steps a week at a time and gives up after 60 tries,
+        // then handed back that last candidate — a date well over a year away that is not inside the
+        // window either. No caller could tell it apart from a real answer.
+        var schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Weekly,
+            DayOfWeek = DayOfWeek.Sunday,
+            TimeOfDay = new TimeOnly(23, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+            DayScope = MaintenanceDayScope.WeekdaysOnly,
+        };
+
+        Assert.Null(schedule.GetNextRun(LocalAt(2026, 3, 1, 12)));
+    }
+
+    [Fact]
+    public void GetNextRun_HourlyStarvedByTheWindow_IsNull()
+    {
+        Assert.Null(Hourly(7, new TimeOnly(1, 0), new TimeOnly(4, 0)).GetNextRun(LocalAt(2026, 3, 1, 12)));
+    }
+
+    [Fact]
+    public void GetNextRun_DailyStarvedByTheWindow_IsNull()
+    {
+        var schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Daily,
+            TimeOfDay = new TimeOnly(12, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+        };
+
+        Assert.Null(schedule.GetNextRun(LocalAt(2026, 3, 1, 8)));
+    }
+
+    [Fact]
+    public void GetNextRun_ZeroLengthWindow_IsNull()
+    {
+        Assert.Null(Hourly(1, new TimeOnly(3, 0), new TimeOnly(3, 0)).GetNextRun(LocalAt(2026, 3, 1, 12)));
+    }
+
+    [Fact]
+    public void GetNextRun_ScheduleTheWindowDoesAdmit_StillReturnsIt()
+    {
+        // The other half of the rule: null has to mean "never", not "windows are hard".
+        var next = Hourly(6, new TimeOnly(22, 0), new TimeOnly(5, 0)).GetNextRun(LocalAt(2026, 3, 1, 12));
+
+        Assert.NotNull(next);
+        Assert.Equal(new DateTime(2026, 3, 2, 0, 0, 0), next!.Value.ToLocalTime().DateTime);
+    }
+
+    [Fact]
+    public void GetNextRun_NeverGivesUpOnAScheduleTheWindowAdmits()
+    {
+        // The safety property of the whole change: null must mean "never", so the bounded loops must
+        // never be able to exhaust for a schedule that has an occurrence to find. Sweeps Daily and
+        // Weekly across every day scope and a set of windows including a single-hour one, which is
+        // the narrowest a user can express and so the longest the search can be made to walk.
+        var windows = new[]
+        {
+            (Start: new TimeOnly(22, 0), End: new TimeOnly(5, 0)),
+            (Start: new TimeOnly(3, 0), End: new TimeOnly(4, 0)),
+            (Start: new TimeOnly(9, 0), End: new TimeOnly(17, 0)),
+            (Start: new TimeOnly(0, 30), End: new TimeOnly(6, 0)),
+        };
+        var from = LocalAt(2026, 3, 1, 12);
+        var checkedCount = 0;
+
+        foreach (var (start, end) in windows)
+        {
+            foreach (var scope in Enum.GetValues<MaintenanceDayScope>())
+            {
+                foreach (var hour in new[] { 0, 3, 9, 12, 23 })
+                {
+                    var daily = new ScheduleProfile
+                    {
+                        Kind = ScheduleKind.Daily,
+                        TimeOfDay = new TimeOnly(hour, 0),
+                        MaintenanceWindowEnabled = true,
+                        WindowStart = start,
+                        WindowEnd = end,
+                        DayScope = scope,
+                    };
+                    if (!daily.NeverRunsInsideItsWindow())
+                    {
+                        checkedCount++;
+                        var next = daily.GetNextRun(from);
+                        Assert.True(next is not null, $"Daily {hour:00}:00 in {start}-{end} {scope} gave up");
+                        Assert.True(daily.IsWithinMaintenanceWindow(next!.Value));
+                    }
+
+                    foreach (var day in Enum.GetValues<DayOfWeek>())
+                    {
+                        var weekly = new ScheduleProfile
+                        {
+                            Kind = ScheduleKind.Weekly,
+                            DayOfWeek = day,
+                            TimeOfDay = new TimeOnly(hour, 0),
+                            MaintenanceWindowEnabled = true,
+                            WindowStart = start,
+                            WindowEnd = end,
+                            DayScope = scope,
+                        };
+                        if (weekly.NeverRunsInsideItsWindow())
+                        {
+                            continue;
+                        }
+
+                        checkedCount++;
+                        var next = weekly.GetNextRun(from);
+                        Assert.True(next is not null, $"Weekly {day} {hour:00}:00 in {start}-{end} {scope} gave up");
+                        Assert.True(weekly.IsWithinMaintenanceWindow(next!.Value));
+                    }
+                }
+            }
+        }
+
+        Assert.True(checkedCount > 100, $"the sweep only covered {checkedCount} admissible schedules");
+    }
+
+    [Fact]
+    public void NeverRuns_IsTrueOnlyForAnEnabledJobItsWindowStarves()
+    {
+        var starved = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Weekly,
+            DayOfWeek = DayOfWeek.Sunday,
+            TimeOfDay = new TimeOnly(23, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+            DayScope = MaintenanceDayScope.WeekdaysOnly,
+        };
+
+        Assert.True(new SyncJob { Schedule = starved, Enabled = true }.NeverRuns);
+
+        // A paused job already says "Paused"; labelling it "Never runs" as well would contradict it.
+        Assert.False(new SyncJob { Schedule = starved, Enabled = false }.NeverRuns);
+
+        Assert.False(new SyncJob { Schedule = new ScheduleProfile { Kind = ScheduleKind.Daily } }.NeverRuns);
+    }
+
+    // Local-wall-clock anchor: GetNextRun works in local time, so these pin the local date.
+    private static DateTimeOffset LocalAt(int year, int month, int day, int hour, int minute = 0) =>
+        new(new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Local));
+
     [Fact]
     public void Weekly_SundayEarlyMorningAttributedToSaturdaysWindow_IsAllowed()
     {
