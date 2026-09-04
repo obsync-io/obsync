@@ -57,8 +57,10 @@ public sealed class SupportInfoService : ISupportInfoService
         try
         {
             var heartbeat = await _settings.GetSchedulerHeartbeatAsync(cancellationToken).ConfigureAwait(false);
-            var fresh = heartbeat is not null
-                && _clock.UtcNow - heartbeat.TimestampUtc <= SchedulerHealthService.HeartbeatFreshness;
+            // Bounded at both ends, like the scheduler-health check: a future-dated heartbeat would
+            // otherwise read as fresh indefinitely and report a phantom service version.
+            var age = heartbeat is null ? (TimeSpan?)null : _clock.UtcNow - heartbeat.TimestampUtc;
+            var fresh = age is { } a && a >= TimeSpan.Zero && a <= SchedulerHealthService.HeartbeatFreshness;
             return fresh ? heartbeat!.Version : "not running";
         }
         catch (Exception)

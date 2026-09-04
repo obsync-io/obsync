@@ -31,9 +31,13 @@ Double-click the MSI. The wizard steps are:
      your jobs or run schedules, because Obsync's data and credentials live in the *per-user*
      profile and Windows Credential Manager vault. The app shows a scheduler warning until the
      account is fixed.
-   - **This account**: enter `DOMAIN\user` and password — **the same account that runs the Obsync
-     app**, so the service sees the credentials and data the app saved. For a group Managed Service
-     Account enter `DOMAIN\name$` and leave the password blank.
+   - **This account**: enter `DOMAIN\user` (or `.\user` on a standalone PC) and its password —
+     **the same account that runs the Obsync app**, so the service sees the credentials and data the
+     app saved. The account also needs the **"Log on as a service"** right; if it does not have it,
+     the install still succeeds but the service will not start (see below). For a group Managed
+     Service Account enter `DOMAIN\name$` and leave the password blank — the wizard only accepts a
+     blank password for account kinds Windows logs on without one (`DOMAIN\name$`, `NT SERVICE\...`,
+     `NT AUTHORITY\...`).
 5. **Ready to install** → **Install** (elevation prompt) → progress.
 6. **Finish** — with an optional "Launch Obsync" checkbox.
 
@@ -85,15 +89,23 @@ older version in place (same or different folder — settings, jobs, and credent
 install folder and are untouched). Installing an *older* version over a newer one is blocked with
 "A newer version of Obsync is already installed."
 
-**Service account on upgrade:** the last configured logon account is remembered (registry,
-`HKLM\SOFTWARE\Obsync\ServiceAccount`) and used as the default, so an upgrade never silently resets
-a working service to Local System. Windows cannot remember the *password*, so:
+**Service account on upgrade:** the account the service is *currently* configured with is used as
+the default, so an upgrade never silently resets a working service to Local System. It is read from
+the service itself (`HKLM\SYSTEM\CurrentControlSet\Services\Obsync\ObjectName`), falling back to the
+value Obsync recorded at install time (`HKLM\SOFTWARE\Obsync\ServiceAccount`) — so a later change
+made with `sc.exe config` or the services.msc **Log On** tab is picked up too, instead of being
+reverted. It is only a *default*: an account you type in the wizard, or pass on the command line,
+always wins.
 
-- **Interactive upgrade** — the Service Account page opens preselected with the remembered account;
-  re-enter the password (gMSA accounts need none).
+Windows cannot remember the *password*, so:
+
+- **Interactive upgrade** — the Service Account page opens preselected with the current account;
+  re-enter the password. The wizard will not let you continue with a blank one unless the account is
+  a kind that logs on without a password (gMSA, `NT SERVICE\...`, `NT AUTHORITY\...`).
 - **Silent upgrade** of a password-logon service — pass `SERVICE_PASSWORD="..."` again (the account
   is remembered; without the password the service is reconfigured but cannot start, and the app's
   scheduler warning says so). gMSA and Local System silent upgrades need nothing extra.
+  Silent installs are **not** covered by the wizard's blank-password check.
 
 ## What the service does
 

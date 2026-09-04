@@ -44,6 +44,13 @@ public sealed class JobSchedulingBootstrapper : IHostedService
     {
         await _databaseInitializer.InitializeAsync(cancellationToken).ConfigureAwait(false);
 
+        // Beacon as soon as the database can take it. The SCM reports SERVICE_RUNNING once OnStart
+        // returns, so every step below — crash recovery, one alert per recovered run (each with its
+        // own multi-second timeout), then scheduling every job — is time the app would otherwise
+        // spend telling a correctly configured user that the service runs under the wrong account.
+        // It is refreshed again after ScheduleAllAsync, and every 30s by JobReconciliationService.
+        await WriteBeaconAsync(cancellationToken).ConfigureAwait(false);
+
         // Crash recovery: fail "Running" rows whose owning process died (lock no longer held), so a
         // service or machine crash mid-run leaves an honest Failed entry instead of a stuck one.
         var recovered = await OrphanedRunCleaner.CleanAsync(
@@ -68,7 +75,7 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         }
 
         await _scheduler.ScheduleAllAsync(cancellationToken).ConfigureAwait(false);
-        await SchedulerBeacon.WriteAsync(_settings, cancellationToken).ConfigureAwait(false);
+        await WriteBeaconAsync(cancellationToken).ConfigureAwait(false);
 
         // Log the identity so credential-isolation problems are diagnosable: secrets in Windows
         // Credential Manager are per-user, so scheduled runs only work if the app saved them under
@@ -76,6 +83,23 @@ public sealed class JobSchedulingBootstrapper : IHostedService
         _logger.LogInformation(
             "Obsync service started and jobs scheduled. Running as {Domain}\\{User}.",
             Environment.UserDomainName, Environment.UserName);
+    }
+
+    /// <summary>
+    /// Best-effort beacon write. A liveness signal must never be able to abort service startup —
+    /// the app and the service race to migrate the same database on install (the MSI starts the
+    /// service and launches the app back-to-back), so this write can legitimately hit SQLITE_BUSY.
+    /// </summary>
+    private async Task WriteBeaconAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SchedulerBeacon.WriteAsync(_settings, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not write the scheduler heartbeat; the next tick will retry.");
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

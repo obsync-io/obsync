@@ -51,15 +51,38 @@
     <!-- Windows Service logon account. Defaults to LocalSystem (functional host, but it cannot reach
          the interactive user's Credential Manager / data root, so scheduled runs need a real account
          here; Secure so it can be set during a silent, elevated install). The last configured account
-         is remembered in the registry so a MAJOR UPGRADE does not silently reset a working service
-         back to LocalSystem — Windows cannot remember the password, so an interactive upgrade
-         prefills the account and asks for the password again, and a silent upgrade of a
-         password-logon service must re-pass SERVICE_PASSWORD (gMSA/LocalSystem need none). -->
-    <Property Id="SERVICE_ACCOUNT" Secure="yes">
+         is remembered so a MAJOR UPGRADE does not silently reset a working service back to
+         LocalSystem — Windows cannot remember the password, so an interactive upgrade prefills the
+         account and asks for the password again, and a silent upgrade of a password-logon service
+         must re-pass SERVICE_PASSWORD (gMSA/virtual/LocalSystem accounts need none). -->
+    <Property Id="SERVICE_ACCOUNT" Secure="yes" />
+    <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <!-- The remembered account is searched into its OWN property, never straight into
+         SERVICE_ACCOUNT. AppSearch overwrites a property that is already set, and it runs at
+         sequence 50 of BOTH sequences — so searching into SERVICE_ACCOUNT discarded every explicit
+         answer: a command-line SERVICE_ACCOUNT on a silent upgrade (applying the newly supplied
+         password to the OLD account), and even the dialog's own answer, because the UI sequence's
+         value was clobbered when AppSearch re-ran in the execute sequence. The Property-table
+         default survives a failed search, which is what makes LocalSystem the first-install value. -->
+    <Property Id="SERVICE_ACCOUNT_REMEMBERED" Value="LocalSystem">
       <RegistrySearch Id="RememberedServiceAccount" Root="HKLM" Key="SOFTWARE\Obsync" Name="ServiceAccount" Type="raw" />
     </Property>
-    <SetProperty Id="SERVICE_ACCOUNT" Value="LocalSystem" After="AppSearch" Condition="NOT SERVICE_ACCOUNT" />
-    <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <!-- What the service is configured with RIGHT NOW, from the SCM's own registry. Preferred over
+         our remembered copy because it also reflects an out-of-band change (`sc.exe config`, or the
+         services.msc Log On tab — both of which INSTALL.md tells users to use), so a repair or an
+         upgrade can no longer silently revert one. -->
+    <Property Id="SERVICE_ACCOUNT_INSTALLED">
+      <RegistrySearch Id="InstalledServiceAccount" Root="HKLM"
+                      Key="SYSTEM\CurrentControlSet\Services\Obsync" Name="ObjectName" Type="raw" />
+    </Property>
+    <SetProperty Id="SERVICE_ACCOUNT_REMEMBERED" Value="[SERVICE_ACCOUNT_INSTALLED]" After="AppSearch"
+                 Condition="SERVICE_ACCOUNT_INSTALLED" />
+
+    <!-- The remembered account is only a DEFAULT: an explicit answer always wins. -->
+    <SetProperty Id="SERVICE_ACCOUNT" Value="[SERVICE_ACCOUNT_REMEMBERED]" After="SetSERVICE_ACCOUNT_REMEMBERED"
+                 Condition="NOT SERVICE_ACCOUNT" />
 
     <!-- Interactive-only staging for the Service Account dialog. The dialog copies its answers into
          SERVICE_ACCOUNT / SERVICE_PASSWORD on Next, so silent installs are untouched. A remembered
@@ -245,7 +268,15 @@
       <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_ACCOUNT" Value="LocalSystem" Order="4" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot;" />
       <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Property="SERVICE_PASSWORD" Value="{}" Order="5" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot;" />
       <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Event="SpawnDialog" Value="ObsyncAccountRequiredDlg" Order="6" Condition="SERVICE_ACCOUNT_MODE = &quot;custom&quot; AND NOT SERVICE_ACCOUNT_NAME" />
-      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="7" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot; OR SERVICE_ACCOUNT_NAME" />
+      <!-- Obsync: a blank password is a legitimate answer only for accounts Windows logs on without
+           one — a gMSA (trailing "$"), a virtual account (NT SERVICE\...), or a built-in service
+           account (NT AUTHORITY\...). For anything else it reaches CreateService as a NULL password
+           and the service installs but cannot log on (error 1069), which a click-through UPGRADE
+           reproduces every time: the account is prefilled from the registry and the password box
+           never is. MSI's ends-with/starts-with operators do the test ("~" = case-insensitive);
+           the literals are quoted so the comparison stays a string one. -->
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Event="SpawnDialog" Value="ObsyncPasswordRequiredDlg" Order="7" Condition="SERVICE_ACCOUNT_MODE = &quot;custom&quot; AND SERVICE_ACCOUNT_NAME AND NOT SERVICE_ACCOUNT_PWD AND NOT (SERVICE_ACCOUNT_NAME &gt;&gt; &quot;$&quot;) AND NOT (SERVICE_ACCOUNT_NAME ~&lt;&lt; &quot;NT AUTHORITY\&quot;) AND NOT (SERVICE_ACCOUNT_NAME ~&lt;&lt; &quot;NT SERVICE\&quot;)" />
+      <Publish Dialog="ObsyncServiceAccountDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="8" Condition="SERVICE_ACCOUNT_MODE = &quot;system&quot; OR (SERVICE_ACCOUNT_NAME AND (SERVICE_ACCOUNT_PWD OR (SERVICE_ACCOUNT_NAME &gt;&gt; &quot;$&quot;) OR (SERVICE_ACCOUNT_NAME ~&lt;&lt; &quot;NT AUTHORITY\&quot;) OR (SERVICE_ACCOUNT_NAME ~&lt;&lt; &quot;NT SERVICE\&quot;)))" />
 
       <!-- Obsync: Back from Verify Ready returns to the Service Account dialog on first install. -->
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ObsyncServiceAccountDlg" Order="1" Condition="NOT Installed" />
@@ -283,9 +314,9 @@
         </Control>
 
         <!-- Obsync: label heights are 12 units — a Segoe UI 9 line does not fit the classic 10-unit
-             label, and the MSI Text control path-ellipsizes ("Account ...\gmsa$):") instead of
-             clipping when that happens. -->
-        <Control Id="AccountLabel" Type="Text" X="36" Y="98" Width="304" Height="12" NoPrefix="no" Text="&amp;Account (DOMAIN\user or DOMAIN\gmsa$):"
+             label, and an overflowing MSI Text control path-ellipsizes text containing backslashes
+             ("Account ...\user):") instead of clipping or wrapping when that happens. -->
+        <Control Id="AccountLabel" Type="Text" X="36" Y="98" Width="304" Height="12" NoPrefix="no" Text="&amp;Account (DOMAIN\user or .\user):"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="AccountEdit" Type="Edit" X="36" Y="112" Width="304" Height="16" Property="SERVICE_ACCOUNT_NAME"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
@@ -311,7 +342,19 @@
         </Control>
         <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
         <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="40" NoPrefix="yes"
-                 Text="Enter an account (DOMAIN\user or DOMAIN\gmsa$), or choose Local System." />
+                 Text="Enter an account (DOMAIN\user, or .\user for a local account), or choose Local System." />
+      </Dialog>
+
+      <!-- Obsync: shown when "This account" is selected with a blank password for an account that
+           is not one of the passwordless kinds. Same shape as ObsyncAccountRequiredDlg, one line
+           taller because the text names the exception. -->
+      <Dialog Id="ObsyncPasswordRequiredDlg" Width="260" Height="110" Title="[ProductName] Setup">
+        <Control Id="OK" Type="PushButton" X="100" Y="83" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
+        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="55" NoPrefix="yes"
+                 Text="Enter the password for this account. Without one the service is installed but cannot start. Only a group Managed Service Account (DOMAIN\name$) or a built-in service account logs on without a password." />
       </Dialog>
     </UI>
 

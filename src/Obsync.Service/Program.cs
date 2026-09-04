@@ -1,3 +1,4 @@
+using System.ServiceProcess;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.WindowsServices;
@@ -33,6 +34,14 @@ if (WindowsServiceHelpers.IsWindowsService())
 
 Log.Logger = loggerConfiguration.CreateLogger();
 
+// Non-zero so the SCM treats a fatal crash as a failure and applies the recovery actions the MSI
+// configures (restart after 60s, three times).
+const int FatalExitCode = 1;
+
+// Declared outside the try so the catch can report the failure to the SCM, and the finally can
+// dispose, even when the host threw while starting.
+IHost? host = null;
+
 try
 {
     var builder = Host.CreateApplicationBuilder(args);
@@ -58,17 +67,40 @@ try
     // Prunes run history per the retention setting (startup + daily).
     builder.Services.AddHostedService<RunRetentionService>();
 
-    await builder.Build().RunAsync();
+    // RunAsync is deliberately expanded here. It disposes the host in its own finally, and
+    // disposing the host disposes WindowsServiceLifetime — a ServiceBase, which reports
+    // SERVICE_STOPPED to the SCM using whatever ExitCode is set at that moment. Setting an exit
+    // code in a catch around RunAsync is therefore always too late: the SCM has already recorded a
+    // clean stop, and it keys the installer's restart-on-failure recovery off the *service* exit
+    // code, not the process one. Splitting the run lets the failure be reported before disposal.
+    host = builder.Build();
+    await host.StartAsync();
+    await host.WaitForShutdownAsync();
 }
 catch (Exception ex)
 {
     Log.Fatal(ex, "Obsync service terminated unexpectedly.");
 
     // A fatal crash must not look like a clean stop to the SCM, or the installer's
-    // restart-on-failure recovery never fires.
-    Environment.ExitCode = 1;
+    // restart-on-failure recovery never fires. Under a console/dev run IHostLifetime is a
+    // ConsoleLifetime rather than a ServiceBase, so this simply does not apply.
+    if (host?.Services.GetService<IHostLifetime>() is ServiceBase serviceLifetime)
+    {
+        serviceLifetime.ExitCode = FatalExitCode;
+    }
+
+    Environment.ExitCode = FatalExitCode;
 }
 finally
 {
+    if (host is IAsyncDisposable asyncDisposableHost)
+    {
+        await asyncDisposableHost.DisposeAsync();
+    }
+    else
+    {
+        host?.Dispose();
+    }
+
     await Log.CloseAndFlushAsync();
 }

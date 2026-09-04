@@ -32,10 +32,27 @@ public sealed class JobReconciliationService : BackgroundService
         using var timer = new PeriodicTimer(Interval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
+            // The beacon is written FIRST and in its own try, deliberately. It is a liveness signal,
+            // and the Quartz triggers keep firing whether or not a reconcile succeeds — so coupling
+            // the two made a transient reconcile failure (a SQLITE_BUSY behind the engine's
+            // whole-batch state transaction, say) report a perfectly healthy scheduler to the app
+            // as dead. Two consecutive skips already exceed SchedulerHealthService's 90s window.
+            try
+            {
+                await SchedulerBeacon.WriteAsync(_settings, stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not refresh the scheduler heartbeat; will retry.");
+            }
+
             try
             {
                 await _scheduler.ReconcileAsync(stoppingToken).ConfigureAwait(false);
-                await SchedulerBeacon.WriteAsync(_settings, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

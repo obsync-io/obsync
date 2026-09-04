@@ -14,6 +14,9 @@ public sealed class SchedulerHealthTests
 {
     private static readonly DateTimeOffset Now = new(2026, 7, 10, 8, 0, 0, TimeSpan.Zero);
 
+    /// <summary>The signed-in user, in the same shape CurrentActor.Name produces.</summary>
+    private const string Me = "CORP\\dba";
+
     private static SchedulerHeartbeat Heartbeat(TimeSpan age) => new()
     {
         TimestampUtc = Now - age,
@@ -24,7 +27,7 @@ public sealed class SchedulerHealthTests
     [Fact]
     public void NotInstalled_WhenTheServiceDoesNotExist()
     {
-        var health = SchedulerHealthService.Evaluate(null, null, null, Now);
+        var health = SchedulerHealthService.Evaluate(null, null, null, Now, Me);
 
         Assert.Equal(SchedulerHealthStatus.NotInstalled, health.Status);
         Assert.False(health.CanExecuteSchedules);
@@ -34,7 +37,7 @@ public sealed class SchedulerHealthTests
     public void NotRunning_WhenTheServiceIsStopped()
     {
         var health = SchedulerHealthService.Evaluate(
-            ServiceControllerStatus.Stopped, "CORP\\dba", Heartbeat(TimeSpan.FromSeconds(10)), Now);
+            ServiceControllerStatus.Stopped, "CORP\\dba", Heartbeat(TimeSpan.FromSeconds(10)), Now, Me);
 
         Assert.Equal(SchedulerHealthStatus.NotRunning, health.Status);
         Assert.False(health.CanExecuteSchedules);
@@ -44,7 +47,7 @@ public sealed class SchedulerHealthTests
     public void Healthy_WhenRunningWithAFreshHeartbeat()
     {
         var health = SchedulerHealthService.Evaluate(
-            ServiceControllerStatus.Running, "CORP\\dba", Heartbeat(TimeSpan.FromSeconds(45)), Now);
+            ServiceControllerStatus.Running, "CORP\\dba", Heartbeat(TimeSpan.FromSeconds(45)), Now, Me);
 
         Assert.Equal(SchedulerHealthStatus.Healthy, health.Status);
         Assert.True(health.CanExecuteSchedules);
@@ -56,7 +59,7 @@ public sealed class SchedulerHealthTests
     {
         // The classic broken default: service running as LocalSystem, whose per-user database
         // (where the heartbeat would land) is not this user's.
-        var health = SchedulerHealthService.Evaluate(ServiceControllerStatus.Running, "LocalSystem", null, Now);
+        var health = SchedulerHealthService.Evaluate(ServiceControllerStatus.Running, "LocalSystem", null, Now, Me);
 
         Assert.Equal(SchedulerHealthStatus.NotExecutingYourJobs, health.Status);
         Assert.False(health.CanExecuteSchedules);
@@ -64,13 +67,105 @@ public sealed class SchedulerHealthTests
     }
 
     [Fact]
-    public void NotExecutingYourJobs_WhenTheHeartbeatIsStale()
+    public void Unresponsive_WhenTheHeartbeatIsStale_AndNeverBlamesTheLogonAccount()
     {
+        // A stale heartbeat proves the service DID write into this database, so its account can see
+        // this user's jobs. Telling the user to set the Log On account to their own account would
+        // be telling them to set it to what it already is.
         var health = SchedulerHealthService.Evaluate(
-            ServiceControllerStatus.Running, "CORP\\dba", Heartbeat(TimeSpan.FromMinutes(10)), Now);
+            ServiceControllerStatus.Running, "CORP\\dba", Heartbeat(TimeSpan.FromMinutes(10)), Now, Me);
 
-        Assert.Equal(SchedulerHealthStatus.NotExecutingYourJobs, health.Status);
+        Assert.Equal(SchedulerHealthStatus.Unresponsive, health.Status);
         Assert.False(health.CanExecuteSchedules);
+        Assert.DoesNotContain("Log On", health.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("cannot see", health.Summary, StringComparison.Ordinal);
+        Assert.Contains("10 minutes", health.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Unresponsive_NamesTheHeartbeatAccount_NotTheRegistryObjectName()
+    {
+        // The registry ObjectName and the heartbeat account use different shapes for the same
+        // identity (".\alice" vs "MACHINE\alice"), so the stale message must quote the heartbeat —
+        // the authoritative record of who last wrote into THIS database.
+        var health = SchedulerHealthService.Evaluate(
+            ServiceControllerStatus.Running, ".\\dba", Heartbeat(TimeSpan.FromMinutes(10)), Now, Me);
+
+        Assert.Contains("CORP\\dba", health.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Unresponsive_WhenTheHeartbeatIsDatedInTheFuture()
+    {
+        // Unbounded freshness would treat a negative age as fresh and report a dead scheduler as
+        // healthy until the wall clock caught up (fast RTC corrected by NTP, restored snapshot).
+        var health = SchedulerHealthService.Evaluate(
+            ServiceControllerStatus.Running, "CORP\\dba", Heartbeat(TimeSpan.FromHours(-2)), Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.Unresponsive, health.Status);
+        Assert.False(health.CanExecuteSchedules);
+        Assert.Contains("system clock", health.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NotRunning_WhenStarting_DoesNotTellTheUserToStartIt()
+    {
+        // Delayed-auto-start means the app is routinely open while the service is still coming up.
+        var health = SchedulerHealthService.Evaluate(ServiceControllerStatus.StartPending, "CORP\\dba", null, Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.NotRunning, health.Status);
+        Assert.False(health.CanExecuteSchedules);
+        Assert.Contains("still starting", health.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NotRunning_PointsAtTheLogonAccount_TheCauseAWaitlessInstallLeavesBehind()
+    {
+        // The MSI starts the service with Wait="no", so a blank/wrong password or a missing
+        // "Log on as a service" right leaves a successfully installed but stopped service.
+        var health = SchedulerHealthService.Evaluate(ServiceControllerStatus.Stopped, "CORP\\dba", null, Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.NotRunning, health.Status);
+        Assert.Contains("Log On", health.Summary, StringComparison.Ordinal);
+        Assert.Contains("Log on as a service", health.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningAsAnotherAccount_WhenAFreshHeartbeatIsNotThisUsers()
+    {
+        // Only reachable with a shared OBSYNC_DATA_ROOT: the database is common, so the service
+        // heartbeats here and schedules do fire — but Credential Manager stays per-user, so a
+        // plain "Scheduling active" would suppress every warning while every run fails to auth.
+        var heartbeat = new SchedulerHeartbeat
+        {
+            TimestampUtc = Now - TimeSpan.FromSeconds(10),
+            Account = "CORP\\svc_obsync",
+            Version = "1.0.0",
+        };
+
+        var health = SchedulerHealthService.Evaluate(
+            ServiceControllerStatus.Running, "CORP\\svc_obsync", heartbeat, Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.RunningAsAnotherAccount, health.Status);
+        Assert.True(health.CanExecuteSchedules); // the schedules genuinely fire — no dead-schedule banner
+        Assert.Contains("CORP\\svc_obsync", health.Summary, StringComparison.Ordinal);
+        Assert.Contains(Me, health.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Healthy_WhenTheHeartbeatAccountDiffersOnlyByCase()
+    {
+        var heartbeat = new SchedulerHeartbeat
+        {
+            TimestampUtc = Now - TimeSpan.FromSeconds(10),
+            Account = "corp\\DBA",
+            Version = "1.0.0",
+        };
+
+        var health = SchedulerHealthService.Evaluate(
+            ServiceControllerStatus.Running, "CORP\\dba", heartbeat, Now, Me);
+
+        Assert.Equal(SchedulerHealthStatus.Healthy, health.Status);
     }
 
     [Theory]

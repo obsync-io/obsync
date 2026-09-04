@@ -275,9 +275,12 @@ public sealed class DiagnosticsService : IDiagnosticsService
         // SCM state alone can't answer "will MY schedules run" — the health service also checks the
         // logon account and the heartbeat the service writes into this user's database.
         var health = await _schedulerHealth.GetAsync(cancellationToken).ConfigureAwait(false);
+        // Keyed on Healthy, not CanExecuteSchedules: a service running under another account does
+        // execute these schedules (so no banner), but its separate credential vault is exactly the
+        // kind of thing diagnostics exists to surface.
         return new DiagnosticResult(
             "Obsync service",
-            health.CanExecuteSchedules ? DiagnosticStatus.Pass : DiagnosticStatus.Warning,
+            health.Status == SchedulerHealthStatus.Healthy ? DiagnosticStatus.Pass : DiagnosticStatus.Warning,
             health.Summary,
             _clock.UtcNow);
     }
