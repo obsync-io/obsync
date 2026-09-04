@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Obsync.Git;
+using Obsync.Shared.Results;
 using Xunit;
 
 namespace Obsync.Git.Tests;
@@ -120,6 +122,37 @@ public sealed class GitHardeningTests : IAsyncLifetime
         var clone = await _runner.RunAsync(_root, ["clone", "-q", origin, Path.Combine(_root, "clone")]);
 
         Assert.True(clone.Success, clone.StandardError);
+    }
+
+    [Fact]
+    public async Task TheAuthHeaderIsSentUnderAKeyScopedToTheRemote()
+    {
+        // The helper computing the prefix is tested above; this pins that the workspace actually
+        // USES it. An unscoped http.extraheader is the whole finding — it applies to whatever host
+        // the command reaches, including one substituted by a url.*.insteadOf rewrite.
+        IReadOnlyDictionary<string, string>? captured = null;
+        var runner = Substitute.For<IGitCommandRunner>();
+        runner.RunAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new GitCommandResult(0, string.Empty, string.Empty));
+        runner.RunAsync(
+                Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(),
+                Arg.Do<IReadOnlyDictionary<string, string>?>(e => captured ??= e), Arg.Any<CancellationToken>())
+            .Returns(new GitCommandResult(0, string.Empty, string.Empty));
+
+        var workspace = new GitWorkspace(runner, NullLogger<GitWorkspace>.Instance);
+        await workspace.PushAsync(new GitWorkspaceContext
+        {
+            RemoteUrl = "https://github.com/acme/repo.git",
+            Branch = "main",
+            LocalPath = Repo,
+            AuthorizationHeader = "AUTHORIZATION: basic ZmFrZQ==",
+        });
+
+        Assert.NotNull(captured);
+        var keys = captured!.Where(kv => kv.Key.StartsWith("GIT_CONFIG_KEY_", StringComparison.Ordinal))
+            .Select(kv => kv.Value).ToList();
+        Assert.Contains("http.https://github.com/.extraheader", keys);
+        Assert.DoesNotContain("http.extraheader", keys);
     }
 
     [Theory]
