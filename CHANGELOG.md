@@ -2,31 +2,93 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
-## Unreleased
+## 0.10.0 — 2026-09-03
 
-**Correctness and safety fixes** from a full code review of the shipped 0.9.0 tree. Each was
-re-confirmed end to end before being changed, and each is covered by regression tests (suite
-726 → 835).
+**Correctness, security and coverage fixes** from a full review of the shipped 0.9.0 tree. Every
+finding was reproduced before it was changed, and several turned out to be wrong as reported — those
+are corrected in `docs/quality-audit/` rather than repeated. Suite 726 → 1,112.
 
-- **Pull request mode works for jobs covering several databases** — the commit subject is also the
-  GitHub pull request title, and it embedded an untruncated database list. Past roughly 10-20
-  databases GitHub rejected the title, and because tracked state only advances on a delivered pull
-  request, the job re-scripted everything and failed identically on every subsequent run while
-  leaking a branch each time. The database list is now summarized (`[Sales, HR, Finance +37 more]`)
-  so the server and timestamp always survive; the full list stays in the commit body.
-- **An hourly interval of 24 or more is rejected instead of silently never running** — it produced
-  a cron step in the hour field, which only accepts 0-23, so the job stayed enabled with no trigger
-  and no log entry, while the scheduler health check went on reporting success. The wizard and the
-  job-config importer now refuse it and point to the Daily cadence or a cron expression, and the
-  service logs an error rather than dropping a job silently.
-- **Scripted files can no longer be written outside the workspace** — a database name is read from
-  `sys.databases` and was composed into the repository path unsanitized, so a name containing `..`
-  redirected writes outside the git clone. Database names are now reduced to a single path
-  component, and every write, copy and delete is checked against its root. Job configuration
-  imported from a file is validated the same way the wizard validates it.
-- **Object and database names matching Windows device names** (`CON`, `NUL`, `COM1`-`COM9`,
-  `LPT1`-`LPT9`) are now escaped. A file named `CON.sql` made `git add` fail outright — failing
-  every run — and a directory named `CON` made git skip it silently.
+**Upgrade notes.** This release changes behaviour you may notice:
+
+- Branch names beginning with `-` are now rejected. They reach git as bare positional arguments, so
+  a name like `--upload-pack=…` was read as an option. If an existing job uses one, editing it will
+  now ask you to rename the branch.
+- A credential embedded in a repository profile's `RemoteUrl` is stripped before the URL is given to
+  git. Obsync authenticates with an injected header, so nothing is lost — unless you had put a token
+  there *instead of* configuring one, in which case configure the token under Repositories.
+- The `ssh` and `ext` git transports are refused. Obsync's remotes are HTTPS; `ext::` runs an
+  arbitrary command, and either could be reached from a rewritten URL in machine configuration.
+- Duplicating a job now refuses if the source job could not run as it stands, naming the reason.
+- A database containing object types Obsync does not script now finishes with a **Warning** listing
+  them, where it previously reported complete success. Nothing about what is captured has changed —
+  only whether the gap is reported.
+
+### Security
+
+- **The GitHub token is no longer sent to a host substituted by machine configuration.** The auth
+  header was set unscoped, so a `url.<host>.insteadOf` entry in the system or global gitconfig
+  silently rewrote the remote and the token was delivered to the rewritten host on the first
+  request — with the user seeing only "repository not found". No attacker is required: an internal
+  mirror or proxy distributed by ordinary configuration management is enough. The header is now
+  scoped to the remote's own URL prefix.
+- **Machine git configuration can no longer run programs during a sync.** Shipping MinGit reads as
+  isolation but is not — the bundled system config explicitly includes Git for Windows' own — so
+  `core.hooksPath`, `core.fsmonitor`, `filter.*`, `core.sshCommand` and `ext::` URLs each executed
+  on Obsync's own commands. Hooks, the filesystem monitor and the credential helper are now disabled
+  for every invocation, and the transport allow-list refuses `ext` and `ssh` by name. Settings that
+  matter to a site — `core.autocrlf`, a corporate CA bundle, a proxy — are deliberately still read.
+- **A hung git command can no longer wedge a job indefinitely.** Nothing bounded a git invocation:
+  `GIT_TERMINAL_PROMPT=0` gates only the terminal fallback, and a credential helper inherited from
+  the environment blocked forever holding both the job and repository locks, with the run still
+  showing as in progress. An expired token was enough to trigger it. Askpass helpers are now
+  disabled, commits are never signed, and every command is bounded (10 minutes network, 2 local).
+- **Credentials are scrubbed from every persisted failure message**, not only the one URL shape the
+  previous rule matched. It required a `user:password@` pair, so it missed `https://<token>@host` —
+  the form GitHub's own documentation produces — and `http://user:@host`, which Obsync itself built
+  when a proxy had a username and no stored password. Raw exception text reaching the run history,
+  run reports and alert payloads is scrubbed too, and the support bundle no longer carries a
+  credential embedded in a repository URL.
+- The unused `DpapiSecretProtector` and `ISecretProtector` are removed. Nothing referenced them.
+
+### Scheduling
+
+- **A schedule its maintenance window can never admit is refused instead of silently never running.**
+  The existing guard covered only Daily and Weekly; Hourly and Cron were accepted and then skipped
+  on every occurrence, with a healthy trigger and an advancing "Next run". Job import applied no
+  window check at all, at any cadence. A window that opens and closes at the same time is refused too.
+- **The hourly "next run" no longer reports a time the job cannot run at.** The trigger's step
+  restarts at midnight, so for any interval that does not divide 24 the preview drifted off the real
+  schedule — landing on a time that was not an occurrence at all, or a full day late. It also fed the
+  overdue badge and the missed-run catch-up, so it could raise a false alarm or fire an unattended
+  run nothing had missed.
+- **"Every N hours" is described honestly.** For an interval that does not divide 24 it is not a
+  period: "every 23 hours" runs twice a day, 23 hours apart and then one hour apart. The schedule now
+  names the times it actually runs, and the wizard shows them as you type.
+- **A schedule that will never run says so** — as "Never runs" in the Jobs and Dashboard tables, the
+  job header and the attention list, instead of a confident date or a blank cell.
+- **A paused Cron job shows its next run again on resume**, and a completed run no longer overwrites
+  the scheduler's next-run time with the one that just elapsed.
+- Daylight-saving: an occurrence falling in the hour that spring-forward removes now resolves to the
+  first time that exists, rather than to a time inside a gap the clock skips.
+
+### Scale and reliability
+
+- **The SMO prefetch memory ceiling now measures what prefetch loads.** It compared the filtered
+  object count against a limit describing the cost of loading every table in the database, so a
+  schema filter selecting a few hundred tables out of hundreds of thousands passed the ceiling and
+  then prefetched them all, on every worker connection. The sequential path had no ceiling at all.
+- **SMO connections are returned to the pool.** The primary connection for each database, and the
+  one for the server-level pass, were never disconnected — only the slice workers were — leaving a
+  session open on the SQL Server for each.
+- **A transient failure part-way through reading a database no longer discards the whole run.** It
+  escaped to the top, so nothing was committed and no state advanced, including for databases that
+  had already finished. It is now contained to its own database, whose deletions are suspended and
+  whose watermarks are held back so the next run re-scans it in full.
+- **Objects of types Obsync cannot script are reported.** They were unreachable at every stage, so a
+  database using Service Broker, certificates or external tables produced a run reporting zero skips
+  and complete success. Their absence is now counted and listed. The set of types Obsync scripts is
+  unchanged.
+
 
 ## 0.9.0 — 2026-07-16
 
