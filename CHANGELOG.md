@@ -2,6 +2,68 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.10.1.0 — 2026-09-04
+
+**Service-account and scheduling-identity fixes** found by a review of the installer's Service
+Account screen and everything downstream of it. Every finding was verified before it was changed —
+the installer ones by building probe MSIs and dumping the emitted tables — and several were refuted
+on inspection and deliberately left alone. Suite 1,112 → 1,149.
+
+**Upgrade notes.** This release changes behaviour you may notice:
+
+- `OBSYNC_DATA_ROOT` must now be a **fully qualified** path. A relative value resolved against each
+  host's working directory — the app's install folder versus `C:\Windows\System32` for the service —
+  which silently put the two on different databases. A relative value is now ignored in favour of
+  the default root.
+- The installer refuses a blank password for an account that needs one. Blank is still correct for a
+  gMSA (`DOMAIN\name$`), a virtual account (`NT SERVICE\...`) or a built-in one (`NT AUTHORITY\...`).
+- The service's shutdown budget is 90s (was 30s), so a stop during a long run has time to cancel it
+  cleanly instead of being killed mid-run.
+
+### Fixed
+
+- **The installer discarded the service account you chose on an upgrade.** The remembered account was
+  searched straight into `SERVICE_ACCOUNT`, and `AppSearch` overwrites a property that is already
+  set — so a silent upgrade passing `SERVICE_ACCOUNT` and `SERVICE_PASSWORD` reset the account to the
+  old one and applied the **new password to it**, and the wizard's own answer was clobbered too.
+- The upgrade default now reads the service's live logon account, so a change made with `sc.exe
+  config` or the services.msc **Log On** tab is no longer reverted by a repair or upgrade.
+- A blank service password reached `CreateService` as NULL, installing a service that could not log
+  on. A click-through upgrade reproduced this every time, because the account is prefilled and the
+  password box never is.
+- **A stale heartbeat was reported as a wrong-account problem**, telling you to set the service's Log
+  On account to the account it already used. It is now reported as a liveness problem.
+- A heartbeat dated in the future read as fresh indefinitely, so a dead scheduler could report itself
+  healthy until the clock caught up.
+- The app no longer says "the service is not installed — reinstall Obsync" while a scheduler is
+  demonstrably running and writing to the database.
+- A service running under a different account with a shared data root reported plain "Scheduling
+  active", suppressing every warning, while each run failed on credentials it could not read.
+- "Start the service" was the only advice offered for a stopped service, which does not help when the
+  cause is a bad password or a missing "Log on as a service" right — the two causes an install can
+  leave behind. The Log On tab is now named.
+- A transient reconcile failure suppressed the scheduler heartbeat, so a service doing its heaviest
+  legitimate work reported itself as misconfigured.
+- The startup heartbeat was written after crash recovery, per-run alerts and job scheduling, leaving
+  a window where a healthy service looked broken.
+- **A fatal service crash was recorded to the SCM as a clean stop**, so the installer's
+  restart-on-failure recovery never fired.
+- The in-flight run drain could consume the entire shutdown budget, leaving Quartz none — and an
+  exhausted budget turned a deliberate `Stop-Service` into a recorded failure and an auto-restart.
+- A read-only leftover lock file or a denied locks folder was reported as "another Obsync process is
+  running this job", skipping every occurrence forever and never alerting. It is now recorded as a
+  failure naming the folder.
+- The run-lock liveness probe acquired the lock to test it, so it could make a concurrent run lose
+  the race it was checking for.
+- A bad data root killed the service before any logger existed — no log file, no event-log entry.
+- A corrupt scheduler-heartbeat row threw through the dashboard, job list, job detail and the Create
+  Job wizard, which awaits it before the window is shown.
+
+### Added
+
+- Audit events for run-history pruning, crash recovery of an interrupted run, and service start/stop.
+- `tests/Obsync.Packaging.Tests` — structural regression tests over the installer source.
+
 ## 0.10.0 — 2026-09-03
 
 **Correctness, security and coverage fixes** from a full review of the shipped 0.9.0 tree. Every
