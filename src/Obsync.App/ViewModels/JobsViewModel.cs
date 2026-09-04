@@ -165,8 +165,9 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
     /// <summary>
     /// Pauses (disables) or resumes a job's schedule. Pausing clears the cached next-run time
     /// immediately so the table never advertises a run that will not happen; resuming previews the
-    /// next occurrence (null for cron, whose exact fire time only the scheduler computes) — the
-    /// service replaces the preview with the authoritative value on its next reconcile tick.
+    /// next occurrence — cron included, since the app has a cron engine of its own. Deferring cron to
+    /// the service's reconcile tick left the row blank, and permanently so wherever the service is
+    /// stopped or not installed, which also blinded the overdue signal (it needs a next-run time).
     /// </summary>
     [RelayCommand]
     private async Task TogglePauseAsync(SyncJob? job)
@@ -179,7 +180,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         var pausing = job.Enabled;
         job.Enabled = !pausing;
         job.UpdatedAt = _clock.UtcNow;
-        job.RunSummary.NextRunAt = pausing ? null : job.Schedule.GetNextRun(_clock.UtcNow);
+        job.RunSummary.NextRunAt = pausing ? null : ScheduleNextRun.Compute(job.Schedule, _clock.UtcNow);
         await _jobs.UpsertAsync(job);
         // UpsertAsync deliberately never touches the run summary — patch the cached next-run field
         // explicitly so the cleared (or previewed) value survives the reload below.

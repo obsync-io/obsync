@@ -1050,18 +1050,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     // One computation drives both the save-time stamp and the Schedule step's live preview, so the
     // preview can never show a different time than the one that gets saved.
-    private DateTimeOffset? ComputeNextRun(ScheduleProfile schedule)
-    {
-        if (schedule.Kind == ScheduleKind.Cron)
-        {
-            var cron = schedule.CronExpression?.Trim();
-            return !string.IsNullOrWhiteSpace(cron) && Quartz.CronExpression.IsValidExpression(cron)
-                ? new Quartz.CronExpression(cron) { TimeZone = TimeZoneInfo.Local }.GetNextValidTimeAfter(_clock.UtcNow)
-                : null;
-        }
-
-        return schedule.GetNextRun(_clock.UtcNow);
-    }
+    private DateTimeOffset? ComputeNextRun(ScheduleProfile schedule) =>
+        Services.ScheduleNextRun.Compute(schedule, _clock.UtcNow);
 
     // --- Review-step preflight -------------------------------------------------------------------
 

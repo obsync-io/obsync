@@ -25,6 +25,43 @@ public sealed class AttentionModelTests
     };
 
     [Fact]
+    public void Build_SaysAStarvedScheduleNeverRuns_RatherThanThatItMissedARun()
+    {
+        // "Missed its scheduled run" sends the user to look for a service fault. A schedule whose
+        // maintenance window can never admit it is not late — it is misconfigured, and it will look
+        // exactly the same tomorrow. Only the Jobs grid and the job header said so before this.
+        var starved = Job("Starved", RunStatus.Succeeded, nextRunAt: Now.AddHours(-1));
+        starved.Schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Weekly,
+            DayOfWeek = DayOfWeek.Sunday,
+            TimeOfDay = new TimeOnly(23, 0),
+            MaintenanceWindowEnabled = true,
+            WindowStart = new TimeOnly(22, 0),
+            WindowEnd = new TimeOnly(5, 0),
+            DayScope = MaintenanceDayScope.WeekdaysOnly,
+        };
+
+        var items = AttentionModel.Build([starved], [], new Dictionary<Guid, string>(), NoSkips, Now);
+
+        var row = Assert.Single(items);
+        Assert.Equal(AttentionSeverity.Warning, row.Severity);
+        Assert.Contains("never runs", row.Text);
+        Assert.DoesNotContain("missed its scheduled run", row.Text);
+    }
+
+    [Fact]
+    public void Build_StillReportsAnOrdinaryOverdueJob()
+    {
+        // The exclusion must be narrow: a job that can run and has not is still overdue.
+        var overdue = Job("Stalled", RunStatus.Succeeded, nextRunAt: Now.AddHours(-1));
+
+        var items = AttentionModel.Build([overdue], [], new Dictionary<Guid, string>(), NoSkips, Now);
+
+        Assert.Contains("missed its scheduled run", Assert.Single(items).Text);
+    }
+
+    [Fact]
     public void Build_ProducesOneRowPerProblem_WithSeverityAndAction()
     {
         var failedRunId = Guid.NewGuid();

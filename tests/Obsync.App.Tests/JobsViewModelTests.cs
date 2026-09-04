@@ -93,6 +93,57 @@ public sealed class JobsViewModelTests
     }
 
     [Fact]
+    public async Task Resume_PreviewsTheNextRun_ForACronScheduleToo()
+    {
+        // Resume used to hand cron straight to ScheduleProfile.GetNextRun, which cannot answer for
+        // it, and wrote the null. The row then showed no next run at all — permanently wherever the
+        // service is stopped or not installed, which also blinded the overdue signal, since that
+        // rule needs a next-run time to compare against.
+        var job = new SyncJob
+        {
+            Name = "Nightly",
+            Enabled = false,
+            Schedule = new ScheduleProfile { Kind = ScheduleKind.Cron, CronExpression = "0 0 3 * * ?" },
+        };
+        var vm = NewViewModel();
+
+        await vm.TogglePauseCommand.ExecuteAsync(job);
+
+        Assert.True(job.Enabled);
+        Assert.NotNull(job.RunSummary.NextRunAt);
+        Assert.Equal(3, job.RunSummary.NextRunAt!.Value.ToLocalTime().Hour);
+        await _jobs.Received(1).UpdateNextRunAtAsync(job.Id, job.RunSummary.NextRunAt, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Resume_OfAScheduleItsWindowCanNeverAdmit_LeavesNoNextRun()
+    {
+        // The other half: resume must not invent a time for a job that cannot run.
+        var job = new SyncJob
+        {
+            Name = "Starved",
+            Enabled = false,
+            Schedule = new ScheduleProfile
+            {
+                Kind = ScheduleKind.Weekly,
+                DayOfWeek = DayOfWeek.Sunday,
+                TimeOfDay = new TimeOnly(23, 0),
+                MaintenanceWindowEnabled = true,
+                WindowStart = new TimeOnly(22, 0),
+                WindowEnd = new TimeOnly(5, 0),
+                DayScope = MaintenanceDayScope.WeekdaysOnly,
+            },
+        };
+        var vm = NewViewModel();
+
+        await vm.TogglePauseCommand.ExecuteAsync(job);
+
+        Assert.True(job.Enabled);
+        Assert.Null(job.RunSummary.NextRunAt);
+        Assert.True(job.NeverRuns);
+    }
+
+    [Fact]
     public async Task Resume_PersistsEnabled_AndAudits()
     {
         var job = new SyncJob

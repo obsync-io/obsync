@@ -190,7 +190,15 @@ public sealed class SyncEngine : ISyncEngine
             && !job.Schedule.IsWithinMaintenanceWindow(_clock.UtcNow.ToLocalTime()))
         {
             _logger.LogInformation("Job {JobId} ({JobName}) skipped — outside its maintenance window.", job.Id, job.Name);
-            await _jobs.UpdateNextRunAtAsync(job.Id, job.Schedule.GetNextRun(_clock.UtcNow), cancellationToken).ConfigureAwait(false);
+
+            // Only write a next-run we actually have. GetNextRun returns null for a cron cadence —
+            // this layer has no cron engine — and writing that null WIPED the value the scheduler had
+            // already put there, which is the opposite of the "keep the UI accurate" this is for: a
+            // blank cell, and an overdue signal that cannot fire because it needs a next-run time.
+            if (job.Schedule.GetNextRun(_clock.UtcNow) is { } nextRun)
+            {
+                await _jobs.UpdateNextRunAtAsync(job.Id, nextRun, cancellationToken).ConfigureAwait(false);
+            }
             return new SyncRun
             {
                 JobId = job.Id,
@@ -365,7 +373,13 @@ public sealed class SyncEngine : ISyncEngine
                     LastChangeCount = run.ChangeCount,
                     LastCommitSha = run.CommitSha,
                     // Standard cadences compute a preview here; the scheduler refines cron next-runs.
-                    NextRunAt = job.Schedule.GetNextRun(completed) ?? job.RunSummary.NextRunAt,
+                    // The fallback keeps the cached value ONLY while it is still ahead of us. This
+                    // write replaces the whole summary, so carrying a past value forward re-asserted
+                    // the fire time that just elapsed — clobbering the future one reconcile had
+                    // already written, and leaving a run that just succeeded looking overdue five
+                    // minutes later. Null is the honest answer when this layer cannot compute one.
+                    NextRunAt = job.Schedule.GetNextRun(completed)
+                        ?? (job.RunSummary.NextRunAt is { } cached && cached > completed ? cached : null),
                 }, persistToken).ConfigureAwait(false);
 
                 // One audit event per run outcome, written here so scheduled/service runs are covered

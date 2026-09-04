@@ -60,7 +60,17 @@ internal static class AttentionModel
             items.Add(new(AttentionSeverity.Warning, $"Job “{job.Name}” completed with warnings", "Open", job.Id));
         }
 
-        foreach (var job in jobs.Where(j => j.IsScheduleOverdue(now)))
+        // Ahead of the overdue row, and excluded from it: a schedule its window can never admit is
+        // not running late, it is misconfigured. "Missed its scheduled run" sends the user looking
+        // for a service fault that is not there, and the job will still be there tomorrow.
+        foreach (var job in jobs.Where(j => j.NeverRuns))
+        {
+            items.Add(new(AttentionSeverity.Warning,
+                $"Job “{job.Name}” never runs — its maintenance window can never admit its schedule",
+                "Open", job.Id));
+        }
+
+        foreach (var job in jobs.Where(j => j.IsScheduleOverdue(now) && !j.NeverRuns))
         {
             items.Add(new(AttentionSeverity.Warning, $"Job “{job.Name}” missed its scheduled run", "Open", job.Id));
         }

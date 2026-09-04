@@ -119,6 +119,83 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// A cron cadence has no next-run this layer can compute — Obsync.Shared has no cron engine — so
+    /// the post-run summary fell back to the cached value. That value is normally the fire time that
+    /// just elapsed, and this write replaces the whole summary, so it re-asserted a past time over
+    /// the future one the scheduler had already written, leaving a run that had just succeeded
+    /// looking overdue five minutes later.
+    /// </summary>
+    [Fact]
+    public async Task AFinishedCronRun_DoesNotReAssertTheFireTimeThatJustElapsed()
+    {
+        _scripts.Items = [Proc("Foo")];
+        var jobs = _provider.GetRequiredService<IJobRepository>();
+        _job.Schedule = new ScheduleProfile { Kind = ScheduleKind.Cron, CronExpression = "0 0 3 * * ?" };
+        await jobs.UpsertAsync(_job);
+        await jobs.UpdateNextRunAtAsync(_job.Id, DateTimeOffset.UtcNow.AddMinutes(-30));
+
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        var after = (await jobs.GetAsync(_job.Id))!;
+        Assert.Null(after.RunSummary.NextRunAt);
+        Assert.False(after.IsScheduleOverdue(DateTimeOffset.UtcNow.AddMinutes(10)));
+    }
+
+    /// <summary>
+    /// The window gate advances the cached next-run so the UI stays accurate — but for a cron
+    /// cadence this layer has no next-run to advance to, and writing that null WIPED the value the
+    /// scheduler had already put there. Blank cell, and an overdue signal that cannot fire because
+    /// it has nothing to compare against. The window here opens two hours from now, so the run is
+    /// outside it whatever time the suite is run at.
+    /// </summary>
+    [Fact]
+    public async Task AnOccurrenceSkippedByTheWindow_DoesNotWipeACronJobsNextRun()
+    {
+        _scripts.Items = [Proc("Foo")];
+        var jobs = _provider.GetRequiredService<IJobRepository>();
+        var opens = TimeOnly.FromDateTime(DateTime.Now.AddHours(2));
+        _job.Schedule = new ScheduleProfile
+        {
+            Kind = ScheduleKind.Cron,
+            CronExpression = "0 0 3 * * ?",
+            MaintenanceWindowEnabled = true,
+            WindowStart = opens,
+            WindowEnd = opens.AddHours(1),
+        };
+        await jobs.UpsertAsync(_job);
+        var scheduled = DateTimeOffset.UtcNow.AddHours(6);
+        await jobs.UpdateNextRunAtAsync(_job.Id, scheduled);
+
+        var run = await RunAsync(RunTrigger.Scheduled);
+
+        Assert.Equal(RunStatus.NoChanges, run.Status); // skipped by the window, not executed
+        var after = (await jobs.GetAsync(_job.Id))!;
+        Assert.NotNull(after.RunSummary.NextRunAt);
+        Assert.Equal(scheduled.ToUnixTimeSeconds(), after.RunSummary.NextRunAt!.Value.ToUnixTimeSeconds());
+    }
+
+    /// <summary>
+    /// The other half: a next-run still ahead of the run is the scheduler's own answer for the
+    /// following occurrence, and must survive rather than be discarded along with the stale ones.
+    /// </summary>
+    [Fact]
+    public async Task AFinishedCronRun_KeepsANextRunThatIsStillAhead()
+    {
+        _scripts.Items = [Proc("Foo")];
+        var jobs = _provider.GetRequiredService<IJobRepository>();
+        _job.Schedule = new ScheduleProfile { Kind = ScheduleKind.Cron, CronExpression = "0 0 3 * * ?" };
+        await jobs.UpsertAsync(_job);
+        var scheduled = DateTimeOffset.UtcNow.AddHours(6);
+        await jobs.UpdateNextRunAtAsync(_job.Id, scheduled);
+
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        var after = (await jobs.GetAsync(_job.Id))!;
+        Assert.NotNull(after.RunSummary.NextRunAt);
+        Assert.Equal(scheduled.ToUnixTimeSeconds(), after.RunSummary.NextRunAt!.Value.ToUnixTimeSeconds());
+    }
+
     private Task<SyncRun> RunAsync(RunTrigger trigger = RunTrigger.Manual) =>
         _provider.GetRequiredService<ISyncEngine>().RunJobAsync(_job.Id, trigger);
 
