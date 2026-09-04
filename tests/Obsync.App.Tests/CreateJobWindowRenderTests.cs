@@ -71,6 +71,66 @@ public sealed class CreateJobWindowRenderTests
         Assert.All(pngPaths, path => Assert.True(File.Exists(path), $"The render probe did not produce {path}."));
     }
 
+    [Fact]
+    public void ScheduleStep_ShowsWhatTheHourlyIntervalActuallyDoes()
+    {
+        // A mistyped binding fails silently in WPF, so the view-model test alone cannot prove this
+        // line reaches the user — and this line is the whole point of the fix: it is the only place
+        // the wizard admits that "every 23 hours" runs twice a day.
+        Exception? failure = null;
+        var texts = new List<string>();
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                _ = Application.Current ?? DesignSystemTests.CreateApp();
+
+                var viewModel = BuildViewModel();
+                viewModel.SelectedScheduleKind = ScheduleKind.Hourly;
+                viewModel.IntervalHours = 23;
+                viewModel.CurrentStep = 4;
+
+                var window = new CreateJobWindow { DataContext = viewModel };
+                var content = (UIElement)window.Content;
+                content.Measure(new Size(760, 900));
+                content.Arrange(new Rect(0, 0, 760, 900));
+                content.UpdateLayout();
+
+                CollectText(content, texts);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+
+        Assert.True(failure is null, $"Headless render of the Schedule step failed: {failure}");
+        Assert.Contains(texts, t => t.Contains("Runs at 00:00, 23:00.", StringComparison.Ordinal));
+        Assert.Contains(texts, t => t.Contains("last gap of the day is 1 hour, not 23", StringComparison.Ordinal));
+
+        // And the caption no longer asserts a uniform period.
+        Assert.DoesNotContain(texts, t => t.Contains("EVERY N HOURS", StringComparison.Ordinal));
+    }
+
+    private static void CollectText(DependencyObject root, List<string> into)
+    {
+        if (root is System.Windows.Controls.TextBlock { Text: { Length: > 0 } text })
+        {
+            into.Add(text);
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            CollectText(VisualTreeHelper.GetChild(root, i), into);
+        }
+    }
+
     private static string RenderToPng(UIElement content, string pngPath)
     {
         content.Measure(new Size(760, 900));

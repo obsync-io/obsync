@@ -270,6 +270,37 @@ public sealed class WizardClarityTests
     }
 
     [Fact]
+    public void HourlyPattern_SpellsOutWhatTheIntervalActuallyDoes()
+    {
+        // The caption used to read "EVERY N HOURS" and nothing contradicted it. But the trigger's
+        // step restarts at midnight, so 23 does not mean "once a day-ish" — it runs twice a day, an
+        // hour apart. The next-run preview cannot show that: it is a single timestamp, consistent
+        // with the wrong reading. This line is the only place the user learns it.
+        var (vm, _) = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+        var changed = ChangedProperties(vm);
+
+        vm.SelectedScheduleKind = ScheduleKind.Hourly;
+        Assert.Contains(nameof(vm.HourlyPattern), changed);
+        Assert.Equal("Runs on the hour, every hour.", vm.HourlyPattern);
+
+        changed.Clear();
+        vm.IntervalHours = 23; // editing the interval re-computes the line
+        Assert.Contains(nameof(vm.HourlyPattern), changed);
+        Assert.Contains("Runs at 00:00, 23:00.", vm.HourlyPattern);
+        Assert.Contains("last gap of the day is 1 hour, not 23", vm.HourlyPattern);
+    }
+
+    [Fact]
+    public void HourlyPattern_IsAbsentForEveryOtherCadence()
+    {
+        var (vm, _) = BuildVm(Guid.NewGuid(), Guid.NewGuid());
+
+        vm.SelectedScheduleKind = ScheduleKind.Daily;
+
+        Assert.Null(vm.HourlyPattern);
+    }
+
+    [Fact]
     public void NextRunPreview_IsAbsentForAnInvalidCron()
     {
         var (vm, _) = BuildVm(Guid.NewGuid(), Guid.NewGuid());

@@ -466,9 +466,18 @@ public sealed partial class CreateJobViewModel : ObservableObject
     /// <summary>The overlap-policy caption is only meaningful for scheduled cadences.</summary>
     public bool ShowOverlapNote => SelectedScheduleKind != ScheduleKind.Manual;
 
+    /// <summary>
+    /// What the chosen hourly interval actually does, shown live beside the interval box. Nothing
+    /// else on this step reveals it: the caption asks for an interval, and the next-run preview is a
+    /// single timestamp that reads as consistent with "every N hours" even when that is false — for
+    /// an interval of 23 the job really runs twice a day, and the user would not find out here.
+    /// </summary>
+    public string? HourlyPattern => BuildSchedule().DescribeHourlyPattern();
+
     private void RefreshSchedulePreview()
     {
         OnPropertyChanged(nameof(NextRunPreview));
+        OnPropertyChanged(nameof(HourlyPattern));
         OnPropertyChanged(nameof(ShowScheduleServiceNotice));
     }
 

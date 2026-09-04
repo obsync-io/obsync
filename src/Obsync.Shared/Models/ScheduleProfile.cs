@@ -315,13 +315,71 @@ public sealed class ScheduleProfile
         return times;
     }
 
+    /// <summary>
+    /// How an Hourly cadence reads in one line. "Every N hours" is only true when N divides the day
+    /// evenly: the trigger is <c>0 0 0/N * * ?</c>, whose step restarts at midnight, so for any other
+    /// N the interval is not a period at all — "every 23 hours" runs twice a day, 23 hours apart and
+    /// then one hour apart. Those are the cases that name their times instead, which stays short
+    /// because an N that does not divide 24 has at most five occurrences a day (N=5 is the worst).
+    /// </summary>
+    private string DescribeHourlyCadence()
+    {
+        var step = IntervalHours <= 0 ? 1 : IntervalHours;
+        if (step == 1)
+        {
+            return "Every hour";
+        }
+
+        if (step <= MaxHourlyInterval && 24 % step == 0)
+        {
+            return $"Every {step} hours";
+        }
+
+        var times = string.Join(", ", HourlyFireTimes().Select(hour => hour.ToString("HH:mm")));
+        return $"Every {step} hours from midnight ({times})";
+    }
+
+    /// <summary>
+    /// The fuller account of an Hourly cadence for the place the interval is chosen: when it runs,
+    /// and — when the interval does not divide 24 — the short last gap of the day that makes
+    /// "every N hours" untrue. Null for every other cadence. Separate from <see cref="Describe"/>
+    /// because that one has to stay to a single line in a table cell, while this one is guidance.
+    /// </summary>
+    public string? DescribeHourlyPattern()
+    {
+        if (Kind != ScheduleKind.Hourly)
+        {
+            return null;
+        }
+
+        var step = IntervalHours <= 0 ? 1 : IntervalHours;
+        var fires = HourlyFireTimes();
+
+        // Listing 24 or 12 times would be noise; those intervals divide the day evenly anyway, so
+        // naming the cadence says everything the times would.
+        var runs = fires.Count <= 6
+            ? $"Runs at {string.Join(", ", fires.Select(hour => hour.ToString("HH:mm")))}."
+            : step == 1
+                ? "Runs on the hour, every hour."
+                : $"Runs on the hour, every {step} hours.";
+
+        var remainder = 24 % step;
+        if (step > MaxHourlyInterval || remainder == 0)
+        {
+            return runs;
+        }
+
+        var gap = remainder == 1 ? "1 hour" : $"{remainder} hours";
+        return $"{runs} The schedule restarts at midnight, so the last gap of the day is {gap}, not {step}.";
+    }
+
     /// <summary>A short, human-readable description such as "Daily at 23:00".</summary>
     public string Describe()
     {
         var cadence = Kind switch
         {
             ScheduleKind.Manual => "Manual only",
-            ScheduleKind.Hourly => IntervalHours <= 1 ? "Every hour" : $"Every {IntervalHours} hours",
+            ScheduleKind.Hourly => DescribeHourlyCadence(),
             ScheduleKind.Daily => $"Daily at {TimeOfDay:HH:mm}",
             ScheduleKind.Weekly => $"Weekly on {DayOfWeek} at {TimeOfDay:HH:mm}",
             ScheduleKind.Cron => $"Cron: {CronExpression}",
