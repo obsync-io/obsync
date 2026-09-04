@@ -27,6 +27,16 @@ public static class GitRefName
             return false;
         }
 
+        // A leading '-' is the one git accepts and this product cannot. A branch reaches git as a
+        // bare positional (checkout, rev-list, push), so "--upload-pack=..." would be read as an
+        // option rather than a ref. `--` cannot help: it separates revisions from paths, so adding
+        // it would reinterpret the branch as a pathspec instead of protecting it. Rejecting the name
+        // is the fix, and it costs nothing — a branch called "-x" is unusable anywhere else too.
+        if (name.StartsWith('-'))
+        {
+            return false;
+        }
+
         if (name.Contains("..", StringComparison.Ordinal)
             || name.Contains("//", StringComparison.Ordinal)
             || name.Contains("@{", StringComparison.Ordinal))

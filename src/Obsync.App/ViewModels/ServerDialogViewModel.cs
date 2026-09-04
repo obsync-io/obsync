@@ -149,9 +149,11 @@ public sealed partial class ServerDialogViewModel : ObservableObject
             var test = await _probe.TestConnectionAsync(profile, ResolveTestPassword());
             profile.LastTestStatus = test.IsSuccess ? ConnectionTestStatus.Connected : ConnectionTestStatus.Failed;
             profile.LastTestedAt = _clock.UtcNow;
+            // The failure arm is a raw SQL/driver message, persisted and shown on the Servers page —
+            // scrub it, since a connection-string fragment quoted back by the driver would be stored.
             profile.LastTestDetail = test.IsSuccess
                 ? $"SQL Server {test.Value.Edition} ({test.Value.ProductVersion})"
-                : test.Error;
+                : SecretRedactor.Scrub(test.Error);
 
             // A failed test says nothing about the server's edition/version — keep the last known values.
             profile.ServerEdition = test.IsSuccess ? test.Value.Edition : _editingServerEdition;

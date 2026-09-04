@@ -24,6 +24,20 @@ public sealed class GitRefNameTests
     }
 
     [Theory]
+    [InlineData("-x")]
+    [InlineData("--upload-pack=/tmp/evil")]
+    [InlineData("--receive-pack=cmd")]
+    [InlineData("-f")]
+    public void IsValidBranchName_RejectsALeadingDash(string name)
+    {
+        // A branch reaches git as a bare positional (checkout, rev-list, push), so a leading dash is
+        // read as an option rather than a ref. A "--" separator cannot help: it divides revisions
+        // from paths, so adding one would reinterpret the branch as a pathspec. Rejecting the name
+        // is the fix, and costs nothing — such a branch is unusable everywhere else too.
+        Assert.False(GitRefName.IsValidBranchName(name));
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("a b")]      // no spaces

@@ -362,6 +362,13 @@ public sealed class SyncEngine : ISyncEngine
                     persistedChanges = [.. persistedChanges.Take(MaxPersistedChanges)];
                 }
 
+                // One scrub covers every assignment to ErrorMessage above, including the raw ex.Message
+                // of an unexpected failure. It is the value the run row keeps, the Job Workspace and
+                // dashboard show, run reports export, and the email/webhook alert puts on the wire —
+                // so the single write is the place to make sure a credential a library quoted back at
+                // us does not travel with it.
+                run.ErrorMessage = SecretRedactor.Scrub(run.ErrorMessage);
+
                 await _runs.UpdateAsync(run, persistToken).ConfigureAwait(false);
                 await _runs.AddLogsAsync(context.Logs, persistToken).ConfigureAwait(false);
                 await _runs.AddChangesAsync(run.Id, persistedChanges, persistToken).ConfigureAwait(false);
@@ -2475,7 +2482,23 @@ public sealed class SyncEngine : ISyncEngine
         public void Report(SyncPhase phase, string message, int done = 0, int total = 0) =>
             _progress?.Report(new SyncProgress(phase, message, done, total));
 
+        /// <summary>
+        /// Records one run-log row. Both fields are scrubbed here because this is the single funnel
+        /// every log detail passes through, and the details are frequently raw exception text —
+        /// <c>ex.ToString()</c> for a failed run, SMO's reason for skipping an object, a SQL or API
+        /// error. Those rows are persisted, rendered in the Job Workspace, exported in run reports
+        /// and swept into the support bundle, so a credential quoted back by any of those libraries
+        /// would outlive the run. Scrubbing at the funnel is what makes "redact at source" true for
+        /// this path rather than a convention each new call site has to remember.
+        /// </summary>
         public void Log(SyncLogLevel level, string message, string? detail = null) =>
-            Logs.Add(new SyncRunLog { RunId = Guid.Empty, Timestamp = DateTimeOffset.UtcNow, Level = level, Message = message, Detail = detail });
+            Logs.Add(new SyncRunLog
+            {
+                RunId = Guid.Empty,
+                Timestamp = DateTimeOffset.UtcNow,
+                Level = level,
+                Message = SecretRedactor.Scrub(message) ?? message,
+                Detail = SecretRedactor.Scrub(detail),
+            });
     }
 }

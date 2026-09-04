@@ -169,6 +169,17 @@ public sealed class JobConfigPorter : IJobConfigPorter
             return JobImportResult.Failure($"This job's schedule can't be run as exported. {scheduleError}");
         }
 
+        // The branch reaches git as a bare positional, and the wizard has rejected malformed names
+        // since it was written — but import never did, and an export file is attacker-authored by
+        // this method's own reasoning below. Same shared rule, same place as the other floors.
+        if (file.CommitMode != CommitMode.ExportOnly
+            && !string.IsNullOrWhiteSpace(file.Branch)
+            && !GitRefName.IsValidBranchName(file.Branch.Trim()))
+        {
+            return JobImportResult.Failure(
+                $"This job's branch name (\"{file.Branch.Trim()}\") is not a valid git branch name, so the job could not run.");
+        }
+
         // Same reasoning for the maintenance window, which import checked for no cadence at all: a
         // schedule the window can never admit builds a healthy trigger and is skipped every single
         // occurrence, so importing one produced an enabled job that quietly never ran.

@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -117,6 +117,27 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Run-log details are frequently raw exception text — a stack trace, SMO's reason for skipping
+    /// an object, a SQL or API error — and those rows are persisted, shown in the Job Workspace,
+    /// exported in run reports and swept into the support bundle. A credential a library quoted back
+    /// at us would outlive the run, so the single funnel every log passes through scrubs both fields.
+    /// </summary>
+    [Fact]
+    public async Task RunLogDetails_AreScrubbedOfCredentials()
+    {
+        const string token = "ghp_000000000000000000000000000000000000";
+        _scripts.Items = [Proc("Foo")];
+        _scripts.ThrowWith = $"boom: https://{token}@github.com/x/y.git rejected the request";
+
+        var run = await RunAsync();
+
+        var logs = await _provider.GetRequiredService<IRunRepository>().GetLogsAsync(run.Id);
+        var text = string.Join("\n", logs.Select(l => $"{l.Message} {l.Detail}"));
+        Assert.DoesNotContain(token, text);
+        Assert.DoesNotContain(token, run.ErrorMessage ?? string.Empty);
     }
 
     /// <summary>
@@ -457,12 +478,20 @@ public sealed class EngineGateWiringTests : IAsyncLifetime
     {
         public IReadOnlyList<RawScriptedObject> Items { get; set; } = [];
 
+        /// <summary>When set, scripting throws with this message — the raw-exception-text path.</summary>
+        public string? ThrowWith { get; set; }
+
         public ScriptingStrategy Strategy => ScriptingStrategy.Metadata;
 
         public async IAsyncEnumerable<RawScriptedObject> ScriptAsync(
             ScriptRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             await Task.Yield();
+            if (ThrowWith is { } message)
+            {
+                throw new InvalidOperationException(message);
+            }
+
             foreach (var item in Items.Where(i => request.Types.Contains(i.Identity.Type)))
             {
                 yield return item;

@@ -175,6 +175,16 @@ public sealed partial class RepositoryDialogViewModel : ObservableObject
             return;
         }
 
+        // The default branch is used verbatim when a job does not name its own, and reaches git as a
+        // bare positional. The job wizard has always checked this; this dialog never did.
+        if (!GitRefName.IsValidBranchName(EffectiveBranch))
+        {
+            ValidationResult =
+                $"\"{EffectiveBranch}\" is not a valid git branch name (no spaces, '..', '~', '^', ':', '?', '*', " +
+                "'[', '\\', '@{', a leading '-', or leading/trailing '/' or '.').";
+            return;
+        }
+
         if (IsBusy)
         {
             return;
@@ -197,7 +207,9 @@ public sealed partial class RepositoryDialogViewModel : ObservableObject
                 DefaultBranch = branch,
                 LastValidationStatus = validation.Status,
                 LastValidatedAt = validation.At,
-                LastValidationDetail = validation.Detail,
+                // Raw GitHub/Octokit or HTTP text, persisted and displayed: same scrub as everywhere
+                // else a library's message becomes durable.
+                LastValidationDetail = SecretRedactor.Scrub(validation.Detail),
                 CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt,
                 UpdatedAt = _clock.UtcNow,
             };

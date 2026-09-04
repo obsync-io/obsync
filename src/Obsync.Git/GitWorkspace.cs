@@ -367,7 +367,12 @@ public sealed partial class GitWorkspace : IGitWorkspace
         {
             "-c", $"user.name={context.CommitterName}",
             "-c", $"user.email={context.CommitterEmail}",
-            "commit", "-m", subject, "-m", body,
+            // Unattended commits are never signed. With commit.gpgsign=true in the account's config
+            // git invokes gpg, and a passphrase-protected key then waits on a pinentry dialog that
+            // has no desktop to appear on under the service. Measured: gpg missing fails the commit
+            // outright, gpg present and blocking hangs it. Obsync's commits carry no signing identity
+            // to offer, so there is nothing to lose by declining.
+            "commit", "--no-gpg-sign", "-m", subject, "-m", body,
         };
         if (!hasStagedChanges)
         {
@@ -395,6 +400,30 @@ public sealed partial class GitWorkspace : IGitWorkspace
             : Result.Failure($"git push failed: {Summarize(push.StandardError)}");
     }
 
+    /// <summary>
+    /// The <c>scheme://host[:port]/</c> prefix an <c>http.&lt;url&gt;.*</c> key must carry to apply to this
+    /// remote, or null when the remote is not HTTP(S) — in which case an HTTP auth header is
+    /// meaningless and is simply not sent. git matches these keys by longest URL prefix, so the
+    /// origin prefix covers every path under it while excluding any other host.
+    /// </summary>
+    internal static string? HttpScopePrefix(string? remoteUrl)
+    {
+        if (!Uri.TryCreate(remoteUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            return null;
+        }
+
+        // Cut the ORIGINAL string rather than rebuilding from the parsed Uri: Uri normalizes an
+        // explicitly written default port away, so "https://host:443/x" would yield "https://host/"
+        // — and if git matches ports strictly the header would silently not be sent and the push
+        // would fail to authenticate. Slicing guarantees the scope is a literal prefix of the URL
+        // git is handed, whatever either side normalizes.
+        var afterScheme = remoteUrl!.IndexOf("://", StringComparison.Ordinal) + 3;
+        var slash = remoteUrl.IndexOf('/', afterScheme);
+        return slash < 0 ? remoteUrl + "/" : remoteUrl[..(slash + 1)];
+    }
+
     private async Task<GitCommandResult> RunNetworkAsync(
         string workingDirectory, GitWorkspaceContext context, IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
@@ -410,15 +439,17 @@ public sealed partial class GitWorkspace : IGitWorkspace
             environment[$"GIT_CONFIG_VALUE_{index}"] = value;
         }
 
-        if (!string.IsNullOrEmpty(context.AuthorizationHeader))
+        // Scope the header to the remote we mean to authenticate to. Unscoped, `http.extraheader`
+        // applies to whatever host the command ends up contacting — and `url.<other>.insteadOf` in
+        // the machine's config silently rewrites the remote before the request is made, so the
+        // token was delivered to the rewritten host on the first request, with the user seeing only
+        // "repository not found". An internal mirror or proxy pushed by ordinary config management
+        // is enough; no attacker is required. Measured both ways: unscoped, the header arrives at
+        // the rewritten host; scoped, it is withheld there and still sent to the real remote.
+        if (!string.IsNullOrEmpty(context.AuthorizationHeader)
+            && HttpScopePrefix(context.RemoteUrl) is { } scope)
         {
-            AddConfig("http.extraheader", context.AuthorizationHeader);
-
-            // Authenticate with ONLY the injected header. Disable any configured credential helper
-            // (e.g. Git Credential Manager, which is on by default on Windows): otherwise git can
-            // override or race our header, or block trying to prompt — the usual reason a push that
-            // should succeed fails with "could not read Username" / "Authentication failed".
-            AddConfig("credential.helper", string.Empty);
+            AddConfig($"http.{scope}.extraheader", context.AuthorizationHeader);
         }
 
         // Route network operations through the configured proxy (may carry credentials).

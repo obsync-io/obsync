@@ -32,6 +32,18 @@ public static partial class SecretRedactor
     }
 
     /// <summary>
+    /// The URL with any credentials removed entirely, rather than masked.
+    ///
+    /// For a URL that is about to be handed to a subprocess, masking is not enough: the remote URL
+    /// reaches git as a command-line argument, which Windows process-creation auditing records
+    /// verbatim, and git then writes it into <c>.git/config</c> where it stays. Neither copy passes
+    /// back through Obsync, so the credential has to be gone before the URL is used, not scrubbed
+    /// afterwards. Obsync authenticates with an injected header, so the userinfo is never needed.
+    /// </summary>
+    public static string? StripUrlCredentials(string? url) =>
+        string.IsNullOrEmpty(url) ? url : UrlUserInfo().Replace(url, "://");
+
+    /// <summary>
     /// Everything between the scheme and the <c>@</c> of a URL authority.
     ///
     /// Note it does NOT require the <c>user:password</c> pair the earlier rule did. RFC 3986 userinfo

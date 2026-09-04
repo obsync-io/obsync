@@ -103,6 +103,30 @@ public sealed class SecretRedactorTests
         Assert.Equal(text, SecretRedactor.Scrub(text));
     }
 
+    [Theory]
+    [InlineData("https://ghp_000000000000000000000000000000000000@github.com/a/b.git", "https://github.com/a/b.git")]
+    [InlineData("https://user:pass@github.com/a/b.git", "https://github.com/a/b.git")]
+    [InlineData("https://github.com/a/b.git", "https://github.com/a/b.git")]
+    [InlineData(@"C:\workspaces\origin.git", @"C:\workspaces\origin.git")]
+    public void StripUrlCredentials_RemovesThemEntirelyRatherThanMasking(string url, string expected)
+    {
+        // Masking is not enough for a URL about to become a git command-line argument: Windows
+        // process-creation auditing records argv verbatim and git writes the remote into
+        // .git/config, and neither copy comes back through Obsync to be scrubbed later.
+        Assert.Equal(expected, SecretRedactor.StripUrlCredentials(url));
+    }
+
+    [Fact]
+    public void StripUrlCredentials_LeavesAUsableRemote()
+    {
+        // The stripped URL must still be the same remote — authentication comes from the injected
+        // header, so removing the userinfo costs nothing.
+        var stripped = SecretRedactor.StripUrlCredentials(
+            "https://ghp_000000000000000000000000000000000000@ghe.corp.local:8443/team/db.git");
+
+        Assert.Equal("https://ghe.corp.local:8443/team/db.git", stripped);
+    }
+
     [Fact]
     public void Scrub_ShortGhLookingWord_IsNotRedacted()
     {

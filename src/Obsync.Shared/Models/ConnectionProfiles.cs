@@ -114,7 +114,16 @@ public sealed class GitRepositoryProfile
     /// <summary><c>owner/name</c>, e.g. <c>company/sql-schema-history</c>.</summary>
     public string FullName => $"{Owner}/{RepositoryName}";
 
-    /// <summary>The effective HTTPS clone URL.</summary>
+    /// <summary>
+    /// The effective HTTPS clone URL — the one git is actually given.
+    ///
+    /// Any credentials in a hand-set <see cref="RemoteUrl"/> are stripped here rather than passed on:
+    /// this value becomes a git command-line argument, which Windows process-creation auditing
+    /// records verbatim, and git persists it into <c>.git/config</c>. Neither copy can be scrubbed
+    /// afterwards. Obsync authenticates with an injected header, so nothing is lost by removing it.
+    /// </summary>
     public string EffectiveRemoteUrl =>
-        string.IsNullOrWhiteSpace(RemoteUrl) ? $"https://github.com/{Owner}/{RepositoryName}.git" : RemoteUrl;
+        string.IsNullOrWhiteSpace(RemoteUrl)
+            ? $"https://github.com/{Owner}/{RepositoryName}.git"
+            : SecretRedactor.StripUrlCredentials(RemoteUrl)!;
 }

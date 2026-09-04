@@ -38,6 +38,23 @@ public sealed class RepositoryDialogViewModelTests
     }
 
     [Fact]
+    public async Task Save_BranchNameThatWouldReachGitAsAnOption_IsRejected()
+    {
+        // The default branch is used verbatim when a job does not name its own, and reaches git as a
+        // bare positional. The job wizard has always validated this field; this dialog never did.
+        var vm = NewViewModel();
+        vm.Name = "History";
+        vm.Owner = "acme";
+        vm.RepositoryName = "sql-history";
+        vm.DefaultBranch = "--upload-pack=cmd";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Contains("not a valid git branch name", vm.ValidationResult);
+        await _repositories.DidNotReceive().UpsertAsync(Arg.Any<GitRepositoryProfile>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Save_StoresTheTokenTrimmed()
     {
         var vm = NewViewModel();

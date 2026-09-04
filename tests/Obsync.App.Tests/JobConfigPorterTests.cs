@@ -200,6 +200,38 @@ public sealed class JobConfigPorterTests
     }
 
     [Fact]
+    public async Task Import_BranchNameThatWouldReachGitAsAnOption_FailsWithAnActionableError()
+    {
+        // The branch is passed to git as a bare positional, and the wizard has always rejected
+        // malformed names — import never did, and this file's own comments treat an export as
+        // attacker-authored. Same shared rule, same place as the other import floors.
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Branch = "--upload-pack=cmd";
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("not a valid git branch name", result.Error);
+        Assert.Empty(_saved);
+    }
+
+    [Fact]
+    public async Task Import_OrdinaryBranchName_StillSucceeds()
+    {
+        var porter = BuildPorter();
+        var job = SampleJob();
+        job.Branch = "release/2026-09";
+        var json = await porter.ExportAsync(job);
+
+        var result = await porter.ImportAsync(json);
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal("release/2026-09", Assert.Single(_saved).Branch);
+    }
+
+    [Fact]
     public async Task Import_HourlyScheduleStarvedByItsMaintenanceWindow_FailsWithAnActionableError()
     {
         // Import checked the cadence but never the window, at any cadence — so this arrived enabled,
