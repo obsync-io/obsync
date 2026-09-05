@@ -2,6 +2,41 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.10.1.1 - 2026-09-05
+
+**Display and layout fixes**, found by running the app and reviewing every screen against seeded
+data rather than empty states.
+
+### Fixed
+
+- **Blurry text.** The app shipped with no application manifest, so it never declared DPI
+  awareness and Windows bitmap-stretched the whole window whenever the effective scaling differed
+  from the one the process started at - every glyph resampled. It bit hardest on scaled laptop
+  panels, mixed-DPI desks, and Windows 365 / RDP sessions, where the session DPI can change on
+  reconnect. The app now declares Per-Monitor v2, so it re-renders at the new scale instead.
+- **Warning banners lost words.** The scheduler-health message sat in a horizontal StackPanel,
+  which measures its children with infinite width - so the text laid out to its MaxWidth and
+  everything past the panel edge was clipped mid-sentence rather than wrapped. "Set the service's
+  Log On account to your Windows account" rendered as "Set the service's Log On accour".
+- **Job tables were unreadable.** The sum of the columns' minimum widths came to within 20px of the
+  space available, so every column sat pinned at its minimum and the proportional widths never
+  applied: job names showed as "Ad-hoc...", tags as "P..", while Last Run, Changes and Next Run sat
+  empty. Rebalanced, and the default window is now 1400x860 (was 1180x760) - nine columns never fit
+  1180. The 960px minimum window is unchanged and still verified by TableLayoutTests.
+- History's Status column clipped the "No changes" badge.
+
+### Changed
+
+- The repository token field is labelled **Access token**, not "Fine-grained access token". Classic
+  tokens have always worked - the permission check reads the repository's pull/push flags, which
+  both token types carry - but the label read as a restriction and sent people to request an
+  organization approval they did not need. The hint now spells out both, including the Resource
+  owner setting that otherwise silently denies access to an organization's repositories.
+- When a token authenticates but cannot see the repository, the error names the likely causes
+  (approval still pending, Resource owner set to a personal account, classic token not authorized
+  for SSO, or a typo) instead of only saying access failed. GitHub returns 404 rather than 403
+  there, so "not found" and "not granted" cannot be told apart - hence naming them all.
+
 ## 0.10.1.0 — 2026-09-04
 
 **Service-account and scheduling-identity fixes** found by a review of the installer's Service

@@ -88,10 +88,16 @@ public sealed class GitHubService : IGitHubService
         }
         catch (NotFoundException)
         {
-            // The token is valid but cannot see owner/name (no grant to this repository, or a typo).
+            // The token authenticated but cannot see owner/name. GitHub returns 404 rather than 403
+            // for a repository a token has no grant on, so "not found" and "not granted" are
+            // indistinguishable here — hence naming the causes instead of guessing one. Ordered by
+            // how often each is the real answer for an organization-owned repository.
             return Result.Success(new TokenPermissionReport(
                 TokenValid: true, Login: null, RepositoryFound: false, CanRead: false, CanWrite: false,
-                Detail: $"The token cannot access {owner}/{name}. Check the name, and that the token grants this repository."));
+                Detail: $"The token authenticated, but cannot see {owner}/{name}. Usually one of: a fine-grained "
+                    + "token still awaiting organization approval (it shows as Pending under Developer settings); "
+                    + $"its Resource owner set to your personal account instead of {owner}; a classic token not yet "
+                    + "authorized for the organization's SSO; or a typo in the owner or repository name."));
         }
         catch (AuthorizationException)
         {

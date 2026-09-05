@@ -5,6 +5,9 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\Obsync.ico</ApplicationIcon>
+    <!-- Per-Monitor v2 DPI awareness; see app.manifest for why. Without it Windows stretches the
+         window bitmap on any scaled display and the text renders soft. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- XAML-generated partial classes can trip nullable analysis; keep the app
          building while still surfacing warnings. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>

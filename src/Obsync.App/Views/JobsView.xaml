@@ -74,11 +74,18 @@
         <Border Grid.Row="1" Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
                 Padding="14,10" Margin="0,14,0,0"
                 Visibility="{Binding SchedulerWarning, Converter={StaticResource NullToVisibility}}">
-            <StackPanel Orientation="Horizontal">
+            <!-- Grid, not a horizontal StackPanel — see DashboardView: a StackPanel measures with
+                 infinite width, so the message was clipped mid-sentence instead of wrapping. -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
                 <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
                            Foreground="{StaticResource WarningBrush}" FontSize="15" VerticalAlignment="Top" Margin="0,1,10,0" />
-                <TextBlock Text="{Binding SchedulerWarning}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="900" />
-            </StackPanel>
+                <TextBlock Grid.Column="1" Text="{Binding SchedulerWarning}" Style="{StaticResource Body}"
+                           TextWrapping="Wrap" />
+            </Grid>
         </Border>
 
         <TextBlock Grid.Row="2" Text="{Binding StatusMessage}" Style="{StaticResource Muted}" Margin="0,14,0,0"
@@ -94,35 +101,35 @@
                          MinWidths of the flexible columns fit their headers — so nothing clips or
                          truncates down to a 960-wide content area (verified by TableLayoutTests). -->
                     <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="Job Name" Width="1.6*" MinWidth="86">
+                        <DataGridTemplateColumn Header="Job Name" Width="2.4*" MinWidth="104">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Source" Width="1.6*" MinWidth="66">
+                        <DataGridTemplateColumn Header="Source" Width="1.6*" MinWidth="76">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding SourceDisplay}" Style="{StaticResource Body}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Destination" Width="1.8*" MinWidth="94">
+                        <DataGridTemplateColumn Header="Destination" Width="1.8*" MinWidth="96">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding DestinationDisplay}" Style="{StaticResource Muted}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Tags" Width="1.1*" MinWidth="54">
+                        <DataGridTemplateColumn Header="Tags" Width="1.2*" MinWidth="78">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <ItemsControl ItemsSource="{Binding TagChips}" Style="{StaticResource TagChipsList}" VerticalAlignment="Center" />
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Status" Width="Auto" MinWidth="122">
+                        <DataGridTemplateColumn Header="Status" Width="Auto" MinWidth="106">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <ContentControl Content="{Binding}" ContentTemplate="{StaticResource JobStatusBadgeTemplate}" VerticalAlignment="Center" />
@@ -136,7 +143,7 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Changes" Width="78">
+                        <DataGridTemplateColumn Header="Changes" Width="76">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Text="{Binding RunSummary.LastChangeCount}" Style="{StaticResource Body}" VerticalAlignment="Center" />
@@ -150,7 +157,7 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTemplateColumn Header="Actions" Width="194">
+                        <DataGridTemplateColumn Header="Actions" Width="184">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

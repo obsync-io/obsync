@@ -148,11 +148,18 @@
             <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
                     Padding="14,10" Margin="0,12,0,0"
                     Visibility="{Binding SchedulerWarning, Converter={StaticResource NullToVisibility}}">
-                <StackPanel Orientation="Horizontal">
+                <!-- Grid, not a horizontal StackPanel — see DashboardView: a StackPanel measures
+                     with infinite width, so the message was clipped mid-sentence, not wrapped. -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
                     <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
                                Foreground="{StaticResource WarningBrush}" FontSize="15" VerticalAlignment="Top" Margin="0,1,10,0" />
-                    <TextBlock Text="{Binding SchedulerWarning}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="900" />
-                </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding SchedulerWarning}" Style="{StaticResource Body}"
+                               TextWrapping="Wrap" />
+                </Grid>
             </Border>
 
             <!-- Live status message from the most recent action -->

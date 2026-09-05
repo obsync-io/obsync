@@ -40,8 +40,19 @@
 
             <TextBlock Text="{Binding TokenHint}" Style="{StaticResource Caption}" />
             <PasswordBox x:Name="TokenBox" PasswordChanged="OnTokenChanged" Margin="0,4,0,3" />
-            <TextBlock Text="Needs Contents: read and write on this repository. Stored in Windows Credential Manager."
-                       Style="{StaticResource Caption}" Margin="0,0,0,16" />
+            <!-- Both token types work: the permission check reads the repository payload's
+                 pull/push flags, which classic and fine-grained PATs both carry. Spelling out
+                 Resource owner is deliberate — leaving it on the personal account is the usual
+                 reason an organization repository reports as unreachable. -->
+            <TextBlock Style="{StaticResource Caption}" Margin="0,0,0,16" TextWrapping="Wrap">
+                <Run Text="Fine-grained:" FontWeight="SemiBold" />
+                <Run Text="Contents — Read and write, with Resource owner set to the repository's organization (not your personal account). Add Pull requests — Read and write if the job opens PRs." />
+                <LineBreak />
+                <Run Text="Classic:" FontWeight="SemiBold" />
+                <Run Text="the repo scope." />
+                <LineBreak />
+                <Run Text="Either type works. Stored in Windows Credential Manager, under the account running Obsync." />
+            </TextBlock>
 
             <!-- Token permission checklist (populated by Validate) -->
             <Border Style="{StaticResource Panel}" Margin="0,0,0,14"

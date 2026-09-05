@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Declares Per-Monitor v2 DPI awareness.
+
+  Without this the app has no DPI declaration at all, so Windows treats it as system-DPI aware and
+  BITMAP-STRETCHES the whole window whenever the effective scaling differs from the one the process
+  started with — every glyph is resampled, which is the "why is the text blurry" report. It bites
+  hardest exactly where Obsync is used: a scaled laptop panel, a mixed-DPI multi-monitor desk, and
+  Windows 365 / RDP sessions, where the session DPI can change on reconnect.
+
+  Per-Monitor v2 (not plain PerMonitor) is what makes WPF re-render at the new scale AND scale the
+  non-client area — title bar, menus, dialogs — so the chrome stays crisp with the content.
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="Obsync.App" />
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <!-- The 2016 key is what Windows 10 1703+ honours; the 2005 "true/pm" is the fallback for
+           older hosts, which read it as per-monitor rather than merely system aware. -->
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+    </windowsSettings>
+  </application>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Declaring Windows 10/11 support is required for the OS to honour the 2016 DPI key. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>

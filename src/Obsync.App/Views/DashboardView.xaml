@@ -14,11 +14,20 @@
             <Border Background="{StaticResource WarningSoftBrush}" CornerRadius="{StaticResource RadiusControl}"
                     Padding="14,10" Margin="0,0,0,16"
                     Visibility="{Binding SchedulerWarning, Converter={StaticResource NullToVisibility}}">
-                <StackPanel Orientation="Horizontal">
+                <!-- Grid, not a horizontal StackPanel: a StackPanel measures its children with
+                     INFINITE width, so the message laid out to MaxWidth and everything past the
+                     panel edge was CLIPPED mid-sentence rather than wrapped. A star column gives it
+                     exactly the width left over after the icon, so it wraps where the panel ends. -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
                     <TextBlock FontFamily="{StaticResource IconFontFamily}" Text="{StaticResource IconWarning}"
                                Foreground="{StaticResource WarningBrush}" FontSize="15" VerticalAlignment="Top" Margin="0,1,10,0" />
-                    <TextBlock Text="{Binding SchedulerWarning}" Style="{StaticResource Body}" TextWrapping="Wrap" MaxWidth="900" />
-                </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding SchedulerWarning}" Style="{StaticResource Body}"
+                               TextWrapping="Wrap" />
+                </Grid>
             </Border>
 
             <!-- Metric cards: a WrapPanel of fixed-width cards so they reflow onto a second row on
@@ -251,7 +260,7 @@
                     <DataGrid ItemsSource="{Binding Jobs}" Margin="0,8,0,0" MaxHeight="520"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="Job Name" Width="1.6*" MinWidth="86">
+                            <DataGridTemplateColumn Header="Job Name" Width="2.4*" MinWidth="104">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Name}" Style="{StaticResource BodyStrong}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />

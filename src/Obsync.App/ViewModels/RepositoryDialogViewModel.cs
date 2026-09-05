@@ -71,7 +71,10 @@ public sealed partial class RepositoryDialogViewModel : ObservableObject
     }
 
     public string Title => IsEditMode ? "Edit repository" : "Add a repository";
-    public string TokenHint => IsEditMode ? "ACCESS TOKEN (LEAVE BLANK TO KEEP THE SAVED ONE)" : "FINE-GRAINED ACCESS TOKEN";
+    // "ACCESS TOKEN", not "FINE-GRAINED ACCESS TOKEN": the permission check reads the repository
+    // payload's pull/push flags, which both fine-grained and classic PATs carry, so both work. The
+    // old label read as a restriction and sent people to request an approval they did not need.
+    public string TokenHint => IsEditMode ? "ACCESS TOKEN (LEAVE BLANK TO KEEP THE SAVED ONE)" : "ACCESS TOKEN";
 
     partial void OnIsEditModeChanged(bool value)
     {
