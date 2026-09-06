@@ -2,6 +2,135 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.11.0 - 2026-09-06
+
+**Production hardening.** A five-agent adversarial review of 0.10.1.1 found 41 defects; this
+release fixes all of them. It was triggered by a real deployment where the Add Repository dialog
+showed five green ticks and the first run died on `git clone` — the checks used a different HTTP
+client, over a different transport, than the runs they were vouching for.
+
+Test suite: 1,149 → 1,247.
+
+### BREAKING
+
+- **`obsync run` is now treated as unattended.** It passed `RunTrigger.Manual`, which disabled the
+  mass-deletion safety stop, the disabled-job gate and the maintenance window — on the product's own
+  automation entry point, where nobody is present and the object counts are printed only *after* the
+  push. It now refuses a disabled job, or one outside its maintenance window, with **new exit code
+  4**, and `Skipped` maps to 4 rather than 0. Scripts relying on the old behaviour will start
+  failing: enable the job, widen the window, or use Run Now in the app.
+
+### Fixed — data loss
+
+- **The mass-deletion safety stop exempted small scopes.** `candidates.Count > 50` was an
+  unconditional pass, so a 40-object database whose login lost `VIEW DEFINITION` had every file
+  deleted, committed, pushed and its state rows dropped on a *scheduled* run — reported as
+  Succeeded. A 4,000-of-10,000 loss also slipped the majority test. Replaced with four rules: total
+  wipe at any size, ≥100 absolute, majority above a floor, and whole-schema wipe. The ratio now
+  divides by in-scope rows, since counting deselected types diluted it.
+- **An ignored destination was read as "identical tree".** `git add -A` honours `.gitignore`, so a
+  database named `Bin`, `Temp`, `Logs` or `Build` — or a `*.sql` rule in an application repository —
+  staged nothing, which the engine took as proof the repository already held the content. It marked
+  the changes delivered and persisted every hash, so later runs matched and wrote nothing: NoChanges
+  forever against a repository that never received a single object. The engine now asks git via
+  `check-ignore` and fails with the matching rule quoted.
+- **Missing `VIEW DEFINITION` committed hollow scripts as success.** SQL Server returns `NULL` from
+  `sys.sql_modules.definition` rather than erroring, so SMO scripted objects as empty over correct
+  ones. Preflight now opens each selected database *by name* and counts unreadable definitions.
+- **A recovering database discarded every other database's completed work.** 922/927 were not in the
+  transient list while 4060 (offline) was, so two operationally identical states behaved completely
+  differently: one committed everything else, the other committed nothing at all.
+
+### Fixed — security
+
+- **Git hardening was bypassable from the inherited environment.** Only `GIT_ASKPASS` and
+  `SSH_ASKPASS` were removed. `GIT_CONFIG_PARAMETERS` is applied *after* the numbered `GIT_CONFIG_*`
+  block, so it beat every hardening key — re-enabling `protocol.ext.allow` made an `ext::` remote
+  execute a shell command. `GIT_DIR` redirected every add/commit/checkout away from the working
+  directory, and `GIT_ALLOW_PROTOCOL` replaced the transport allow-list wholesale. Setting a user
+  environment variable needs no privilege, which made this an easier path than the machine gitconfig
+  the hardening was written against. 26 variables are now stripped, plus any inherited numbered
+  block.
+- The support bundle scrubbed every JSON entry but copied Serilog log files verbatim.
+
+### Fixed — checks that did not check
+
+- **No validation surface exercised git at all.** Preflight, Add Repository and Diagnostics all used
+  Octokit over `HttpClient` against `api.github.com`, while runs use bundled MinGit over schannel
+  against `github.com`. .NET does not check certificate revocation and git-for-Windows does, so a
+  firewall blocking the CA's responder left every tick green and killed every clone. Added a
+  `git ls-remote` probe wired into both, configured by the same code path a real clone uses.
+- **"Write / push — Contents" did not mean a push would be accepted.** `permissions.push` is the
+  collaborator role and stays true under branch protection. Preflight now warns first.
+- **Preflight verified under the wrong identity.** Every probe ran as the signed-in user while
+  scheduled runs execute as the service account, and both the credential vault and `%LOCALAPPDATA%`
+  are per-account. A new **Run identity** check names both accounts and states plainly that nothing
+  above transfers when they differ.
+- Alerting was green in test and silently dead in production: the test button sends from the app
+  under the signed-in user, scheduled runs send from the service, and the failure was logged and
+  swallowed. Delivery outcomes are now recorded and surfaced on the dashboard.
+- Repository validation badges never decayed — a token validated in January and expired in March
+  still read "Valid" in September. They now expire after 30 days, and repositories finally raise
+  "Needs attention" rows (servers always had them; repositories had no equivalent loop).
+
+### Fixed — occurrences that vanished
+
+- The repository lock and the credential reads both threw *above* the run insert, so an occurrence
+  left no history row, no alert and no audit event while the next-run time advanced — the job simply
+  appeared never to have fired. Both now record a Failed run.
+- A stranded `config.lock` or `refs/heads/<branch>.lock` wedged a workspace permanently: only
+  `index.lock` was cleaned, and the corrupt-workspace self-heal is gated on fetch failing, which
+  neither of those causes. All git lock files are now swept.
+- The command timeout was chosen by "does this carry secrets" rather than by cost, so `add`,
+  `commit` and `checkout` got the two-minute budget meant for index operations. At the scale this
+  product designs for that killed the run — and since state correctly did not advance, every later
+  run repeated the work and failed identically, forever.
+- The data root could resolve to a **relative** path when a service account had no loaded profile,
+  so the service silently used `C:\Windows\System32\Obsync` and reported itself perfectly healthy.
+- The server-level pass had none of the containment the database pass has, and it runs first — so a
+  login that could not open its default database failed the whole run before any work was done.
+
+### Added
+
+- **`obsync credential set | list | delete | prune`** and **`obsync whoami`**. Credentials are
+  per-Windows-account, and the installer recommended a gMSA — whose password is machine-managed, so
+  it cannot be signed in to and the app cannot be run as it. No supported path could write into its
+  vault. A console *can* run as those accounts (`psexec -s`, a scheduled task), so this closes it.
+  Values are read from stdin or a hidden prompt, never from the command line. `prune` removes
+  secrets whose profile was deleted — the key embeds the profile id, so nothing could name them
+  before.
+- **Settings → Git TLS.** Windows (schannel), Windows without revocation checking, or OpenSSL with
+  an optional CA bundle. Obsync ships its own git so nobody has to install one, and then offered no
+  way to configure it — the only remedy for a blocked revocation responder was to find the hidden
+  binary and run `git config` by hand.
+- **The installer grants "Log on as a service"** for any account that is not a built-in service
+  principal. `INSTALL.md` claimed it already did; nothing did, which is the Error 1069 people hit.
+  Where the right is defined by Group Policy no installer can fix it, and the in-app message now
+  says so instead of looping through a password re-entry that was never the problem.
+- Orphaned workspaces are reported in Diagnostics with their size and reclaimable from Settings.
+  Deleting a repository now reclaims its clone, which nothing ever did — the path is keyed on the
+  profile id, so the directory became unnameable the moment the row went.
+- The permission script grants `SELECT` when reference-data versioning is enabled. It claimed to be
+  "exactly what Obsync needs" and was not for that job shape: the wizard's table picker works under
+  `VIEW DEFINITION`, so the row counts looked right and the run then failed on the first `SELECT`.
+- Git network attempts are configurable per job; the setting existed but was import-only.
+
+### Changed
+
+- Silent installs passing `SERVICE_ACCOUNT` without `SERVICE_PASSWORD` are refused rather than
+  installing a service that can never log on and reporting success.
+- Certificate, revocation and proxy-407 failures are classified permanent instead of retried, and
+  are explained by cause — the connectivity catch-all matched first and sent people to their network
+  team for a certificate-trust problem.
+- Credential errors keep both the Windows description and the error code; the two-argument
+  `Win32Exception` constructor had been discarding the description.
+- Offline and restoring databases are shown as such in the job wizard instead of being offered
+  identically to healthy ones.
+- The bundled gitconfig no longer makes git-lfs mandatory — it was required and not bundled, so any
+  repository where someone had enabled LFS failed its checkout fatally.
+- `RunningAsAnotherAccount` now reaches the dashboard and the wizard. It is the one state Obsync
+  knows in advance will fail authentication, and every banner had gated it out.
+
 ## 0.10.1.1 - 2026-09-05
 
 **Display and layout fixes**, found by running the app and reviewing every screen against seeded
