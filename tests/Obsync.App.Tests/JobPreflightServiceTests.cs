@@ -53,6 +53,106 @@ public sealed class JobPreflightServiceTests
     private static DiagnosticResult Single(IReadOnlyList<DiagnosticResult> results, string name) =>
         Assert.Single(results, r => r.Name == name);
 
+    private JobPreflightRequest RequestWithDatabases(params string[] databases) =>
+        new(_connection, _repository, "main", CommitMode.DirectCommit, ExportPath: null,
+            "environments/SVR/db1", EditingJobId: null, databases);
+
+    private void PermissionsReturn(string database, SqlDatabasePermissionReport report) =>
+        _probe.CheckDatabasePermissionsAsync(Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), database, Arg.Any<CancellationToken>())
+            .Returns(Result.Success(report));
+
+    [Fact]
+    public async Task UnreadableDefinitions_FailPreflight()
+    {
+        // The defect this closes: without VIEW DEFINITION, SQL Server returns NULL from
+        // sys.sql_modules.definition rather than erroring, SMO scripts the objects as empty, and the
+        // run reports Succeeded while committing a hollowed-out schema over a correct one. A
+        // connection test cannot see this — it opens the login's DEFAULT database and reads three
+        // SERVERPROPERTY values, touching no per-database permission at all.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        PermissionsReturn("Sales", new SqlDatabasePermissionReport(
+            "Sales", HasViewDefinition: false, HasViewDatabaseState: true,
+            VisibleObjects: 420, Modules: 180, UnreadableModules: 180));
+
+        var results = await Build().RunAsync(RequestWithDatabases("Sales"));
+
+        var permissions = Single(results, "SQL permissions");
+        Assert.Equal(DiagnosticStatus.Fail, permissions.Status);
+        Assert.Contains("EMPTY", permissions.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("VIEW DEFINITION", permissions.Detail);
+
+        // The old connection check still passes — which is exactly why it was never enough.
+        Assert.Equal(DiagnosticStatus.Pass, Single(results, "SQL connection").Status);
+    }
+
+    [Fact]
+    public async Task ADatabaseWithNoVisibleObjects_WarnsRatherThanFails()
+    {
+        // Genuinely empty is possible, and only the run itself can tell that apart from invisible —
+        // which is what the mass-deletion safety stop is for. A hard failure here would block a
+        // legitimate new database.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        PermissionsReturn("Fresh", new SqlDatabasePermissionReport(
+            "Fresh", HasViewDefinition: true, HasViewDatabaseState: true,
+            VisibleObjects: 0, Modules: 0, UnreadableModules: 0));
+
+        var results = await Build().RunAsync(RequestWithDatabases("Fresh"));
+
+        Assert.Equal(DiagnosticStatus.Warning, Single(results, "SQL permissions").Status);
+    }
+
+    [Fact]
+    public async Task ADatabaseTheLoginCannotOpen_FailsAndNamesIt()
+    {
+        // CONNECT is granted per database, so a login with no user in this one fails here with
+        // 916/4060 — a failure a default-database connection test never reaches.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _probe.CheckDatabasePermissionsAsync(
+                Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), "Locked", Arg.Any<CancellationToken>())
+            .Returns(Result.Failure<SqlDatabasePermissionReport>("The server principal is not able to access the database."));
+
+        var results = await Build().RunAsync(RequestWithDatabases("Locked"));
+
+        var permissions = Single(results, "SQL permissions");
+        Assert.Equal(DiagnosticStatus.Fail, permissions.Status);
+        Assert.Contains("Locked", permissions.Detail);
+    }
+
+    [Fact]
+    public async Task ReadableDefinitions_Pass()
+    {
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        PermissionsReturn("Sales", new SqlDatabasePermissionReport(
+            "Sales", HasViewDefinition: true, HasViewDatabaseState: true,
+            VisibleObjects: 420, Modules: 180, UnreadableModules: 0));
+
+        var results = await Build().RunAsync(RequestWithDatabases("Sales"));
+
+        Assert.Equal(DiagnosticStatus.Pass, Single(results, "SQL permissions").Status);
+    }
+
+    [Fact]
+    public async Task WithNoDatabasesSelected_ThePermissionCheckIsOmittedEntirely()
+    {
+        // Rather than reporting a green row it did not earn — the failure mode this whole check
+        // exists to remove.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+
+        var results = await Build().RunAsync(GitRequest());
+
+        Assert.DoesNotContain(results, r => r.Name == "SQL permissions");
+    }
+
     [Fact]
     public async Task Run_HealthyGitJob_EveryCheckPasses()
     {

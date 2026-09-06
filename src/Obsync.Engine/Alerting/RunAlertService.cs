@@ -4,6 +4,7 @@ using System.Net.Mail;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Obsync.Data.Repositories;
+using Obsync.Shared;
 using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 using Obsync.Shared.Results;
@@ -41,37 +42,71 @@ public class RunAlertService : IRunAlertService
             return;
         }
 
+        AlertDeliveryFailure? emailFailure = null;
+        AlertDeliveryFailure? webhookFailure = null;
+
         if (settings.EmailEnabled)
         {
-            await SendWithOneRetryAsync(
+            emailFailure = await SendWithOneRetryAsync(
                 "Email", ct => SendEmailAsync(settings, RunAlertPayload.BuildEmailSubject(run), RunAlertPayload.BuildEmailBody(run), ct),
                 run, cancellationToken).ConfigureAwait(false);
         }
 
         if (settings.WebhookEnabled)
         {
-            await SendWithOneRetryAsync(
+            webhookFailure = await SendWithOneRetryAsync(
                 "Webhook", ct => PostWebhookAsync(settings, RunAlertPayload.BuildWebhookJson(run), ct),
                 run, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Both channels are always attempted — one failing must never stop the other, which is the
+        // contract RunAlertServiceRetryTests locks down. Combining them afterwards (rather than
+        // short-circuiting into a single variable) is what keeps that true.
+        //
+        // Email wins when both failed: reporting only the later channel would let a working webhook
+        // mask email delivery that has been dead for months.
+        var failure = emailFailure ?? webhookFailure;
+
+        // Record the outcome — including the success case, which CLEARS a previous failure so the
+        // warning disappears on its own once alerting recovers. Best-effort like the send itself:
+        // failing to write down that an alert failed must not fail the run either.
+        try
+        {
+            await _settings.SetLastAlertFailureAsync(failure, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not record the alert delivery outcome for run {RunKey}.", run.RunKey);
         }
     }
 
     /// <summary>
-    /// Sends on one channel with a single retry after <see cref="RetryDelay"/>. Delivery failures
-    /// are logged and swallowed — an alert must never fail or delay a run beyond the bounded
+    /// Sends on one channel with a single retry after <see cref="RetryDelay"/>, returning the
+    /// failure to record or <c>null</c> when the alert went out. Delivery failures are still
+    /// swallowed rather than thrown — an alert must never fail or delay a run beyond the bounded
     /// timeout+retry — and only host cancellation skips the retry (a per-attempt timeout is an
     /// ordinary failure, so it IS retried).
     /// </summary>
-    private async Task SendWithOneRetryAsync(
+    /// <remarks>
+    /// Swallowing is right; leaving no trace was not. The only record used to be a
+    /// <c>LogWarning</c>, so a service whose account cannot read the SMTP password dropped every
+    /// alert indefinitely while Settings still showed a green test. The return value carries the
+    /// failure up to <see cref="NotifyAsync"/>, which persists it for the dashboard.
+    /// A cancelled host returns null deliberately: shutting down is not an alerting fault, and
+    /// recording one would raise a warning on every service restart.
+    /// </remarks>
+    private async Task<AlertDeliveryFailure?> SendWithOneRetryAsync(
         string channel, Func<CancellationToken, Task> send, SyncRun run, CancellationToken cancellationToken)
     {
         try
         {
             await send(cancellationToken).ConfigureAwait(false);
+            return null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // The host is shutting down — nothing to retry, nothing to log.
+            return null;
         }
         catch (Exception)
         {
@@ -79,16 +114,30 @@ public class RunAlertService : IRunAlertService
             {
                 await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
                 await send(cancellationToken).ConfigureAwait(false);
+                return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // The host is shutting down mid-retry.
+                return null;
             }
             catch (Exception retryEx)
             {
                 _logger.LogWarning(
                     retryEx, "{Channel} alert for run {RunKey} ({JobName}) failed after one retry.",
                     channel, run.RunKey, run.JobName);
+
+                // Redacted: SMTP and webhook errors echo back the endpoint, and a misconfigured
+                // webhook URL can carry a token in its path or query.
+                return new AlertDeliveryFailure
+                {
+                    AtUtc = DateTimeOffset.UtcNow,
+                    Channel = channel,
+                    RunKey = run.RunKey,
+                    JobName = run.JobName,
+                    Account = CurrentActor.Name,
+                    Error = SecretRedactor.Scrub(retryEx.Message) ?? "Delivery failed.",
+                };
             }
         }
     }

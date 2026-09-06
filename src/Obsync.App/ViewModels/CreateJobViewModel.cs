@@ -1077,7 +1077,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
                 SelectedCommitMode,
                 IsExportOnly ? ExportPath.Trim() : null,
                 FolderPreview,
-                _editingJob?.Id);
+                _editingJob?.Id,
+                // All-user-databases resolves against the live server at run time, so the enumerated
+                // list is the closest thing the wizard has; the service probes a bounded sample of it.
+                SyncAllUserDatabases
+                    ? [.. Databases.Select(d => d.Name)]
+                    : [.. Databases.Where(d => d.IsSelected).Select(d => d.Name)]);
             var results = await _preflight.RunAsync(request);
 
             PreflightResults.Clear();

@@ -15,6 +15,7 @@ public sealed class RunTriggerToTextConverter : IValueConverter
         RunTrigger.Scheduled => "Scheduled",
         RunTrigger.Startup => "Startup",
         RunTrigger.CatchUp => "Catch-up",
+        RunTrigger.Cli => "CLI",
         _ => string.Empty,
     };
 

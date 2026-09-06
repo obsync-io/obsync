@@ -5,9 +5,49 @@ using Obsync.Shared.Results;
 
 namespace Obsync.Metadata;
 
+/// <summary>
+/// What one database's login can actually see, measured rather than assumed. A connection test
+/// proves only that the login exists and is enabled — it opens the login's DEFAULT database and
+/// reads three SERVERPROPERTY values, touching none of the per-database permissions a run needs.
+/// </summary>
+/// <remarks>
+/// <see cref="UnreadableModules"/> is the important one, and the reason this cannot be inferred
+/// from permissions alone. Without VIEW DEFINITION, SQL Server does not raise an error for a module
+/// the login may see but not read — it returns <c>NULL</c> from <c>sys.sql_modules.definition</c>.
+/// SMO then scripts that object as empty, the run reports Succeeded, and a hollowed-out schema is
+/// committed over a correct one. Nothing downstream can tell that apart from a real change.
+/// </remarks>
+/// <param name="Database">The database probed.</param>
+/// <param name="HasViewDefinition">Database-level VIEW DEFINITION. Grants can also be per-schema or
+/// per-object, so <c>false</c> here is a warning rather than proof — <paramref name="UnreadableModules"/>
+/// is the ground truth.</param>
+/// <param name="HasViewDatabaseState">Database-level VIEW DATABASE STATE, used for row counts.</param>
+/// <param name="VisibleObjects">User objects the login can enumerate at all.</param>
+/// <param name="Modules">Programmability objects (procedures, views, functions, triggers) visible.</param>
+/// <param name="UnreadableModules">Of those, how many would script as empty.</param>
+public sealed record SqlDatabasePermissionReport(
+    string Database,
+    bool HasViewDefinition,
+    bool HasViewDatabaseState,
+    long VisibleObjects,
+    long Modules,
+    long UnreadableModules)
+{
+    /// <summary>True when at least one object would be committed as an empty script.</summary>
+    public bool WouldScriptEmptyObjects => UnreadableModules > 0;
+}
+
 /// <summary>Tests connectivity and enumerates databases on a SQL Server instance.</summary>
 public interface ISqlServerProbe
 {
+    /// <summary>
+    /// Opens <paramref name="database"/> specifically and measures the permissions a sync run
+    /// depends on. Failure means CONNECT was refused (the database is unreachable for this login);
+    /// success carries the detail, which may still describe a partially blind login.
+    /// </summary>
+    Task<Result<SqlDatabasePermissionReport>> CheckDatabasePermissionsAsync(
+        SqlConnectionProfile profile, string? password, string database, CancellationToken cancellationToken = default);
+
     Task<Result<SqlServerInfo>> TestConnectionAsync(
         SqlConnectionProfile profile, string? password, CancellationToken cancellationToken = default);
 
@@ -121,6 +161,58 @@ public sealed class SqlServerProbe : ISqlServerProbe
         {
             _logger.LogWarning("Enumerating databases on {Server} failed: {Message}", profile.ServerName, ex.Message);
             return Result.Failure<IReadOnlyList<SqlDatabaseInfo>>(FriendlyMessage(ex));
+        }
+    }
+
+    public async Task<Result<SqlDatabasePermissionReport>> CheckDatabasePermissionsAsync(
+        SqlConnectionProfile profile, string? password, string database, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Opening the database BY NAME is half the check: a login with no user in this database
+            // fails here with 916/4060, which a default-database connection test never reaches.
+            await using var connection = new SqlConnection(_connectionStrings.Create(profile, password, database));
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            await using var command = connection.CreateCommand();
+            // One round trip. The two HAS_PERMS_BY_NAME calls report the database-level grants the
+            // product's own permission script hands out; the three counts measure what the login can
+            // actually read, which is what the run depends on. ISNULL because HAS_PERMS_BY_NAME
+            // returns NULL for a securable the caller cannot see at all.
+            command.CommandText =
+                """
+                SELECT
+                    CAST(ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION'), 0) AS int),
+                    CAST(ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DATABASE STATE'), 0) AS int),
+                    (SELECT COUNT_BIG(*) FROM sys.objects WHERE is_ms_shipped = 0),
+                    (SELECT COUNT_BIG(*) FROM sys.sql_modules sm
+                        JOIN sys.objects o ON o.object_id = sm.object_id
+                        WHERE o.is_ms_shipped = 0),
+                    (SELECT COUNT_BIG(*) FROM sys.sql_modules sm
+                        JOIN sys.objects o ON o.object_id = sm.object_id
+                        WHERE o.is_ms_shipped = 0 AND sm.definition IS NULL);
+                """;
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return Result.Failure<SqlDatabasePermissionReport>(
+                    $"Could not read permission information for '{database}'.");
+            }
+
+            return Result.Success(new SqlDatabasePermissionReport(
+                database,
+                HasViewDefinition: reader.GetInt32(0) == 1,
+                HasViewDatabaseState: reader.GetInt32(1) == 1,
+                VisibleObjects: reader.GetInt64(2),
+                Modules: reader.GetInt64(3),
+                UnreadableModules: reader.GetInt64(4)));
+        }
+        catch (SqlException ex)
+        {
+            _logger.LogWarning(
+                "Checking permissions on {Server}.{Database} failed: {Message}", profile.ServerName, database, ex.Message);
+            return Result.Failure<SqlDatabasePermissionReport>(FriendlyMessage(ex));
         }
     }
 

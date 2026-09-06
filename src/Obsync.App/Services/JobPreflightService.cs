@@ -9,6 +9,12 @@ using Obsync.Shared.Models;
 namespace Obsync.App.Services;
 
 /// <summary>The slice of wizard state the Review-step preflight needs to verify a job draft.</summary>
+/// <param name="Databases">
+/// The databases this job will script. Needed because the permissions a run depends on are granted
+/// PER DATABASE, and a connection test opens only the login's default one — so without this the
+/// preflight could report a healthy SQL connection for a login that cannot read a single object in
+/// any database the job actually targets.
+/// </param>
 public sealed record JobPreflightRequest(
     SqlConnectionProfile? Connection,
     GitRepositoryProfile? Repository,
@@ -16,7 +22,8 @@ public sealed record JobPreflightRequest(
     CommitMode CommitMode,
     string? ExportPath,
     string EffectiveFolder,
-    Guid? EditingJobId);
+    Guid? EditingJobId,
+    IReadOnlyList<string>? Databases = null);
 
 /// <summary>
 /// Runs the optional pre-save checks on the wizard's Review step: SQL connectivity, repository
@@ -66,6 +73,7 @@ public sealed class JobPreflightService : IJobPreflightService
         // Sequential on purpose: each check is cheap, and one shared SQL/GitHub outage produces an
         // ordered, readable list instead of a burst of parallel failures.
         var results = new List<DiagnosticResult> { await CheckSqlAsync(request, cancellationToken).ConfigureAwait(false) };
+        results.AddRange(await CheckDatabasePermissionsAsync(request, cancellationToken).ConfigureAwait(false));
 
         if (request.CommitMode == CommitMode.ExportOnly)
         {
@@ -189,6 +197,115 @@ public sealed class JobPreflightService : IJobPreflightService
         {
             return Result(name, DiagnosticStatus.Warning, ex.Message);
         }
+    }
+
+    /// <summary>How many databases one preflight probes; enough to catch a systemic grant problem.</summary>
+    private const int MaxDatabasesProbed = 5;
+
+    /// <summary>
+    /// Verifies, per database, the permissions the run actually depends on: CONNECT (by opening the
+    /// database by name), and enough visibility to read object definitions.
+    /// </summary>
+    /// <remarks>
+    /// This is the check whose absence let a login without VIEW DEFINITION pass every preflight and
+    /// then commit empty scripts over a correct schema — SQL Server reports that loss as NULL
+    /// definitions rather than an error, so it is invisible to anything that does not look for it.
+    /// Capped at <see cref="MaxDatabasesProbed"/>: a grant problem is virtually always systemic, and
+    /// an unbounded probe would open one connection per database on an estate-sized job.
+    /// </remarks>
+    private async Task<IReadOnlyList<DiagnosticResult>> CheckDatabasePermissionsAsync(
+        JobPreflightRequest request, CancellationToken cancellationToken)
+    {
+        const string name = "SQL permissions";
+        if (request.Connection is null || request.Databases is not { Count: > 0 } databases)
+        {
+            return [];
+        }
+
+        var probed = databases
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(MaxDatabasesProbed)
+            .ToList();
+        if (probed.Count == 0)
+        {
+            return [];
+        }
+
+        string? password;
+        try
+        {
+            password = request.Connection.RequiresPassword
+                ? _credentials.Retrieve(CredentialKeys.SqlPassword(request.Connection.Id))
+                : null;
+        }
+        catch (Exception ex)
+        {
+            return [Result(name, DiagnosticStatus.Fail, $"The stored SQL password could not be read — {ex.Message}")];
+        }
+
+        var results = new List<DiagnosticResult>();
+        var blind = new List<string>();
+        var partial = new List<string>();
+        var ok = new List<string>();
+
+        foreach (var database in probed)
+        {
+            try
+            {
+                var report = await _probe
+                    .CheckDatabasePermissionsAsync(request.Connection, password, database, cancellationToken)
+                    .ConfigureAwait(false);
+                if (report.IsFailure)
+                {
+                    results.Add(Result(name, DiagnosticStatus.Fail, $"{database}: {report.Error}"));
+                    continue;
+                }
+
+                var value = report.Value;
+                if (value.UnreadableModules > 0)
+                {
+                    partial.Add($"{database} ({value.UnreadableModules:N0} of {value.Modules:N0})");
+                }
+                else if (value.VisibleObjects == 0)
+                {
+                    blind.Add(database);
+                }
+                else
+                {
+                    ok.Add(database);
+                }
+            }
+            catch (Exception ex)
+            {
+                results.Add(Result(name, DiagnosticStatus.Fail, $"{database}: {ex.Message}"));
+            }
+        }
+
+        if (partial.Count > 0)
+        {
+            results.Add(Result(name, DiagnosticStatus.Fail,
+                $"Object definitions are not readable in {string.Join(", ", partial)}. These objects would be "
+                + "committed as EMPTY scripts, overwriting correct ones, and the run would still report success. "
+                + "Grant VIEW DEFINITION on the database (Settings → SQL permissions script)."));
+        }
+
+        if (blind.Count > 0)
+        {
+            // Genuinely empty is possible, so this is a warning: only the run itself can tell an
+            // empty database from an invisible one, and the mass-deletion safety stop covers that.
+            results.Add(Result(name, DiagnosticStatus.Warning,
+                $"No user objects are visible in {string.Join(", ", blind)}. If the database is not actually empty, "
+                + "the login is missing VIEW DEFINITION and the run would script nothing."));
+        }
+
+        if (results.Count == 0 && ok.Count > 0)
+        {
+            var scope = databases.Count > probed.Count ? $"{probed.Count} of {databases.Count} databases" : "all selected databases";
+            results.Add(Result(name, DiagnosticStatus.Pass, $"Definitions are readable in {scope}."));
+        }
+
+        return results;
     }
 
     private DiagnosticResult CheckExportDestination(string? exportPath)

@@ -111,7 +111,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         }
         else
         {
-            await _navigator.ShowSectionAsync("Servers");
+            await _navigator.ShowSectionAsync(item.Section);
         }
     }
 
@@ -185,7 +185,12 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
             .Where(g => g.First().Status == RunStatus.Skipped)
             .ToDictionary(g => g.Key, g => g.First().ErrorMessage ?? "another run was using its workspace");
 
-        var attention = AttentionModel.Build(jobs, servers, runErrors, skippedOccurrences, now);
+        // Written by whichever host last tried to send — so this surfaces an alerting outage inside
+        // the SERVICE, which is the one the Settings test button can never reproduce (it sends from
+        // this process, under this user, whose vault is the one that works).
+        var alertFailure = await _settings.GetLastAlertFailureAsync();
+
+        var attention = AttentionModel.Build(jobs, servers, runErrors, skippedOccurrences, now, alertFailure);
         AttentionItems.Clear();
         foreach (var item in attention.Take(AttentionModel.MaxRows))
         {

@@ -12,10 +12,15 @@ public enum AttentionSeverity
 }
 
 /// <summary>
-/// One row of the dashboard's "Needs attention" card. <see cref="JobId"/> is null for server rows,
-/// whose action navigates to the Servers section instead of a job.
+/// One row of the dashboard's "Needs attention" card. <see cref="JobId"/> is null for rows that are
+/// not about one job; those navigate to <see cref="Section"/> instead.
 /// </summary>
-public sealed record AttentionItem(AttentionSeverity Severity, string Text, string ActionLabel, Guid? JobId);
+/// <param name="Section">
+/// Shell section to open when <paramref name="JobId"/> is null. Defaults to Servers, which was the
+/// hardcoded destination back when a failed connection test was the only job-less row.
+/// </param>
+public sealed record AttentionItem(
+    AttentionSeverity Severity, string Text, string ActionLabel, Guid? JobId, string Section = "Servers");
 
 /// <summary>
 /// Pure aggregation behind the dashboard's "Needs attention" card: failed and warning last runs,
@@ -36,12 +41,20 @@ internal static class AttentionModel
     /// can surface it. The overdue rule cannot: reconcile keeps the next-run time in the future, so
     /// a job that quietly lost an occurrence still looks perfectly healthy.
     /// </param>
+    /// <param name="alertFailure">
+    /// The last alert Obsync could not deliver, or null when the most recent attempt succeeded.
+    /// Alert sends are best-effort by design, so nothing else in the product can report one: the
+    /// run itself still succeeds, and the Settings test button sends from the app under the
+    /// signed-in user, which is precisely the identity that is NOT failing when the service's
+    /// account cannot read the SMTP password.
+    /// </param>
     public static IReadOnlyList<AttentionItem> Build(
         IReadOnlyList<SyncJob> jobs,
         IReadOnlyList<SqlConnectionProfile> servers,
         IReadOnlyDictionary<Guid, string> runErrors,
         IReadOnlyDictionary<Guid, string> skippedOccurrences,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        AlertDeliveryFailure? alertFailure = null)
     {
         var items = new List<AttentionItem>();
 
@@ -86,6 +99,17 @@ internal static class AttentionModel
         {
             items.Add(new(AttentionSeverity.Error,
                 $"Server “{server.Name}” failed its last connection test", "Open Servers", null));
+        }
+
+        // Last, and Error rather than Warning: runs are still completing normally, so nothing else
+        // on this dashboard looks wrong — which is exactly why a silent alerting outage needs to be
+        // stated. Naming the account is usually the whole diagnosis, because the common cause is
+        // the service running under an account whose credential vault has no SMTP password.
+        if (alertFailure is { } alert)
+        {
+            items.Add(new(AttentionSeverity.Error,
+                $"{alert.Channel} alerts are not being delivered (as {alert.Account}) — {FirstLine(alert.Error)}",
+                "Open Settings", null, "Settings"));
         }
 
         return items;

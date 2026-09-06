@@ -93,6 +93,18 @@ public enum RunTrigger
 
     /// <summary>A one-time recovery run for a scheduled occurrence missed while the scheduler was offline.</summary>
     CatchUp = 3,
+
+    /// <summary>
+    /// Started by <c>obsync run</c>. Unattended: the CLI is the documented automation entry point
+    /// (Task Scheduler, CI), so nobody is present to confirm a mass deletion or to notice that a
+    /// disabled job ran anyway — it must NOT be treated as <see cref="Manual"/>.
+    /// </summary>
+    /// <remarks>
+    /// Appended, never inserted: <c>RunTrigger</c> is persisted as an integer in the <c>runs</c>
+    /// table and compared as one in SQL (see <c>CountUnattendedFailuresSinceAsync</c>), so
+    /// renumbering the existing members would silently relabel every historical row.
+    /// </remarks>
+    Cli = 4,
 }
 
 /// <summary>How Obsync reaches the internet for GitHub API + git operations.</summary>

@@ -88,6 +88,28 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
         return 1;
     }
 
+    // The two benign engine gates (disabled job, maintenance window) return an UN-PERSISTED run
+    // with NoChanges, which is right for the scheduler — nothing went wrong, and a history row
+    // would be noise. For automation it is not: `obsync run` is an explicit request to run THIS
+    // job, so silently reporting success while doing nothing is the failure this exit code exists
+    // to prevent. Checked here, ahead of the engine, purely so the message can name the reason;
+    // the engine's own gates remain authoritative.
+    if (!job.Enabled)
+    {
+        Console.Error.WriteLine(
+            $"Job '{job.Name}' is disabled and was not run. Enable it in the Obsync app, or use Run Now there "
+            + "to run it once without enabling it.");
+        return 4;
+    }
+
+    if (!job.Schedule.IsWithinMaintenanceWindow(DateTimeOffset.Now))
+    {
+        Console.Error.WriteLine(
+            $"Job '{job.Name}' is outside its maintenance window and was not run. Run it inside the window, "
+            + "widen the window in the Obsync app, or use Run Now there to override.");
+        return 4;
+    }
+
     var engine = provider.GetRequiredService<ISyncEngine>();
     var progress = new Progress<SyncProgress>(p => Console.WriteLine($"  [{p.Phase}] {p.Message}"));
 
@@ -105,11 +127,18 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
     SyncRun run;
     try
     {
-        run = await engine.RunJobAsync(job.Id, RunTrigger.Manual, progress, cts.Token);
+        // Cli, NOT Manual. Manual disables the mass-deletion circuit breaker, the disabled-job gate
+        // and the maintenance window, on the stated grounds that "the user is present and sees the
+        // counts". Nobody is present for a Task Scheduler or CI invocation, and the counts are
+        // printed below only AFTER the push — so a login that lost VIEW DEFINITION would have had
+        // its whole schema deleted and pushed before anyone could read them.
+        run = await engine.RunJobAsync(job.Id, RunTrigger.Cli, progress, cts.Token);
     }
     catch (InvalidOperationException ex)
     {
-        // e.g. the job is already running in another Obsync process — a message, not a stack trace.
+        // Configuration faults (missing repository/connection profile) still surface as exceptions.
+        // The contention gates no longer do: under the Cli trigger they record the occurrence and
+        // return it, which is why Skipped is mapped to its own exit code below.
         Console.Error.WriteLine(ex.Message);
         return 1;
     }
@@ -131,10 +160,15 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
 
     // Warning gets its own exit code (see help): the run partially succeeded (e.g. commit created
     // but push failed) and scripts checking "!= 0" should notice.
+    //
+    // Skipped must not be 0 either. Under the Manual trigger the contention gates THREW and this
+    // method returned 1; under Cli they record the occurrence and return it, so without this arm a
+    // job that never ran because another process held its lock would report success to the caller.
     return run.Status switch
     {
         RunStatus.Failed or RunStatus.Cancelled => 1,
         RunStatus.Warning => 3,
+        RunStatus.Skipped => 4,
         _ => 0,
     };
 }
@@ -163,6 +197,13 @@ static int PrintHelp()
           1   failed, cancelled, or could not start
           2   usage error
           3   finished with warnings (e.g. commit created but push failed)
+          4   did not run (job disabled, outside its maintenance window, or already
+              running in another Obsync process)
+
+        CLI runs are unattended. The mass-deletion safety stop, the disabled-job gate and
+        the maintenance window all apply, and none can be overridden from the command line:
+        if a run's deletions are suspended, confirm them with Run Now in the Obsync app,
+        where the counts are shown before anything is committed.
         """);
     return 0;
 }

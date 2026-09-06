@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -33,6 +33,7 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
 
     private ServiceProvider _provider = null!;
     private IGitWorkspace _gitWorkspace = null!;
+    private FakeCredentialStore _credentials = null!;
     private IGitHubService _gitHub = null!;
     private FilteringScriptProvider _scripts = null!;
     private SyncJob _job = null!;
@@ -75,7 +76,8 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
             .Returns(Task.FromResult<IReadOnlyList<UnsupportedObjectGroup>>([]));
         services.AddSingleton(unsupported);
         services.AddSingleton(Substitute.For<IRunAlertService>());
-        services.AddSingleton<ICredentialStore>(new FakeCredentialStore());
+        _credentials = new FakeCredentialStore();
+        services.AddSingleton<ICredentialStore>(_credentials);
         services.Configure<ObsyncEngineOptions>(o => o.WorkspacesRoot = Path.Combine(_root, "workspaces"));
         services.AddSingleton<ISyncEngine, SyncEngine>();
 
@@ -273,10 +275,189 @@ public sealed class DeletionSafetyTests : IAsyncLifetime
         }
     }
 
+    // ---- Mass-deletion breaker: the gaps the "> 50" term left open -------------------------------
+
+    [Fact]
+    public async Task SmallDatabase_LosingEverything_SuspendsDeletionsOnScheduledRuns()
+    {
+        // The exact shape the old predicate exempted. `candidates.Count > 50` was an unconditional
+        // pass for small scopes, so a 40-object utility database that lost VIEW DEFINITION had every
+        // file deleted, committed and pushed on a SCHEDULED run — reported as Succeeded.
+        _scripts.Items = [.. Enumerable.Range(1, 40).Select(i => Proc("dbo", $"P{i}"))];
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+        Assert.Equal(40, (await StatesAsync()).Count);
+
+        _scripts.Items = [];
+        var scheduled = await RunAsync(RunTrigger.Scheduled);
+
+        Assert.Equal(RunStatus.Warning, scheduled.Status);
+        Assert.Equal(0, scheduled.ObjectsDeleted);
+        Assert.Equal(40, (await StatesAsync()).Count);
+    }
+
+    [Fact]
+    public async Task LargePartialLoss_SuspendsDeletions_EvenBelowHalf()
+    {
+        // 120 of 300 is 40% — under the majority rule, and exactly what losing one schema of a large
+        // estate looks like. The absolute threshold is what catches it.
+        _scripts.Items = [.. Enumerable.Range(1, 300).Select(i => Proc("dbo", $"P{i}"))];
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        _scripts.Items = [.. Enumerable.Range(121, 180).Select(i => Proc("dbo", $"P{i}"))];
+        var scheduled = await RunAsync(RunTrigger.Scheduled);
+
+        Assert.Equal(RunStatus.Warning, scheduled.Status);
+        Assert.Equal(0, scheduled.ObjectsDeleted);
+        Assert.Equal(300, (await StatesAsync()).Count);
+    }
+
+    [Fact]
+    public async Task WholeSchemaDisappearing_SuspendsDeletions()
+    {
+        // A schema-scoped DENY: small in both absolute and relative terms, so the other rules miss
+        // it, but the signature is unmistakable — every tracked object of one schema and nothing else.
+        _scripts.Items =
+        [
+            .. Enumerable.Range(1, 60).Select(i => Proc("dbo", $"P{i}")),
+            .. Enumerable.Range(1, 6).Select(i => Proc("sales", $"S{i}")),
+        ];
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+        Assert.Equal(66, (await StatesAsync()).Count);
+
+        _scripts.Items = [.. Enumerable.Range(1, 60).Select(i => Proc("dbo", $"P{i}"))];
+        var scheduled = await RunAsync(RunTrigger.Scheduled);
+
+        Assert.Equal(RunStatus.Warning, scheduled.Status);
+        Assert.Equal(0, scheduled.ObjectsDeleted);
+        Assert.Contains("sales", scheduled.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(66, (await StatesAsync()).Count);
+    }
+
+    [Fact]
+    public async Task AnOrdinaryDrop_StillDeletes()
+    {
+        // The counterweight to the four tests above: a safety stop that fires on routine work is a
+        // different defect, not a fix. One dropped procedure out of 60 must still be committed.
+        _scripts.Items = [.. Enumerable.Range(1, 60).Select(i => Proc("dbo", $"P{i}"))];
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        _scripts.Items = [.. Enumerable.Range(2, 59).Select(i => Proc("dbo", $"P{i}"))];
+        var scheduled = await RunAsync(RunTrigger.Scheduled);
+
+        Assert.Equal(RunStatus.Succeeded, scheduled.Status);
+        Assert.Equal(1, scheduled.ObjectsDeleted);
+        Assert.Equal(59, (await StatesAsync()).Count);
+    }
+
+    // ---- The CLI is unattended --------------------------------------------------------------------
+
+    [Fact]
+    public async Task CliTrigger_IsUnattended_AndSuspendsDeletions()
+    {
+        // `obsync run` used to pass RunTrigger.Manual, which disabled this stop on the product's own
+        // automation entry point — where nobody is present and the counts are printed only after the
+        // push has already happened.
+        _scripts.Items = [.. Enumerable.Range(1, 60).Select(i => Proc("dbo", $"P{i}"))];
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        _scripts.Items = [];
+        var cli = await RunAsync(RunTrigger.Cli);
+
+        Assert.Equal(RunStatus.Warning, cli.Status);
+        Assert.Equal(0, cli.ObjectsDeleted);
+        Assert.Equal(60, (await StatesAsync()).Count);
+    }
+
+    [Fact]
+    public async Task CliTrigger_DoesNotRunADisabledJob()
+    {
+        _scripts.Items = [Proc("dbo", "P1")];
+        _job.Enabled = false;
+        await SaveJobAsync();
+
+        var cli = await RunAsync(RunTrigger.Cli);
+
+        Assert.Equal(0, cli.ObjectsScanned);
+        Assert.Empty(await _provider.GetRequiredService<IRunRepository>().GetForJobAsync(_job.Id));
+    }
+
+    // ---- Ignored destinations must not be read as "identical tree" -------------------------------
+
+    [Fact]
+    public async Task IgnoredDestination_FailsTheRun_AndDoesNotAdvanceState()
+    {
+        // git staged nothing because .gitignore matched the destination, not because the tree was
+        // identical. Advancing state here is unrecoverable: every later run matches the stored
+        // hashes, writes nothing, and reports NoChanges forever while the repository stays empty.
+        _scripts.Items = [Proc("dbo", "P1"), Proc("dbo", "P2")];
+        _gitWorkspace.CommitAllAsync(
+                Arg.Any<GitWorkspaceContext>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(GitCommitResult.NoChanges());
+        _gitWorkspace.FindIgnoredPathAsync(
+                Arg.Any<GitWorkspaceContext>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(".gitignore:3:build/\tdb/Db1/StoredProcedures/dbo.P1.sql");
+
+        var run = await RunAsync();
+
+        Assert.Equal(RunStatus.Failed, run.Status);
+        Assert.Contains("ignoring", run.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(".gitignore", run.ErrorMessage);
+        Assert.Empty(await StatesAsync());
+    }
+
+    [Fact]
+    public async Task IdenticalTree_WithNothingIgnored_StillAdvancesState()
+    {
+        // The legitimate half of the same branch: git DID see the files and found them identical, so
+        // the repository genuinely carries the content and state may advance. Guards against the
+        // ignored-path check turning a normal no-op run into a failure.
+        _scripts.Items = [Proc("dbo", "P1")];
+        Assert.Equal(RunStatus.Succeeded, (await RunAsync()).Status);
+
+        File.Delete(Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories).First());
+        _gitWorkspace.CommitAllAsync(
+                Arg.Any<GitWorkspaceContext>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(GitCommitResult.NoChanges());
+        _gitWorkspace.FindIgnoredPathAsync(
+                Arg.Any<GitWorkspaceContext>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        var run = await RunAsync();
+
+        Assert.Equal(RunStatus.NoChanges, run.Status);
+        Assert.Single(await StatesAsync());
+    }
+
+    // ---- An unreadable credential must leave a record --------------------------------------------
+
+    [Fact]
+    public async Task UnreadableCredential_RecordsAFailedRun_InsteadOfVanishing()
+    {
+        // A MISSING secret returns null and is already reported well. An UNREADABLE one throws —
+        // ERROR_NO_SUCH_LOGON_SESSION is the ordinary result for a service account with no loaded
+        // profile — and that throw used to escape above the run insert, leaving no history row, no
+        // alert and no audit event while the next-run time advanced. The job looked like it never fired.
+        _scripts.Items = [Proc("dbo", "P1")];
+        _credentials.ThrowOnRetrieve = new System.ComponentModel.Win32Exception(1312, "The logon session does not exist.");
+
+        var scheduled = await RunAsync(RunTrigger.Scheduled);
+
+        Assert.Equal(RunStatus.Failed, scheduled.Status);
+        Assert.Contains("Credential Manager", scheduled.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(await _provider.GetRequiredService<IRunRepository>().GetForJobAsync(_job.Id));
+
+        // Manual runs still throw, so the app can show the message on the button the user pressed.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => RunAsync(RunTrigger.Manual));
+    }
+
     private sealed class FakeCredentialStore : ICredentialStore
     {
+        /// <summary>Set to make <see cref="Retrieve"/> throw, as the real store does for any
+        /// CredRead error other than ERROR_NOT_FOUND.</summary>
+        public Exception? ThrowOnRetrieve { get; set; }
+
         public void Store(string key, string secret) { }
-        public string? Retrieve(string key) => "fake-token";
+        public string? Retrieve(string key) => ThrowOnRetrieve is null ? "fake-token" : throw ThrowOnRetrieve;
         public void Delete(string key) { }
         public bool Exists(string key) => true;
     }

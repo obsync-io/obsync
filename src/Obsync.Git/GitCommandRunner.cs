@@ -96,6 +96,59 @@ public sealed class GitCommandRunner : IGitCommandRunner
         ("protocol.file.allow", "always"),
     ];
 
+    /// <summary>
+    /// Inherited environment variables removed before every git invocation, because each one either
+    /// overrides <see cref="HardeningConfig"/> or re-points git at something other than the working
+    /// tree Obsync asked for. Grouped by what they defeat:
+    /// <list type="bullet">
+    /// <item>config injection — <c>GIT_CONFIG_PARAMETERS</c> is applied AFTER the numbered
+    /// <c>GIT_CONFIG_*</c> block, so it wins over every hardening key; <c>GIT_CONFIG</c>,
+    /// <c>GIT_CONFIG_GLOBAL</c>, <c>GIT_CONFIG_SYSTEM</c> and <c>GIT_CONFIG_NOSYSTEM</c> substitute
+    /// the files those keys are layered on.</item>
+    /// <item>repository redirection — <c>GIT_DIR</c> and friends override
+    /// <see cref="ProcessStartInfo.WorkingDirectory"/>, so a run would read and write someone
+    /// else's repository while every path in this code still looked correct.</item>
+    /// <item>program execution — <c>GIT_EXTERNAL_DIFF</c> runs on the <c>diff --cached</c> this
+    /// class issues, <c>GIT_TEMPLATE_DIR</c> installs hooks during clone, and the ssh/proxy command
+    /// variables run whatever they name.</item>
+    /// <item>transport allow-list — <c>GIT_ALLOW_PROTOCOL</c> replaces <c>protocol.*.allow</c>
+    /// wholesale, which is the single control stopping an <c>ext::</c> rewrite from executing.</item>
+    /// </list>
+    /// Deliberately NOT cleared: <c>PATH</c>, <c>HOME</c>, <c>USERPROFILE</c> and the proxy
+    /// variables. The bundled git resolves its own helpers through them, and the site's CA bundle
+    /// and proxy are reached the same way — the isolation trade-off <see cref="HardeningConfig"/>
+    /// already documents.
+    /// </summary>
+    private static readonly string[] HostileEnvironment =
+    [
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_CONFIG_NOSYSTEM",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_DIFF_OPTS",
+        "GIT_TEMPLATE_DIR",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_PROXY_COMMAND",
+        "GIT_ALLOW_PROTOCOL",
+        "GIT_PROTOCOL_FROM_USER",
+        "GIT_EDITOR",
+        "GIT_SEQUENCE_EDITOR",
+        "GIT_PAGER",
+        "GIT_ATTR_NOSYSTEM",
+    ];
+
     private readonly ILogger<GitCommandRunner> _logger;
 
     public GitCommandRunner(ILogger<GitCommandRunner> logger) => _logger = logger;
@@ -154,6 +207,30 @@ public sealed class GitCommandRunner : IGitCommandRunner
         // so any host started from one inherits it.
         startInfo.Environment.Remove("GIT_ASKPASS");
         startInfo.Environment.Remove("SSH_ASKPASS");
+
+        // ...and the same reasoning applied to the whole inherited block. ProcessStartInfo seeds
+        // Environment from THIS process, so anything set for the account running Obsync reaches
+        // git. Several inherited variables defeat the hardening above outright, and setting a user
+        // environment variable needs no privilege at all — a strictly easier path than editing the
+        // machine gitconfig that HardeningConfig is written against. Measured: with
+        // GIT_CONFIG_PARAMETERS re-enabling protocol.ext.allow, an `ext::` remote executed a shell
+        // command; with GIT_DIR set, every add/commit/checkout operated on a different repository
+        // than WorkingDirectory.
+        foreach (var name in HostileEnvironment)
+        {
+            startInfo.Environment.Remove(name);
+        }
+
+        // GIT_CONFIG_KEY_n/VALUE_n are numbered, so an inherited block cannot be cleared by name.
+        // Ours always rewrites 0..COUNT-1 and sets COUNT, which makes higher inherited indexes
+        // unreachable — but only once COUNT is ours. Strip every one first so the numbering this
+        // process builds is the only numbering git sees.
+        foreach (var key in startInfo.Environment.Keys
+                     .Where(k => k is not null && k.StartsWith("GIT_CONFIG_", StringComparison.Ordinal))
+                     .ToList())
+        {
+            startInfo.Environment.Remove(key);
+        }
 
         // Stable English output: transient-vs-permanent classification and the push-failure
         // explanations match on stderr text, which a localized PATH git would translate.

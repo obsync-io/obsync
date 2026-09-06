@@ -214,7 +214,13 @@ public sealed class SyncEngine : ISyncEngine
         // (manual "Run Now" and startup runs bypass). Skips are log-only — advance the cached
         // next-run so the UI stays accurate, and return an un-persisted run (the scheduler ignores
         // the result).
-        if (trigger is RunTrigger.Scheduled or RunTrigger.CatchUp
+        // CLI runs are included: a maintenance window is a standing constraint on when this server
+        // may be touched, not a detail of Obsync's own cadence, and `obsync run` from Task Scheduler
+        // is exactly the unattended case it exists to bound. Startup and manual runs still bypass —
+        // both are attended in the sense that matters (a person started the host, or clicked Run Now
+        // and can see the result). The attended override is Run Now in the app, deliberately the
+        // same escape hatch the mass-deletion breaker uses.
+        if (trigger is RunTrigger.Scheduled or RunTrigger.CatchUp or RunTrigger.Cli
             && !job.Schedule.IsWithinMaintenanceWindow(_clock.UtcNow.ToLocalTime()))
         {
             _logger.LogInformation("Job {JobId} ({JobName}) skipped — outside its maintenance window.", job.Id, job.Name);
@@ -245,21 +251,51 @@ public sealed class SyncEngine : ISyncEngine
         // Export Only has no GitHub repository or token; the git modes load both.
         GitRepositoryProfile? repository = null;
         string? gitToken = null;
-        if (job.CommitMode != CommitMode.ExportOnly)
+        string? sqlPassword;
+        try
         {
-            if (job.RepositoryProfileId is not { } repositoryId)
+            if (job.CommitMode != CommitMode.ExportOnly)
             {
-                throw new InvalidOperationException("The job has no destination repository.");
+                if (job.RepositoryProfileId is not { } repositoryId)
+                {
+                    throw new InvalidOperationException("The job has no destination repository.");
+                }
+
+                repository = await _repositories.GetAsync(repositoryId, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("The job's GitHub repository profile was not found.");
+                gitToken = _credentialStore.Retrieve(CredentialKeys.GitHubToken(repository.Id));
             }
 
-            repository = await _repositories.GetAsync(repositoryId, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("The job's GitHub repository profile was not found.");
-            gitToken = _credentialStore.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+            sqlPassword = connection.RequiresPassword
+                ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(connection.Id))
+                : null;
         }
+        catch (Exception ex) when (ex is not OperationCanceledException and not InvalidOperationException)
+        {
+            // A MISSING secret returns null and is reported further down as a Failed run with
+            // actionable text. An UNREADABLE one throws: the credential store surfaces every
+            // CredRead error other than ERROR_NOT_FOUND as an exception, and ERROR_NO_SUCH_LOGON_
+            // SESSION is the ordinary result for a service account whose profile is not loaded.
+            //
+            // That throw used to escape to Quartz from here — above the InsertAsync below — so the
+            // occurrence left no run row, no history entry, no alert and no audit event, while the
+            // next-run time advanced. The job simply appeared never to have fired. Same shape as the
+            // lock-open failure above, which was fixed for the same reason.
+            _logger.LogError(ex, "Job {JobId}: a stored credential could not be read.", job.Id);
 
-        var sqlPassword = connection.RequiresPassword
-            ? _credentialStore.Retrieve(CredentialKeys.SqlPassword(connection.Id))
-            : null;
+            var unreadable =
+                "Obsync could not read a stored credential for this job from Windows Credential Manager. "
+                + $"The vault is per-account and this run is executing as {CurrentActor.Name} — if the secrets were "
+                + "saved under a different account, save them again while signed in as this one. "
+                + $"Windows reported: {ex.Message}";
+            if (trigger == RunTrigger.Manual)
+            {
+                throw new InvalidOperationException(unreadable, ex);
+            }
+
+            return await RecordOccurrenceAsync(
+                job, trigger, RunStatus.Failed, unreadable, connection.ServerName, cancellationToken).ConfigureAwait(false);
+        }
 
         // Different jobs can share one repository profile — and therefore one git workspace. A
         // second lock (per repository) serializes them: interleaved checkout/add in a shared clone
@@ -270,15 +306,43 @@ public sealed class SyncEngine : ISyncEngine
         if (job.CommitMode != CommitMode.ExportOnly && job.RepositoryProfileId is { } workspaceRepoId)
         {
             var lockName = $"repo-{workspaceRepoId:N}";
-            workspaceLock = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, lockName);
-            if (workspaceLock is null)
+            try
             {
-                progress?.Report(new SyncProgress(SyncPhase.PreparingRepository,
-                    "Waiting for another job that uses the same repository to finish…"));
-                _logger.LogInformation(
-                    "Job {JobId} ({JobName}) is waiting for the repository workspace lock.", job.Id, job.Name);
-                workspaceLock = await JobRunLock.WaitAsync(
-                    ObsyncPaths.LocksRoot, lockName, WorkspaceLockTimeout, cancellationToken).ConfigureAwait(false);
+                workspaceLock = JobRunLock.TryAcquire(ObsyncPaths.LocksRoot, lockName);
+                if (workspaceLock is null)
+                {
+                    progress?.Report(new SyncProgress(SyncPhase.PreparingRepository,
+                        "Waiting for another job that uses the same repository to finish…"));
+                    _logger.LogInformation(
+                        "Job {JobId} ({JobName}) is waiting for the repository workspace lock.", job.Id, job.Name);
+                    workspaceLock = await JobRunLock.WaitAsync(
+                        ObsyncPaths.LocksRoot, lockName, WorkspaceLockTimeout, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // The same guard the JOB lock above has had since H-5, which this lock never got.
+                // TryAcquire deliberately lets this escape after its delete-pending retries, because
+                // the remaining causes are real: a read-only leftover .lock (these survive power
+                // loss, and restore-from-backup re-applies the attribute) or a deny ACE on the locks
+                // folder. Unguarded it threw before the run row existed, so every occurrence of every
+                // job sharing this repository vanished silently while the dashboard went on showing a
+                // healthy next-run time.
+                _logger.LogError(
+                    ex, "Job {JobId}: the repository lock {LockName} under {LocksRoot} could not be opened.",
+                    job.Id, lockName, ObsyncPaths.LocksRoot);
+
+                var denied =
+                    $"Obsync could not open the shared repository lock file ({lockName}.lock) in "
+                    + $"{ObsyncPaths.LocksRoot}. Check the folder's permissions and remove any read-only leftover "
+                    + ".lock files.";
+                if (trigger == RunTrigger.Manual)
+                {
+                    throw new InvalidOperationException(denied, ex);
+                }
+
+                return await RecordOccurrenceAsync(
+                    job, trigger, RunStatus.Failed, denied, connection.ServerName, cancellationToken).ConfigureAwait(false);
             }
 
             if (workspaceLock is null)
@@ -1743,13 +1807,14 @@ public sealed class SyncEngine : ISyncEngine
 
         var typesInScope = scopedTypes as IReadOnlySet<SqlObjectType> ?? scopedTypes.ToHashSet();
         var candidates = new List<TrackedObjectState>();
+
+        // The population the breaker reasons about: prior rows this run COULD legitimately have
+        // re-seen. Using prior.Count as the denominator instead counted rows the run was never
+        // going to touch (a deselected type, a synthetic artifact), which diluted the ratio and made
+        // the safety stop progressively harder to trip the more types a job had deselected.
+        var inScope = new List<TrackedObjectState>();
         foreach (var (key, state) in prior)
         {
-            if (seen.ContainsKey(key))
-            {
-                continue;
-            }
-
             // A prior row whose type was not part of this run's selection is out of scope, not
             // dropped: deselecting a type must retain its committed files, exactly like removing a
             // database from the job. The synthetic artifact/reference-data rows keep their explicit
@@ -1760,21 +1825,31 @@ public sealed class SyncEngine : ISyncEngine
                 continue;
             }
 
-            candidates.Add(state);
+            inScope.Add(state);
+            if (!seen.ContainsKey(key))
+            {
+                candidates.Add(state);
+            }
         }
 
-        // Mass-deletion circuit breaker: when most of the tracked objects vanish at once on an
-        // UNATTENDED run, the far likelier cause is lost metadata visibility (revoked VIEW
-        // DEFINITION, a remapped login) than a genuine mass drop — and committing the wipe would
-        // rewrite source-control history for every object. Suspend the deletions and warn; a manual
-        // Run Now applies them (the user is present and sees the counts — that is the confirmation).
-        if (trigger != RunTrigger.Manual && candidates.Count > 50 && candidates.Count * 2 > prior.Count)
+        // Mass-deletion circuit breaker: when tracked objects vanish in a pattern that looks like
+        // lost metadata visibility (revoked VIEW DEFINITION, a remapped login, a DENY rolled out by
+        // config management) rather than a genuine drop, suspend the deletions on an UNATTENDED run
+        // and warn. Committing the wipe would rewrite source-control history for every object, and
+        // SQL Server reports a permission loss as absence, not as an error — nothing else in the
+        // pipeline can tell the two apart.
+        //
+        // Run Now applies them: the user is present and sees the counts, and that is the
+        // confirmation. `obsync run` is NOT that — see RunTrigger.Cli.
+        if (trigger != RunTrigger.Manual && DisappearanceLooksLikeLostVisibility(candidates, inScope) is { } suspicion)
         {
             context.DeletionSuspensionReason =
-                $"{candidates.Count:N0} of {prior.Count:N0} tracked objects in {database} disappeared in one run — " +
-                "deletions were suspended as a safety stop (this usually means the job's login lost metadata " +
-                "visibility, not a real mass drop). Verify the SQL permissions; if the objects were really " +
-                "dropped, use Run Now to confirm and apply the deletions.";
+                $"{candidates.Count:N0} of {inScope.Count:N0} tracked objects in {database} disappeared in one run " +
+                $"({suspicion}) — deletions were suspended as a safety stop. This usually means the job's login lost " +
+                "metadata visibility rather than a real mass drop: SQL Server returns no rows for objects the login " +
+                "cannot see, which is indistinguishable from them having been dropped. Verify the SQL permissions " +
+                "(CONNECT, VIEW DEFINITION and VIEW DATABASE STATE on this database); if the objects really were " +
+                "dropped, use Run Now in the Obsync app to confirm and apply the deletions.";
             context.Log(SyncLogLevel.Warning, context.DeletionSuspensionReason);
             return;
         }
@@ -1801,6 +1876,84 @@ public sealed class SyncEngine : ISyncEngine
         // The state rows are removed by PersistStatesAsync only after the changeset is delivered —
         // deleting them here would forget the deletion forever if the commit/push later failed.
         context.PendingDeletedStateIds.AddRange(deletedIds);
+    }
+
+    /// <summary>Any single loss at or above this count is treated as suspicious whatever the ratio.</summary>
+    private const int MassDeletionAbsoluteThreshold = 100;
+
+    /// <summary>Smallest loss the majority rule will act on, so a 1-of-2 drop is not called a wipe.</summary>
+    private const int MassDeletionMajorityFloor = 10;
+
+    /// <summary>Smallest schema the whole-schema rule will act on, for the same reason.</summary>
+    private const int SchemaWipeFloor = 5;
+
+    /// <summary>
+    /// Decides whether a set of disappeared objects matches the shape of lost metadata visibility,
+    /// returning the rule that matched (for the warning text) or <c>null</c> to let the deletions
+    /// through. Internal and pure so the thresholds can be tested directly, without a SQL Server.
+    /// </summary>
+    /// <remarks>
+    /// Four rules, because one predicate could not cover the real failures:
+    /// <list type="number">
+    /// <item><b>Total wipe, any size.</b> The previous <c>count &gt; 50</c> term was an unconditional
+    /// EXEMPTION for small scopes: a 40-object utility database that lost VIEW DEFINITION had every
+    /// file deleted, committed and pushed on a scheduled run, and the run reported Succeeded. Scope
+    /// size is not evidence about cause, so nothing here is gated on it.</item>
+    /// <item><b>Large absolute loss.</b> Catches a big partial loss that the majority rule misses —
+    /// 4,000 objects of 10,000 is 40%, well under half, and is exactly what losing one schema of a
+    /// large estate looks like.</item>
+    /// <item><b>Majority loss.</b> The original rule, kept, with a floor so trivial scopes do not
+    /// trip it on a single ordinary drop.</item>
+    /// <item><b>Whole-schema wipe.</b> The precise signature of a schema-scoped DENY: every tracked
+    /// object of one schema gone while the rest of the database is intact. Small in both absolute
+    /// and relative terms, so the three rules above can all miss it.</item>
+    /// </list>
+    /// </remarks>
+    internal static string? DisappearanceLooksLikeLostVisibility(
+        IReadOnlyCollection<TrackedObjectState> candidates, IReadOnlyCollection<TrackedObjectState> inScope)
+    {
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        if (candidates.Count == inScope.Count)
+        {
+            return "every tracked object in scope";
+        }
+
+        if (candidates.Count >= MassDeletionAbsoluteThreshold)
+        {
+            return $"at least {MassDeletionAbsoluteThreshold:N0} at once";
+        }
+
+        if (candidates.Count >= MassDeletionMajorityFloor && candidates.Count * 2 >= inScope.Count)
+        {
+            return "more than half of them";
+        }
+
+        // Synthetic artifact and reference-data rows carry no schema; grouping them together would
+        // invent a "" schema that wipes whenever those toggles are turned off, which is a
+        // deliberate deconfiguration rather than a visibility loss.
+        var lostPerSchema = candidates
+            .Where(c => !string.IsNullOrEmpty(c.SchemaName))
+            .GroupBy(c => c.SchemaName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in inScope
+                     .Where(s => !string.IsNullOrEmpty(s.SchemaName))
+                     .GroupBy(s => s.SchemaName, StringComparer.OrdinalIgnoreCase))
+        {
+            var tracked = group.Count();
+            if (tracked >= SchemaWipeFloor
+                && lostPerSchema.TryGetValue(group.Key, out var lost)
+                && lost == tracked)
+            {
+                return $"every one of the {tracked:N0} tracked objects in schema [{group.Key}]";
+            }
+        }
+
+        return null;
     }
 
     private async Task FinalizeAsync(SyncRun run, RunContext context, GitWorkspaceContext gitContext, CancellationToken cancellationToken)
@@ -1884,6 +2037,42 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             context.Log(SyncLogLevel.Info, $"Created commit {commit.CommitSha[..Math.Min(7, commit.CommitSha.Length)]}.");
+        }
+
+        // A run that detected changes but staged nothing is benign ONLY when git saw the files and
+        // found them identical to what is already committed. It is not benign when git never saw
+        // them: `add -A -- .` honours .gitignore, so a destination inside an ignored directory (a
+        // database named Bin, Temp, Logs or Build under AllUserDatabases, or a rule like *.sql in an
+        // application repository) stages nothing for a completely different reason.
+        //
+        // The two are indistinguishable from HadChanges alone, and treating the second as the first
+        // is unrecoverable: the branch below marks the changes delivered, PersistStatesAsync writes
+        // every new hash, and from the next run on the objects match their stored state and are
+        // never written again. The job then reports NoChanges forever while the repository has never
+        // held a single object. Ask git which case this is instead of assuming.
+        if (!commit.HadChanges && context.Changes.Count > 0)
+        {
+            var sample = context.Changes
+                .Select(c => c.RelativePath)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Length-checked, not just null-checked: only a non-empty answer names an ignore rule.
+            // An empty one means the probe had nothing to report, and a probe that reports nothing
+            // must never be what fails an otherwise healthy run.
+            if (await _gitWorkspace.FindIgnoredPathAsync(gitContext, sample, cancellationToken).ConfigureAwait(false)
+                is { Length: > 0 } ignored)
+            {
+                run.Status = RunStatus.Failed;
+                run.ErrorMessage =
+                    $"{context.Changes.Count:N0} object(s) were scripted, but git is ignoring the destination so "
+                    + "nothing could be committed. A .gitignore rule in the repository matches these files: "
+                    + $"{ignored}. Change the job's destination folder, or remove the rule from the repository's "
+                    + ".gitignore. Object state was NOT advanced, so the next run will retry these objects.";
+                context.Log(SyncLogLevel.Error, "Nothing could be committed — the destination is ignored by git.", ignored);
+                return;
+            }
         }
 
         // Nothing new to do (no new commit, and — for the push modes — no stranded commit either).

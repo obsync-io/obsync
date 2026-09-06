@@ -61,6 +61,14 @@ public interface IAppSettingsRepository
     /// <summary>Whether the app's navigation rail is collapsed to icons only. Default false.</summary>
     Task<bool> GetNavCollapsedAsync(CancellationToken cancellationToken = default);
     Task SetNavCollapsedAsync(bool collapsed, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The most recent alert that could not be delivered, or null when the last attempt succeeded.
+    /// Written by whichever host sent it, so the app can surface an alerting outage that happened
+    /// inside the service — the case the Settings test button structurally cannot detect.
+    /// </summary>
+    Task<AlertDeliveryFailure?> GetLastAlertFailureAsync(CancellationToken cancellationToken = default);
+    Task SetLastAlertFailureAsync(AlertDeliveryFailure? failure, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IAppSettingsRepository" />
@@ -78,6 +86,7 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     private const string LastNotifiedUpdateVersionKey = "lastNotifiedUpdateVersion";
     private const string SchedulerHeartbeatKey = "schedulerHeartbeat";
     private const string NavCollapsedKey = "navCollapsed";
+    private const string LastAlertFailureKey = "lastAlertFailure";
 
     private static readonly IReadOnlyList<string> DefaultProductionTags = ["prod", "production"];
 
@@ -193,6 +202,29 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
             return null;
         }
     }
+
+    public async Task<AlertDeliveryFailure?> GetLastAlertFailureAsync(CancellationToken cancellationToken = default)
+    {
+        var json = await GetValueAsync(LastAlertFailureKey, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return ObsyncJson.Deserialize<AlertDeliveryFailure>(json);
+        }
+        catch (JsonException)
+        {
+            // Same degradation as the heartbeat above: this is read on the dashboard's load path,
+            // and a corrupt value must not take the dashboard down with it.
+            return null;
+        }
+    }
+
+    public Task SetLastAlertFailureAsync(AlertDeliveryFailure? failure, CancellationToken cancellationToken = default) =>
+        SetValueAsync(LastAlertFailureKey, failure is null ? string.Empty : ObsyncJson.Serialize(failure), cancellationToken);
 
     public Task SetSchedulerHeartbeatAsync(SchedulerHeartbeat? heartbeat, CancellationToken cancellationToken = default) =>
         SetValueAsync(SchedulerHeartbeatKey, heartbeat is null ? string.Empty : ObsyncJson.Serialize(heartbeat), cancellationToken);

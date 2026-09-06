@@ -61,6 +61,15 @@ public interface IGitWorkspace
     /// committed but its push failed. Lets the engine re-push instead of losing the work.
     /// </summary>
     Task<bool> HasUnpushedCommitsAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a description of the first of <paramref name="relativePaths"/> that git is ignoring
+    /// — including the ignore rule and the file it came from — or <c>null</c> when git would track
+    /// them all. Used to tell "the tree really was identical" apart from "git never saw these
+    /// files", two states that are otherwise indistinguishable from a commit that staged nothing.
+    /// </summary>
+    Task<string?> FindIgnoredPathAsync(
+        GitWorkspaceContext context, IReadOnlyList<string> relativePaths, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IGitWorkspace" />
@@ -389,6 +398,43 @@ public sealed partial class GitWorkspace : IGitWorkspace
         var sha = rev.StandardOutput.Trim();
         _logger.LogInformation("Created commit {Sha} on {Branch}.", sha, context.Branch);
         return GitCommitResult.Committed(sha);
+    }
+
+    /// <summary>Most paths handed to one <c>check-ignore</c>; enough to catch a rule, short enough for argv.</summary>
+    private const int IgnoreProbeSampleSize = 32;
+
+    public async Task<string?> FindIgnoredPathAsync(
+        GitWorkspaceContext context, IReadOnlyList<string> relativePaths, CancellationToken cancellationToken = default)
+    {
+        if (relativePaths.Count == 0)
+        {
+            return null;
+        }
+
+        // -v prints "<source>:<line>:<pattern>\t<path>", which names the .gitignore and the rule —
+        // the difference between an error the user can act on and one they cannot. Exit codes:
+        // 0 = at least one path is ignored, 1 = none are, anything else = a real failure, which is
+        // reported as "not ignored" so a broken probe can never fail an otherwise healthy run.
+        var args = new List<string> { "check-ignore", "-v", "--" };
+        args.AddRange(relativePaths.Take(IgnoreProbeSampleSize));
+
+        var result = await _git.RunAsync(context.LocalPath, args, cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            if (result.ExitCode != 1)
+            {
+                _logger.LogWarning(
+                    "git check-ignore exited {ExitCode} in {Path}: {Error}",
+                    result.ExitCode, context.LocalPath, Summarize(result.StandardError));
+            }
+
+            return null;
+        }
+
+        var first = result.StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        return string.IsNullOrEmpty(first) ? null : first;
     }
 
     public async Task<Result> PushAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default)

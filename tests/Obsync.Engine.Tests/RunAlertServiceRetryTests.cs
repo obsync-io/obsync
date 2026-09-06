@@ -24,10 +24,25 @@ public sealed class RunAlertServiceRetryTests
         public int EmailAttempts { get; private set; }
         public int WebhookAttempts { get; private set; }
 
+        /// <summary>The settings substitute, so tests can assert what was persisted.</summary>
+        public IAppSettingsRepository Settings { get; }
+
         public FakeAlertService(AlertSettings settings, Func<int, bool> emailAttemptFails, Func<int, bool> webhookAttemptFails)
-            : base(SettingsRepository(settings), Substitute.For<ICredentialStore>(), Substitute.For<IProxyProvider>(),
+            : this(SettingsRepository(settings), emailAttemptFails, webhookAttemptFails)
+        {
+        }
+
+        /// <summary>Builds one over a caller-supplied settings substitute (e.g. one that throws).</summary>
+        public static FakeAlertService WithSettings(
+            IAppSettingsRepository settings, Func<int, bool> emailAttemptFails, Func<int, bool> webhookAttemptFails) =>
+            new(settings, emailAttemptFails, webhookAttemptFails);
+
+        private FakeAlertService(
+            IAppSettingsRepository settings, Func<int, bool> emailAttemptFails, Func<int, bool> webhookAttemptFails)
+            : base(settings, Substitute.For<ICredentialStore>(), Substitute.For<IProxyProvider>(),
                    NullLogger<RunAlertService>.Instance)
         {
+            Settings = settings;
             _emailAttemptFails = emailAttemptFails;
             _webhookAttemptFails = webhookAttemptFails;
         }
@@ -104,6 +119,67 @@ public sealed class RunAlertServiceRetryTests
 
         Assert.Equal(2, service.EmailAttempts);
         Assert.Equal(1, service.WebhookAttempts);
+    }
+
+    [Fact]
+    public async Task APersistentFailure_IsRecordedSoItStopsBeingSilent()
+    {
+        // Swallowing the failure is correct — an alert must never fail a run. Leaving no trace was
+        // not: the only record was a log line, so a service account that cannot read the SMTP
+        // password dropped every alert indefinitely while Settings still showed a green test.
+        var service = new FakeAlertService(BothChannels(), _ => true, _ => false);
+
+        await service.NotifyAsync(FailedRun(), CancellationToken.None);
+
+        await service.Settings.Received(1).SetLastAlertFailureAsync(
+            Arg.Is<AlertDeliveryFailure>(f =>
+                f.Channel == "Email"
+                && f.RunKey == "20260716-090000"
+                && f.JobName == "SalesDB sync"
+                && f.Account.Length > 0
+                && f.Error.Contains("SMTP relay down")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ASuccessfulSend_ClearsAPreviousFailure()
+    {
+        // Otherwise the warning would stick on the dashboard forever once alerting recovered.
+        var service = new FakeAlertService(BothChannels(), _ => false, _ => false);
+
+        await service.NotifyAsync(FailedRun(), CancellationToken.None);
+
+        await service.Settings.Received(1).SetLastAlertFailureAsync(null, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task WhenBothChannelsFail_TheEmailFailureIsTheOneReported()
+    {
+        // A working webhook must not be able to mask email delivery that has been dead for months.
+        var service = new FakeAlertService(BothChannels(), _ => true, _ => true);
+
+        await service.NotifyAsync(FailedRun(), CancellationToken.None);
+
+        await service.Settings.Received(1).SetLastAlertFailureAsync(
+            Arg.Is<AlertDeliveryFailure>(f => f.Channel == "Email"), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RecordingTheOutcome_NeverThrowsIntoTheRun()
+    {
+        // The bookkeeping is best-effort for the same reason the send is: failing to write down
+        // that an alert failed must not fail the run either.
+        var settings = Substitute.For<IAppSettingsRepository>();
+        settings.GetAlertSettingsAsync(Arg.Any<CancellationToken>()).Returns(BothChannels());
+        settings.SetLastAlertFailureAsync(Arg.Any<AlertDeliveryFailure?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("state database is locked")));
+
+        var service = FakeAlertService.WithSettings(settings, _ => true, _ => true);
+
+        await service.NotifyAsync(FailedRun(), CancellationToken.None);
+
+        Assert.Equal(2, service.EmailAttempts);
+        Assert.Equal(2, service.WebhookAttempts);
     }
 
     [Fact]
