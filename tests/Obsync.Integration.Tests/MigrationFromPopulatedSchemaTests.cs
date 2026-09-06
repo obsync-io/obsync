@@ -62,10 +62,8 @@ public sealed class MigrationFromPopulatedSchemaTests : IDisposable
     /// <summary>Builds a database at the schema an OLD version of Obsync would have left behind.</summary>
     private async Task CreateSchemaAsOfAsync(string throughVersion)
     {
-        await using var connection = new SqliteConnection($"Data Source={_dbPath}");
-        await connection.OpenAsync();
+        await using var connection = await OpenSeedAsync(_dbPath);
 
-        await Exec(connection, "PRAGMA foreign_keys = OFF;");
         await Exec(
             connection,
             "CREATE TABLE IF NOT EXISTS __migrations (version TEXT NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);");
@@ -86,6 +84,26 @@ public sealed class MigrationFromPopulatedSchemaTests : IDisposable
         throw new InvalidOperationException($"No migration named '{throughVersion}'.");
     }
 
+    /// <summary>
+    /// Opens a fixture connection with foreign keys explicitly OFF.
+    /// </summary>
+    /// <remarks>
+    /// Not optional, and not a shortcut. This fixture seeds rows into one table at a time, so its
+    /// job_id values deliberately reference jobs that do not exist. Whether SQLite enforced that
+    /// depended on which pooled connection Microsoft.Data.Sqlite handed back — pragmas are
+    /// connection-scoped and survive in the pool, so a connection previously used by
+    /// SqliteConnectionFactory (which turns foreign keys ON) enforced them and a fresh one did not.
+    /// The tests passed in isolation and failed in a full run. Pinned explicitly, which is also what
+    /// DatabaseInitializer itself does before applying migrations.
+    /// </remarks>
+    private static async Task<SqliteConnection> OpenSeedAsync(string dbPath)
+    {
+        var connection = new SqliteConnection($"Data Source={dbPath}");
+        await connection.OpenAsync();
+        await Exec(connection, "PRAGMA foreign_keys = OFF;");
+        return connection;
+    }
+
     private static async Task Exec(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();
@@ -95,8 +113,7 @@ public sealed class MigrationFromPopulatedSchemaTests : IDisposable
 
     private static async Task<object?> Scalar(string dbPath, string sql)
     {
-        await using var connection = new SqliteConnection($"Data Source={dbPath}");
-        await connection.OpenAsync();
+        await using var connection = await OpenSeedAsync(dbPath);
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         return await command.ExecuteScalarAsync();
@@ -180,9 +197,8 @@ public sealed class MigrationFromPopulatedSchemaTests : IDisposable
         await InsertMinimalRowAsync("object_states", Guid.NewGuid(), ordinal: 1);
 
         // Force the two rows into a case-only collision on the identity tuple.
-        await using (var connection = new SqliteConnection($"Data Source={_dbPath}"))
+        await using (var connection = await OpenSeedAsync(_dbPath))
         {
-            await connection.OpenAsync();
             await Exec(connection, "UPDATE object_states SET job_id = 'J', database_name = 'SalesDB', "
                 + "object_type = 'StoredProcedure', schema_name = 'dbo';");
             await Exec(connection, "UPDATE object_states SET object_name = 'Foo' WHERE id = (SELECT MIN(id) FROM object_states);");
@@ -248,8 +264,7 @@ public sealed class MigrationFromPopulatedSchemaTests : IDisposable
     /// </remarks>
     private async Task InsertMinimalRowAsync(string table, Guid id, int ordinal = 0)
     {
-        await using var connection = new SqliteConnection($"Data Source={_dbPath}");
-        await connection.OpenAsync();
+        await using var connection = await OpenSeedAsync(_dbPath);
 
         var columns = new List<(string Name, string Literal)>();
         await using (var info = connection.CreateCommand())

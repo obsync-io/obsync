@@ -49,6 +49,17 @@ jobs:
             throw "Tag v$tag does not match <VersionPrefix>$props</VersionPrefix> in Directory.Build.props."
           }
 
+          # Exactly three numeric fields. Windows Installer compares ONLY the first three fields of
+          # ProductVersion and ignores the fourth entirely, so 1.2.3.4 -> 1.2.3.5 is not an upgrade,
+          # not a downgrade, and installs side by side -- and wix build accepts a four-field version
+          # without a murmur. A prerelease suffix is refused for the same reason: MSI has no notion
+          # of one, and the update checker treats an unparseable tag as "no update".
+          if ($tag -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Version '$tag' must be exactly three numeric fields. Windows Installer ignores a " +
+                  "fourth field when deciding whether one build upgrades another, so releases that " +
+                  "differ only there would install alongside each other instead of upgrading."
+          }
+
       - name: Build + test
         run: |
           dotnet build Obsync.slnx --configuration Release

@@ -2,6 +2,109 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.11.2 - 2026-09-06
+
+**Upgrade hardening.** A five-agent review of the upgrade path found that the product upgraded
+cleanly by hand and failed the way an enterprise actually deploys it: silently, by a fleet tool,
+while the app and the service were running. Ten defects, three of them release-blocking.
+
+Test suite: 1,259 → 1,305, including a new `Obsync.Service.Tests` project.
+
+### Fixed — unattended install, upgrade and uninstall
+
+- **A password-account install could not be uninstalled, repaired, or self-repaired unattended.**
+  The silent-install guard was written to mean "an account was passed without a password", but
+  `LaunchConditions` runs at sequence 100 while `AppSearch` is at 50 and `SetSERVICE_ACCOUNT` at 52
+  — so by evaluation time `SERVICE_ACCOUNT` had already been filled in from the SCM by the
+  installer's own registry search. It could not tell an operator's answer from its own memory. Both
+  actions also carry an empty sequence condition, so they run on uninstall and repair too. The
+  result was `1603` from `msiexec /x /qn`, `msiexec /fa /qn`, and the MSI self-repair that the Start
+  Menu shortcut triggers — which breaks SCCM supersedence and Intune retirement, and needs no
+  password in the first place. A leading `Installed` term now draws the line where the service is
+  actually re-created. Verified by evaluating the built package's condition through MSI's own
+  evaluator across eleven scenarios.
+- **`msiexec /qr` installed a service that could never log on.** The guard exempted UI level 4, but
+  `INSTALLUILEVEL_REDUCED` suppresses the wizard dialogs, so the Service Account page never ran and
+  nothing collected the password. Only full UI is exempt now.
+- **An upgrade relocated a non-default installation.** An upgrade is a fresh install under a new
+  ProductCode, so `INSTALLFOLDER` fell back to `Program Files`: anyone who had installed elsewhere
+  was moved with no prompt and exit 0. It also defeated files-in-use detection outright, because the
+  new target paths were then paths nobody held open — Restart Manager found nothing to close while
+  the old folder was demolished around a running app. The directory is remembered now, and published
+  as `ARPINSTALLLOCATION`, which was empty, so an admin could not even read the current path back
+  out of Add/Remove Programs.
+- **Rebuilding the same version installed a second copy** rather than upgrading, leaving two
+  identical Add/Remove Programs entries over one refcounted set of components, where the first
+  uninstall removes nothing at all. Re-running the *same* `.msi` file was always safe; this needed a
+  rebuild, which a re-run release workflow produces.
+- **Uninstalling revoked "Log on as a service"** — WiX defaults `RemoveOnUninstall` to yes and the
+  authoring's comment claimed otherwise. Worse, that revoke is a *commit* action while the new
+  product's re-grant is undone by its rollback action, so a **failed upgrade** left the service
+  account without the right, and the resulting error 1069 reads as a bad password.
+
+### Fixed — stopping and restarting the service
+
+- **The service reported a stop it had not achieved.** The framework's Windows service lifetime
+  waits out its shutdown budget and then returns regardless — nothing kills the process — so the SCM
+  was told SERVICE_STOPPED while the process was still running a sync and still holding every DLL in
+  the install folder. MSI's `Wait="yes"` was satisfied, so it copied files over a live process and
+  started a second service beside the first. It also published `waitHint = 0` with a static
+  checkpoint for the whole stop, the documented signature of a hung service, so nothing waited the
+  configured 90 seconds anyway. The service now heartbeats its progress to the SCM and terminates if
+  the budget is exceeded.
+- **The shutdown budget was spent before anything was cancelled.** Hosted services stop in reverse
+  registration order, and the in-flight-run canceller was registered *before* the scheduling
+  bootstrapper — so the bootstrapper's two shutdown database writes, contending with the very run
+  nothing had yet asked to stop, could consume 60 of the 90 seconds first.
+- **Answering "do not close applications" produced a half-upgraded install.** All three hosts share
+  one flat folder of libraries, so the service binary was replaced while the shared DLLs the running
+  app held were deferred to a reboot — and the new service started immediately against the old
+  engine, including the catch-up run it issues at startup. It now checks the versions beside it and
+  refuses to start, naming the remedy.
+- **The "a sync is still running, close anyway?" prompt blocked Restart Manager.** WPF raises
+  `Closing` even when Windows is ending the session, so the installer's request to close got a modal
+  dialog behind its own progress window — which is how users ended up on the deferred-file path
+  above. It no longer prompts on a session end.
+
+### Fixed — update notification
+
+- **It said none of what the product already knew.** The notification offered a version and a link
+  while the installer source and `INSTALL.md` between them documented four preconditions that decide
+  whether the upgrade works. They now travel with the offer.
+- **A failed check cost a machine its whole day.** The 24-hour throttle was stamped *before* the
+  request, so a laptop offline at login, a proxy hiccup, or a shared egress IP that had spent
+  GitHub's unauthenticated 60-per-hour budget burned the entire window — and behind one NAT the same
+  machines starved every morning and never learned about an update. Stamped on success only. An
+  exhausted rate limit is now reported as the shared-network limit it is, rather than as an HTTP
+  error that sends people to investigate their proxy.
+
+### Added
+
+- **`SHA256SUMS.txt` on every release.** Not a substitute for the code signature the MSI still lacks
+  — integrity, not origin — but enterprises that must allow-list by hash had nothing authoritative
+  to quote.
+- **The release workflow refuses a version that is not exactly three numeric fields.** Windows
+  Installer compares only the first three fields of `ProductVersion` and ignores the fourth, so two
+  releases differing only there install side by side instead of upgrading — and `wix build` accepts
+  a four-field version without a warning.
+- `INSTALL.md` gains what a fleet needs: what to close before upgrading and why an open service list
+  surfaces as the misleading error 1923, detection by UpgradeCode rather than the per-build
+  ProductCode, the exit-code table that stops a good `3010` being reported as a failure, and the
+  recovery drill for a part-way failure — including the trap where a bare retry finds no remembered
+  account, falls back to Local System, and *succeeds*, leaving a service that runs but never
+  executes a schedule.
+
+### Internal
+
+- Database migrations had never been run against data. Every existing test initialized a brand-new
+  temp file, so `V001`..`V013` was only ever exercised as "create everything in order on an empty
+  database" — the one shape an upgrade never has. The two migrations that rebuild rather than append
+  had therefore never touched a populated table anywhere, including the de-duplication in `V011`
+  whose entire purpose is to repair databases that had hit the case-collision bug. Both are correct;
+  they now have coverage, as does the concurrent-initializer design that protects the install-time
+  race between the service starting and the app launching.
+- Each authoring and ordering change was reverted individually to confirm its test fails.
+
 ## 0.11.1 - 2026-09-06
 
 **Installer fixes.** The setup wizard's text has been silently clipped since 0.9.x, and the artwork
