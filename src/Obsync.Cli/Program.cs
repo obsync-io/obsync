@@ -6,6 +6,7 @@ using Obsync.Engine;
 using Obsync.Engine.DependencyInjection;
 using Obsync.Security.DependencyInjection;
 using Obsync.Shared;
+using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 using Serilog;
 using Serilog.Extensions.Logging;
@@ -35,6 +36,8 @@ return command switch
     "list" or "jobs" => await ListJobsAsync(provider),
     "connections" => await ListConnectionsAsync(provider),
     "run" => await RunJobAsync(provider, args.Length > 1 ? args[1] : null),
+    "credential" or "credentials" => await CredentialAsync(provider, args),
+    "whoami" => PrintWhoAmI(),
     "version" => PrintVersion(),
     _ => PrintHelp(),
 };
@@ -173,6 +176,256 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
     };
 }
 
+/// <summary>
+/// Stores, lists and deletes secrets in the CURRENT account's Windows Credential Manager vault.
+/// </summary>
+/// <remarks>
+/// This exists because the vault is per-account and, until now, the only code in the product that
+/// could write to it was the WPF app. That made the installer's own advice unperformable: it
+/// recommends a group Managed Service Account ("enter DOMAIN\name$ and leave the password blank")
+/// while also requiring that job credentials live in the SERVICE account's vault — and a gMSA has a
+/// machine-managed password, so it cannot be signed in to, and the app cannot be run as it. The
+/// same dead end applied to LocalSystem and every NT SERVICE / NT AUTHORITY account the wizard
+/// accepts. Every such install ran a service that started, heartbeated, and reported itself healthy
+/// while every git-mode run failed on a missing token.
+/// <para>
+/// A console command closes it, because a console CAN be run as those accounts — via
+/// <c>psexec -s</c>, a scheduled task set to run as the gMSA, or <c>runas</c> for an ordinary
+/// service account. See packaging/INSTALL.md.
+/// </para>
+/// <para>
+/// Secrets are read from stdin or a hidden prompt, NEVER from the command line: Windows
+/// process-creation auditing (Event 4688, Sysmon, EDR) records child command lines verbatim into
+/// machine-wide security logs, which is the same reason the git layer passes tokens as environment
+/// variables rather than <c>-c</c> arguments.
+/// </para>
+/// </remarks>
+static async Task<int> CredentialAsync(IServiceProvider provider, string[] args)
+{
+    var action = args.Length > 1 ? args[1].ToLowerInvariant() : "list";
+    var credentials = provider.GetRequiredService<ICredentialStore>();
+
+    // Always state the account. The whole class of failure this command addresses is a secret
+    // written to the wrong vault, and that is invisible unless the tool says which one it used.
+    Console.WriteLine($"Credential Manager vault: {CurrentActor.Name}");
+    Console.WriteLine();
+
+    if (action == "list")
+    {
+        return await ListCredentialsAsync(provider, credentials);
+    }
+
+    if (action is not ("set" or "delete"))
+    {
+        Console.Error.WriteLine("Usage: obsync credential <list|set|delete> [github|sql|smtp|proxy] [name-or-id]");
+        return 2;
+    }
+
+    var kind = args.Length > 2 ? args[2].ToLowerInvariant() : null;
+    var reference = args.Length > 3 ? args[3] : null;
+
+    string key;
+    string description;
+    switch (kind)
+    {
+        case "github":
+        {
+            var repositories = await provider.GetRequiredService<IRepositoryProfileRepository>().GetAllAsync();
+            var match = Resolve(repositories, reference, r => r.Id, r => r.Name);
+            if (match is null)
+            {
+                Console.Error.WriteLine(
+                    reference is null
+                        ? "Usage: obsync credential set github <repository-name-or-id>"
+                        : $"Repository '{reference}' was not found. Run 'obsync credential list' to see the names.");
+                return 1;
+            }
+
+            key = CredentialKeys.GitHubToken(match.Id);
+            description = $"GitHub token for '{match.Name}' ({match.Owner}/{match.RepositoryName})";
+            break;
+        }
+
+        case "sql":
+        {
+            var connections = await provider.GetRequiredService<IConnectionProfileRepository>().GetAllAsync();
+            var match = Resolve(connections, reference, c => c.Id, c => c.Name);
+            if (match is null)
+            {
+                Console.Error.WriteLine(
+                    reference is null
+                        ? "Usage: obsync credential set sql <server-name-or-id>"
+                        : $"Server '{reference}' was not found. Run 'obsync credential list' to see the names.");
+                return 1;
+            }
+
+            key = CredentialKeys.SqlPassword(match.Id);
+            description = $"SQL password for '{match.Name}' ({match.ServerName})";
+            break;
+        }
+
+        case "smtp":
+            key = CredentialKeys.SmtpPassword();
+            description = "SMTP password for email alerts";
+            break;
+
+        case "proxy":
+            key = CredentialKeys.Proxy();
+            description = "HTTP proxy password";
+            break;
+
+        default:
+            Console.Error.WriteLine("The secret kind must be one of: github, sql, smtp, proxy.");
+            return 2;
+    }
+
+    try
+    {
+        if (action == "delete")
+        {
+            credentials.Delete(key);
+            Console.WriteLine($"Deleted the {description} from this account's vault.");
+            return 0;
+        }
+
+        var secret = ReadSecret($"Enter the {description}");
+        if (string.IsNullOrEmpty(secret))
+        {
+            Console.Error.WriteLine("No value was entered — nothing was stored.");
+            return 2;
+        }
+
+        credentials.Store(key, secret);
+
+        // Read it back. Storing into a vault that cannot be read from is the exact failure this
+        // command exists to prevent, and CredWrite succeeding does not prove CredRead will.
+        if (credentials.Retrieve(key) != secret)
+        {
+            Console.Error.WriteLine("The secret was written but could not be read back — the vault is not usable.");
+            return 1;
+        }
+
+        Console.WriteLine($"Stored the {description} in {CurrentActor.Name}'s vault and read it back successfully.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ex.Message);
+        return 1;
+    }
+
+    static T? Resolve<T>(IReadOnlyList<T> items, string? reference, Func<T, Guid> id, Func<T, string> name)
+        where T : class =>
+        reference is null
+            ? null
+            : Guid.TryParse(reference, out var parsed)
+                ? items.FirstOrDefault(i => id(i) == parsed)
+                : items.FirstOrDefault(i => string.Equals(name(i), reference, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>Reports which secrets this account's vault holds — names and presence only, never values.</summary>
+static async Task<int> ListCredentialsAsync(IServiceProvider provider, ICredentialStore credentials)
+{
+    var repositories = await provider.GetRequiredService<IRepositoryProfileRepository>().GetAllAsync();
+    var connections = await provider.GetRequiredService<IConnectionProfileRepository>().GetAllAsync();
+
+    Console.WriteLine($"{"SECRET",-46} {"KIND",-8} {"PRESENT"}");
+    foreach (var repository in repositories)
+    {
+        Write(repository.Name, "github", CredentialKeys.GitHubToken(repository.Id));
+    }
+
+    foreach (var connection in connections.Where(c => c.RequiresPassword))
+    {
+        Write(connection.Name, "sql", CredentialKeys.SqlPassword(connection.Id));
+    }
+
+    Write("(email alerts)", "smtp", CredentialKeys.SmtpPassword());
+    Write("(http proxy)", "proxy", CredentialKeys.Proxy());
+
+    Console.WriteLine();
+    Console.WriteLine("Scheduled runs read these from the SERVICE account's vault, which is not this one");
+    Console.WriteLine("unless the service runs as the account shown above.");
+    return 0;
+
+    void Write(string name, string kind, string key)
+    {
+        string present;
+        try
+        {
+            present = credentials.Exists(key) ? "yes" : "no";
+        }
+        catch (Exception ex)
+        {
+            // An unreadable vault is the answer to the question being asked, not a reason to stop.
+            present = $"error: {ex.Message}";
+        }
+
+        Console.WriteLine($"{Truncate(name, 46),-46} {kind,-8} {present}");
+    }
+}
+
+/// <summary>
+/// Reads a secret without echoing it and without ever putting it on a command line. Falls back to a
+/// plain read when stdin is redirected, so the command works non-interactively — which is how it
+/// runs under a scheduled task or <c>psexec -s</c>.
+/// </summary>
+static string ReadSecret(string prompt)
+{
+    if (Console.IsInputRedirected)
+    {
+        return (Console.ReadLine() ?? string.Empty).Trim();
+    }
+
+    Console.Write($"{prompt}: ");
+    var secret = new System.Text.StringBuilder();
+    while (true)
+    {
+        var pressed = Console.ReadKey(intercept: true);
+        if (pressed.Key == ConsoleKey.Enter)
+        {
+            Console.WriteLine();
+            return secret.ToString();
+        }
+
+        if (pressed.Key == ConsoleKey.Backspace)
+        {
+            if (secret.Length > 0)
+            {
+                secret.Length--;
+            }
+
+            continue;
+        }
+
+        if (!char.IsControl(pressed.KeyChar))
+        {
+            secret.Append(pressed.KeyChar);
+        }
+    }
+}
+
+/// <summary>
+/// Prints the Windows account this process runs as, and the data root that account resolves.
+/// </summary>
+/// <remarks>
+/// Two lines, both of which are otherwise guesswork during a support call. The account decides which
+/// Credential Manager vault a scheduled run reads; the data root decides which database it schedules
+/// from. Run this under <c>psexec -s</c> and you can see exactly what the service sees.
+/// </remarks>
+static int PrintWhoAmI()
+{
+    Console.WriteLine($"Account:   {CurrentActor.Name}");
+    Console.WriteLine($"Data root: {ObsyncPaths.Root}");
+    if (ObsyncPaths.RootResolutionWarning is { } warning)
+    {
+        Console.WriteLine();
+        Console.Error.WriteLine($"Warning: {warning}");
+    }
+
+    return 0;
+}
+
 static int PrintVersion()
 {
     Console.WriteLine($"Obsync CLI {VersionInfo.Of(typeof(Program).Assembly)}");
@@ -189,8 +442,26 @@ static int PrintHelp()
           obsync list                 List sync jobs and their last status
           obsync connections          List SQL Server connection profiles
           obsync run <name-or-id>     Run a sync job now
+          obsync whoami               Show the Windows account and data root in use
+          obsync credential list      Show which secrets this account's vault holds
+          obsync credential set <kind> [name-or-id]
+          obsync credential delete <kind> [name-or-id]
+                                      kind: github | sql | smtp | proxy
           obsync version              Show the CLI version
           obsync help                 Show this help
+
+        Credentials are stored per Windows account, and SCHEDULED runs read them from the
+        account the Obsync service runs as. To store them for a service account that cannot
+        be signed in to — a gMSA, LocalSystem, or an NT SERVICE account — run this command
+        AS that account:
+
+          psexec -s obsync credential set github "My Repo"        (LocalSystem)
+          schtasks /create /ru DOMAIN\gmsa$ /tr "obsync credential set ..."   (gMSA)
+
+        The value is read from stdin or a hidden prompt, never from the command line, so it
+        does not reach Windows process-creation auditing. Verify with:
+
+          psexec -s obsync credential list
 
         Exit codes (run):
           0   succeeded (or no changes)

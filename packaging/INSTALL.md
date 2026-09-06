@@ -72,10 +72,37 @@ Manager, which is what gMSA logons require. Prerequisites, before running the MS
    (`-PrincipalsAllowedToRetrieveManagedPassword`).
 2. The account is installed on the host: `Install-ADServiceAccount ObsyncSvc` (verify with
    `Test-ADServiceAccount ObsyncSvc`).
-3. The gMSA has the "Log on as a service" right (granted by the installer's service assignment, or
-   via Group Policy).
+3. The gMSA has the "Log on as a service" right. The installer grants it (`SeServiceLogonRight`)
+   for any account that is not a built-in service principal. Where that right is defined by **Group
+   Policy**, the local grant is overwritten at the next policy refresh and a "Deny log on as a
+   service" entry beats it outright — that case needs an AD change, and no installer can fix it.
 4. Job credentials (SQL passwords, GitHub tokens) must exist in **that account's** Credential
-   Manager vault — configure jobs by running the Obsync app under the same account.
+   Manager vault. A gMSA has a machine-managed password, so it cannot be signed in to and the
+   desktop app cannot be run as it — use the CLI, run **as the gMSA**, to write into its vault:
+
+   ```powershell
+   # A scheduled task is the supported way to run a command as a gMSA.
+   schtasks /create /tn ObsyncCred /ru "DOMAIN\ObsyncSvc$" /sc once /st 00:00 ^
+            /tr "cmd /c echo <token>| obsync credential set github \"My Repo\""
+   schtasks /run /tn ObsyncCred
+   schtasks /delete /tn ObsyncCred /f
+   ```
+
+   Verify what landed, again as the service account:
+
+   ```powershell
+   schtasks /create /tn ObsyncCredList /ru "DOMAIN\ObsyncSvc$" /sc once /st 00:00 ^
+            /tr "cmd /c obsync credential list > C:\Temp\obsync-cred.txt"
+   ```
+
+   `obsync credential set` reads the value from stdin or a hidden prompt — never from the command
+   line — so it does not reach Windows process-creation auditing. Piping it in a task command line
+   as above DOES put it there; prefer a file redirect (`< secret.txt`) that you delete afterwards.
+   `obsync whoami` prints the account and data root a run will use, which is worth capturing the
+   same way when a scheduled run behaves differently from a manual one.
+
+   For **LocalSystem** or an `NT SERVICE\...` account, `psexec -s obsync credential set ...` is
+   simpler and interactive.
 
 ## Repair, uninstall, upgrade
 
@@ -105,7 +132,10 @@ Windows cannot remember the *password*, so:
 - **Silent upgrade** of a password-logon service — pass `SERVICE_PASSWORD="..."` again (the account
   is remembered; without the password the service is reconfigured but cannot start, and the app's
   scheduler warning says so). gMSA and Local System silent upgrades need nothing extra.
-  Silent installs are **not** covered by the wizard's blank-password check.
+  A silent install that passes `SERVICE_ACCOUNT` **without** `SERVICE_PASSWORD` is now refused
+  outright, rather than installing a service that can never log on and reporting success. Accounts
+  that legitimately log on without a password — gMSA, `NT SERVICE\...`, `NT AUTHORITY\...`, Local
+  System — are exempt.
 
 ## What the service does
 

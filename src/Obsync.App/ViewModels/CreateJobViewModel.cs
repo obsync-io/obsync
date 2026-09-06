@@ -1082,7 +1082,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
                 // list is the closest thing the wizard has; the service probes a bounded sample of it.
                 SyncAllUserDatabases
                     ? [.. Databases.Select(d => d.Name)]
-                    : [.. Databases.Where(d => d.IsSelected).Select(d => d.Name)]);
+                    : [.. Databases.Where(d => d.IsSelected).Select(d => d.Name)],
+                // The cadence decides whether a SECOND Windows account is involved: a scheduled job
+                // runs in the service, whose credential vault and data folder are its own.
+                BuildSchedule());
             var results = await _preflight.RunAsync(request);
 
             PreflightResults.Clear();

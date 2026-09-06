@@ -75,6 +75,20 @@
          LocalSystem — Windows cannot remember the password, so an interactive upgrade prefills the
          account and asks for the password again, and a silent upgrade of a password-logon service
          must re-pass SERVICE_PASSWORD (gMSA/virtual/LocalSystem accounts need none). -->
+    <!-- The silent-install counterpart of the interactive blank-password guard below.
+
+         That guard is a dialog Publish, so it exists only in the UI sequence: `msiexec /qn
+         SERVICE_ACCOUNT="DOMAIN\user"` with no SERVICE_PASSWORD sailed straight past it and
+         installed a service that can never log on, while reporting success. Silent installs are how
+         this product reaches fleets, so the failure arrived at scale with nothing to read.
+
+         Gated on UILevel so it only fires where the dialog cannot run (2 = none, 3 = basic;
+         4 = reduced and 5 = full both get the dialog). Same allow-list of passwordless principals as
+         the dialog: a gMSA ends in "$", and the NT AUTHORITY / NT SERVICE built-ins take a null
+         password by design. -->
+    <Launch Condition="UILevel &gt;= 4 OR NOT SERVICE_ACCOUNT OR SERVICE_PASSWORD OR (SERVICE_ACCOUNT &gt;&gt; &quot;$&quot;) OR (SERVICE_ACCOUNT ~= &quot;LocalSystem&quot;) OR (SERVICE_ACCOUNT ~= &quot;LocalService&quot;) OR (SERVICE_ACCOUNT ~= &quot;NetworkService&quot;) OR (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT AUTHORITY\&quot;) OR (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT SERVICE\&quot;)"
+            Message="SERVICE_ACCOUNT was given without SERVICE_PASSWORD. The Obsync service would install but could not log on (error 1069). Pass SERVICE_PASSWORD, or omit SERVICE_ACCOUNT to use LocalSystem and set the account later." />
+
     <Property Id="SERVICE_ACCOUNT" Secure="yes" />
     <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />
 
@@ -123,6 +137,7 @@
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="AppHost" />
       <ComponentRef Id="ServiceHost" />
+      <ComponentRef Id="ServiceLogonRight" />
       <ComponentRef Id="PathEntry" />
     </Feature>
 
@@ -211,9 +226,45 @@
       <util:EventSource Log="Application"
                         Name="Obsync"
                         EventMessageFile="[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll" />
+
       <!-- Remember the logon account (never the password) so upgrades default to it instead of
            silently resetting a working service to LocalSystem. -->
       <RegistryValue Root="HKLM" Key="SOFTWARE\Obsync" Name="ServiceAccount" Value="[SERVICE_ACCOUNT]" Type="string" />
+    </Component>
+
+    <!-- Grant "Log on as a service" (SeServiceLogonRight) to the chosen account.
+
+         INSTALL.md claimed this already happened "by the installer's service assignment". It did
+         not: MSI's CreateService does not grant the right, and nothing else here did either. The
+         installer is the last elevated moment where it can happen without a second admin step, and
+         it passed — so a domain account chosen in the wizard produced a service that installed
+         cleanly and then failed to start with Error 1069 (logon failure), which reads as a wrong
+         password and is not one.
+
+         CreateUser="no" is essential: the account already exists (domain, gMSA, or built-in) and
+         this must only ADD the right, never create or modify the principal. UpdateIfExists makes it
+         idempotent across repair and upgrade. RemoveOnUninstall is deliberately left off: revoking
+         a right the site may have granted for its own reasons is not the uninstaller's business.
+
+         Conditioned, because the right is meaningless for the built-in service principals —
+         LocalSystem, LocalService and NetworkService hold it implicitly — and naming one here would
+         send the custom action looking up a principal that grants nothing. A gMSA (DOMAIN
+ame$) is
+         NOT excluded: it is an ordinary account for this purpose and does need the right.
+
+         LIMIT, and a real one: where SeServiceLogonRight is defined by Group Policy, this local
+         grant is overwritten at the next policy refresh, and a "Deny log on as a service" entry
+         beats it outright. No installer can fix that; SchedulerHealthService names the case so the
+         user is not left re-entering a password that was never the problem. -->
+    <Component Id="ServiceLogonRight" Directory="INSTALLFOLDER" Bitness="always64"
+               Condition="SERVICE_ACCOUNT AND NOT (SERVICE_ACCOUNT ~= &quot;LocalSystem&quot;) AND NOT (SERVICE_ACCOUNT ~= &quot;LocalService&quot;) AND NOT (SERVICE_ACCOUNT ~= &quot;NetworkService&quot;) AND NOT (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT AUTHORITY\&quot;) AND NOT (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT SERVICE\&quot;)">
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Obsync" Name="ServiceLogonRightGranted" Type="integer" Value="1" KeyPath="yes" />
+      <util:User Id="ObsyncServiceLogonRight"
+                 Name="[SERVICE_ACCOUNT]"
+                 CreateUser="no"
+                 UpdateIfExists="yes"
+                 FailIfExists="no"
+                 LogonAsService="yes" />
     </Component>
 
     <!-- Add the install directory to the machine PATH so `obsync` (the CLI) is callable anywhere. -->
@@ -351,9 +402,9 @@
              two characters of slack, so growing the string means growing the box: 18 units are
              free above BottomLine — VaultNote Y=168 Height=36, GmsaNote Y=208. -->
         <Control Id="VaultNote" Type="Text" X="20" Y="172" Width="330" Height="24" NoPrefix="yes"
-                 Text="Scheduled jobs read credentials from this account's Windows Credential Manager vault, so choose the same account you use to run the Obsync app." />
+                 Text="Credentials are stored per Windows account, so scheduled jobs read this account's vault. Simplest: the account you run the Obsync app as." />
         <Control Id="GmsaNote" Type="Text" X="20" Y="202" Width="330" Height="24" NoPrefix="yes"
-                 Text="For a group Managed Service Account, enter DOMAIN\name$ and leave the password blank." />
+                 Text="For a group Managed Service Account, enter DOMAIN\name$ with no password, then run `obsync credential set` as that account." />
       </Dialog>
 
       <!-- Obsync: shown when "This account" is selected but no account was entered. The Text control

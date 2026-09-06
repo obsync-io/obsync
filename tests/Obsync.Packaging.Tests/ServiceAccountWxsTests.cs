@@ -1,4 +1,4 @@
-using System.Xml.Linq;
+﻿using System.Xml.Linq;
 
 namespace Obsync.Packaging.Tests;
 
@@ -167,4 +167,85 @@ public sealed class ServiceAccountWxsTests
         "SERVICE_ACCOUNT_NAME ~<< \"NT AUTHORITY\\\"",
         "SERVICE_ACCOUNT_NAME ~<< \"NT SERVICE\\\"",
     ];
+
+    private static readonly XNamespace Util = "http://wixtoolset.org/schemas/v4/wxs/util";
+
+    [Fact]
+    public void TheInstaller_GrantsLogOnAsAService()
+    {
+        // INSTALL.md claimed this already happened "by the installer's service assignment". Nothing
+        // did it: MSI's CreateService does not grant SeServiceLogonRight, and there was no util:User,
+        // no LsaAddAccountRights and no NTRIGHTS anywhere. So a domain account chosen in the wizard
+        // installed cleanly and then failed to start with Error 1069 — which reads as a wrong
+        // password and is not one. The installer is the last elevated moment where this can happen
+        // without a second admin step.
+        var user = Assert.Single(Installer.Descendants(Util + "User"));
+
+        Assert.Equal("[SERVICE_ACCOUNT]", (string?)user.Attribute("Name"));
+        Assert.Equal("yes", (string?)user.Attribute("LogonAsService"));
+
+        // Must only ADD the right. The account already exists — domain, gMSA, or built-in — and
+        // creating or modifying the principal is emphatically not the installer's business.
+        Assert.Equal("no", (string?)user.Attribute("CreateUser"));
+        Assert.Equal("yes", (string?)user.Attribute("UpdateIfExists"));
+    }
+
+    [Fact]
+    public void TheLogonRightGrant_IsSkippedForTheBuiltInServicePrincipals()
+    {
+        // LocalSystem, LocalService and NetworkService hold the right implicitly. Naming one would
+        // send the custom action looking up a principal the grant means nothing for — and
+        // LocalSystem is the DEFAULT, so this fires on the most common install of all.
+        var component = Installer.Descendants(Wxs + "Component")
+            .Single(e => (string?)e.Attribute("Id") == "ServiceLogonRight");
+        var condition = (string?)component.Attribute("Condition") ?? string.Empty;
+
+        Assert.Contains("SERVICE_ACCOUNT", condition);
+        Assert.Contains("LocalSystem", condition);
+        Assert.Contains("LocalService", condition);
+        Assert.Contains("NetworkService", condition);
+        Assert.Contains(@"NT AUTHORITY\", condition);
+        Assert.Contains(@"NT SERVICE\", condition);
+
+        // The grant lives in this component, so the condition actually gates it.
+        Assert.Single(component.Descendants(Util + "User"));
+
+        // ...and the component is installed, not authored and forgotten.
+        Assert.Contains(Installer.Descendants(Wxs + "ComponentRef"),
+            e => (string?)e.Attribute("Id") == "ServiceLogonRight");
+    }
+
+    [Fact]
+    public void AGmsa_StillGetsTheLogonRight()
+    {
+        // A gMSA is passwordless but is NOT a built-in principal: it needs SeServiceLogonRight like
+        // any other account. Excluding it (e.g. by reusing the dialog's ends-with-"$" allow-list)
+        // would reproduce the 1069 this fix exists to remove.
+        var component = Installer.Descendants(Wxs + "Component")
+            .Single(e => (string?)e.Attribute("Id") == "ServiceLogonRight");
+
+        Assert.DoesNotContain("$", (string?)component.Attribute("Condition") ?? string.Empty);
+    }
+
+    [Fact]
+    public void ASilentInstall_RefusesAnAccountWithNoPassword()
+    {
+        // The interactive guard is a dialog Publish, so it exists only in the UI sequence:
+        // `msiexec /qn SERVICE_ACCOUNT="DOMAIN\user"` with no password sailed past it and installed a
+        // service that can never log on, reporting success. Silent installs are how this reaches
+        // fleets, so the failure arrived at scale with nothing to read.
+        var launch = Assert.Single(Elements("Launch"));
+        var condition = (string?)launch.Attribute("Condition") ?? string.Empty;
+
+        // Only where the dialog cannot run (2 = none, 3 = basic).
+        Assert.Contains("UILevel", condition);
+        Assert.Contains("SERVICE_PASSWORD", condition);
+
+        // The same passwordless allow-list the dialog uses, or the gate would block legitimate
+        // gMSA and built-in-account installs.
+        Assert.Contains(@"""$""", condition);
+        Assert.Contains(@"NT AUTHORITY\", condition);
+        Assert.Contains("LocalSystem", condition);
+        Assert.Contains("1069", (string?)launch.Attribute("Message") ?? string.Empty);
+    }
 }

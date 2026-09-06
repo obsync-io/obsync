@@ -40,7 +40,7 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
 
             if (!CredWrite(in credential, 0))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to store credential '{key}'.");
+                throw Failure(Marshal.GetLastWin32Error(), "store", key);
             }
         }
         finally
@@ -58,7 +58,7 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
         if (!CredRead(key, CredTypeGeneric, 0, out var credentialPtr))
         {
             var error = Marshal.GetLastWin32Error();
-            return error == ErrorNotFound ? null : throw new Win32Exception(error, $"Failed to read credential '{key}'.");
+            return error == ErrorNotFound ? null : throw Failure(error, "read", key);
         }
 
         try
@@ -88,12 +88,33 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
             var error = Marshal.GetLastWin32Error();
             if (error != ErrorNotFound)
             {
-                throw new Win32Exception(error, $"Failed to delete credential '{key}'.");
+                throw Failure(error, "delete", key);
             }
         }
     }
 
     public bool Exists(string key) => Retrieve(key) is not null;
+
+    /// <summary>
+    /// Builds the exception for a failed Credential Manager call, keeping BOTH the Windows
+    /// description and the numeric code.
+    /// </summary>
+    /// <remarks>
+    /// The two-argument <see cref="Win32Exception(int, string)"/> constructor REPLACES
+    /// <see cref="Exception.Message"/> with the supplied text, so the OS description was destroyed
+    /// and <see cref="Win32Exception.NativeErrorCode"/> never reached any user-facing surface. The
+    /// result was a message with neither a cause nor a code — "Failed to read credential
+    /// 'Obsync:GitHub:…'" — which is exactly the class of failure a support engineer needs the code
+    /// for. ERROR_NO_SUCH_LOGON_SESSION (1312), the ordinary result for a service account with no
+    /// loaded profile, reads completely differently once its description survives.
+    /// </remarks>
+    private static Win32Exception Failure(int error, string operation, string key)
+    {
+        // The one-argument constructor is what resolves the description from the OS.
+        var description = new Win32Exception(error).Message;
+        return new Win32Exception(
+            error, $"Windows Credential Manager could not {operation} '{key}': {description} (error {error}).");
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Credential

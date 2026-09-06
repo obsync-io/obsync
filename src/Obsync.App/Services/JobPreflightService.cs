@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Obsync.Data.Repositories;
 using Obsync.Git;
 using Obsync.GitHub;
@@ -16,6 +16,12 @@ namespace Obsync.App.Services;
 /// preflight could report a healthy SQL connection for a login that cannot read a single object in
 /// any database the job actually targets.
 /// </param>
+/// <param name="Schedule">
+/// The job's cadence, when it has one. Needed because a scheduled job runs in the SERVICE process
+/// under a different Windows account than every check here — and credentials and the data folder
+/// are per-account, so a green preflight proves nothing about a scheduled run unless the two
+/// accounts match.
+/// </param>
 public sealed record JobPreflightRequest(
     SqlConnectionProfile? Connection,
     GitRepositoryProfile? Repository,
@@ -24,7 +30,8 @@ public sealed record JobPreflightRequest(
     string? ExportPath,
     string EffectiveFolder,
     Guid? EditingJobId,
-    IReadOnlyList<string>? Databases = null);
+    IReadOnlyList<string>? Databases = null,
+    ScheduleProfile? Schedule = null);
 
 /// <summary>
 /// Runs the optional pre-save checks on the wizard's Review step: SQL connectivity, repository
@@ -47,10 +54,12 @@ public sealed class JobPreflightService : IJobPreflightService
     private readonly IGitRemoteProbe _gitRemote;
     private readonly IProxyProvider _proxy;
     private readonly IAppSettingsRepository _settings;
+    private readonly ISchedulerHealthService _schedulerHealth;
 
     public JobPreflightService(
         ISqlServerProbe probe, IGitHubService gitHub, ICredentialStore credentials, IJobRepository jobs, IClock clock,
-        IGitRemoteProbe gitRemote, IProxyProvider proxy, IAppSettingsRepository settings)
+        IGitRemoteProbe gitRemote, IProxyProvider proxy, IAppSettingsRepository settings,
+        ISchedulerHealthService schedulerHealth)
     {
         _probe = probe;
         _gitHub = gitHub;
@@ -60,6 +69,7 @@ public sealed class JobPreflightService : IJobPreflightService
         _gitRemote = gitRemote;
         _proxy = proxy;
         _settings = settings;
+        _schedulerHealth = schedulerHealth;
     }
 
     private DiagnosticResult Result(string name, DiagnosticStatus status, string detail) =>
@@ -95,6 +105,7 @@ public sealed class JobPreflightService : IJobPreflightService
         }
 
         results.Add(CheckCredentials(request));
+        results.Add(await CheckRunIdentityAsync(request, cancellationToken).ConfigureAwait(false));
 
         if (request.CommitMode != CommitMode.ExportOnly && request.Repository is not null)
         {
@@ -437,6 +448,68 @@ public sealed class JobPreflightService : IJobPreflightService
         catch (Exception ex)
         {
             return Result(name, DiagnosticStatus.Fail, $"Not writable — {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// States which Windows account every check above actually ran as, and whether that is the
+    /// account a SCHEDULED run will use.
+    /// </summary>
+    /// <remarks>
+    /// This is the check that makes the others honest rather than a check of its own. Everything
+    /// preceding it — the SQL connection, the credential presence, the git transport, the folder
+    /// probes — executed in the app process under the signed-in user. Scheduled runs execute in the
+    /// service process under its own account, and both the Credential Manager vault and
+    /// <c>%LOCALAPPDATA%</c> are per-account. So a job could pass 6/6 and then fail every scheduled
+    /// run on a missing token, or on <c>Login failed for user 'NT AUTHORITY\SYSTEM'</c> for a login
+    /// the preflight never used.
+    /// <para>
+    /// Reported rather than silently assumed correct: the preflight genuinely CANNOT verify the
+    /// other account's vault from here — that is what <c>obsync credential list</c>, run as the
+    /// service account, is for — so the honest outcome is to name the gap instead of implying it
+    /// was covered.
+    /// </para>
+    /// </remarks>
+    private async Task<DiagnosticResult> CheckRunIdentityAsync(JobPreflightRequest request, CancellationToken cancellationToken)
+    {
+        const string name = "Run identity";
+        var actor = CurrentActor.Name;
+
+        // A manual-only job never leaves this process, so there is no second identity to reconcile.
+        if (request.Schedule is not { } schedule || !SchedulerHealthService.NeedsScheduler(
+                new SyncJob { Enabled = true, Schedule = schedule }))
+        {
+            return Result(name, DiagnosticStatus.Pass,
+                $"Manual runs only — they execute here, as {actor}, exactly as these checks did.");
+        }
+
+        try
+        {
+            var health = await _schedulerHealth.GetAsync(cancellationToken).ConfigureAwait(false);
+            var serviceAccount = health.ServiceAccount;
+
+            if (string.IsNullOrWhiteSpace(serviceAccount))
+            {
+                return Result(name, DiagnosticStatus.Warning,
+                    $"These checks ran as {actor}. Scheduled runs execute in the Obsync service, whose account could "
+                    + "not be determined — verify with 'obsync credential list' run as that account.");
+            }
+
+            if (string.Equals(serviceAccount, actor, StringComparison.OrdinalIgnoreCase))
+            {
+                return Result(name, DiagnosticStatus.Pass,
+                    $"Scheduled runs execute as {serviceAccount} — the same account these checks used.");
+            }
+
+            return Result(name, DiagnosticStatus.Warning,
+                $"These checks ran as {actor}, but scheduled runs execute as {serviceAccount}. Credentials and the "
+                + "data folder are stored PER ACCOUNT, so nothing above proves a scheduled run will work. Store the "
+                + $"secrets for {serviceAccount} by running 'obsync credential set …' as that account, or set the "
+                + "service's Log On account to yours (services.msc → Obsync → Log On).");
+        }
+        catch (Exception ex)
+        {
+            return Result(name, DiagnosticStatus.Warning, $"Could not determine the service's account — {ex.Message}");
         }
     }
 

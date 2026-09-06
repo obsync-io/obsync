@@ -323,7 +323,22 @@ public sealed class DiagnosticsService : IDiagnosticsService
     private async Task<DiagnosticResult> CheckRepositoryAsync(GitRepositoryProfile repository, CancellationToken cancellationToken)
     {
         var name = $"GitHub · {repository.FullName}";
-        var token = _credentials.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+
+        // Inside the try, unlike every sibling check. It used to sit outside, and the credential
+        // store throws for any CredRead error other than "not found" — so on a machine with a broken
+        // vault the exception escaped RunAsync and discarded the WHOLE report, including the
+        // "Credential Manager: Fail" row that had already been produced to explain it. The one page
+        // built to diagnose credential problems showed nothing at all.
+        string? token;
+        try
+        {
+            token = _credentials.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+        }
+        catch (Exception ex)
+        {
+            return new DiagnosticResult(name, DiagnosticStatus.Fail, $"The stored token could not be read — {ex.Message}", _clock.UtcNow);
+        }
+
         if (string.IsNullOrEmpty(token))
         {
             return new DiagnosticResult(name, DiagnosticStatus.Warning, "No access token stored for this repository.", _clock.UtcNow);
@@ -369,7 +384,19 @@ public sealed class DiagnosticsService : IDiagnosticsService
         GitRepositoryProfile repository, CancellationToken cancellationToken)
     {
         var name = $"git · {repository.FullName}";
-        var token = _credentials.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+
+        // Guarded for the same reason as the API check above: an unreadable vault must produce a row,
+        // not take the report down with it.
+        string? token;
+        try
+        {
+            token = _credentials.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+        }
+        catch (Exception ex)
+        {
+            return new DiagnosticResult(name, DiagnosticStatus.Fail, $"The stored token could not be read — {ex.Message}", _clock.UtcNow);
+        }
+
         if (string.IsNullOrEmpty(token))
         {
             return new DiagnosticResult(name, DiagnosticStatus.Warning, "No access token stored for this repository.", _clock.UtcNow);

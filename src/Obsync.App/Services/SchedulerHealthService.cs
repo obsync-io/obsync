@@ -42,7 +42,16 @@ public enum SchedulerHealthStatus
 }
 
 /// <summary>The scheduler verdict plus the user-facing explanation.</summary>
-public sealed record SchedulerHealth(SchedulerHealthStatus Status, string Summary)
+/// <param name="ServiceAccount">
+/// The Windows account scheduled runs execute as, or null when it cannot be determined. Defaulted
+/// and set by <see cref="ISchedulerHealthService"/> after the verdict, so <see cref="Evaluate"/>
+/// stays a pure function of its inputs and its existing tests are untouched.
+/// <para>
+/// Exposed because the preflight has to be able to say which account it did NOT check: every probe
+/// it runs executes under the signed-in user, while credentials and the data folder are per-account.
+/// </para>
+/// </param>
+public sealed record SchedulerHealth(SchedulerHealthStatus Status, string Summary, string? ServiceAccount = null)
 {
     /// <summary>True when enabled schedules will actually fire. A service running under another
     /// account still fires this database's schedules, so it counts — the credential-vault caveat
@@ -105,8 +114,27 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
     public async Task<SchedulerHealth> GetAsync(CancellationToken cancellationToken = default)
     {
         var heartbeat = await _settings.GetSchedulerHeartbeatAsync(cancellationToken).ConfigureAwait(false);
-        return Evaluate(QueryServiceStatus(), QueryServiceAccount(), heartbeat, _clock.UtcNow, CurrentActor.Name);
+        var serviceAccount = QueryServiceAccount();
+        var health = Evaluate(QueryServiceStatus(), serviceAccount, heartbeat, _clock.UtcNow, CurrentActor.Name);
+
+        // The heartbeat wins when it is fresh: it names the account actually DOING the scheduling,
+        // which behind a shared data root may not even be this machine's service. The registry's
+        // ObjectName is the fallback, and is what a stopped or never-started service leaves behind.
+        return health with
+        {
+            ServiceAccount = (IsFresh(heartbeat, _clock.UtcNow) ? heartbeat!.Account : null) ?? serviceAccount,
+        };
     }
+
+    /// <summary>
+    /// Whether a heartbeat is recent enough to be believed. A FUTURE timestamp is never fresh: an
+    /// unbounded comparison reports a dead scheduler as healthy until the wall clock catches up (a
+    /// fast RTC corrected by NTP, or a restored VM snapshot).
+    /// </summary>
+    private static bool IsFresh(SchedulerHeartbeat? heartbeat, DateTimeOffset nowUtc) =>
+        heartbeat is not null
+        && nowUtc - heartbeat.TimestampUtc >= TimeSpan.Zero
+        && nowUtc - heartbeat.TimestampUtc <= HeartbeatFreshness;
 
     /// <summary>Pure verdict logic, separated so it is testable without a real service or registry.</summary>
     public static SchedulerHealth Evaluate(
@@ -120,7 +148,7 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
         // scheduler as healthy until the wall clock catches up (a fast RTC corrected by NTP, or a
         // restored VM snapshot).
         var age = heartbeat is null ? (TimeSpan?)null : nowUtc - heartbeat.TimestampUtc;
-        var isFresh = age is { } a && a >= TimeSpan.Zero && a <= HeartbeatFreshness;
+        var isFresh = IsFresh(heartbeat, nowUtc);
 
         // A fresh heartbeat is positive proof that a scheduler is alive and writing to THIS
         // database, so it outranks "the SCM has no such service" — which can also mean the
@@ -159,8 +187,12 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
                 SchedulerHealthStatus.NotRunning,
                 "Scheduled jobs won't run — the Obsync background service is stopped. Start the " +
                 "\"Obsync\" service (services.msc). If it will not stay started, its logon account is " +
-                "the usual cause: on the service's Log On tab re-enter the account and password — " +
-                "which also grants the \"Log on as a service\" right — then start it.");
+                "the usual cause: on the service's Log On tab re-enter the account and password, " +
+                "which also grants the \"Log on as a service\" right. If it still fails with error " +
+                "1069 after that, the right is managed by Group Policy — a local grant is overwritten " +
+                "at the next refresh, and a \"Deny log on as a service\" entry overrides it entirely. " +
+                "That needs a change in Active Directory; check the Security event log (event 4625, " +
+                "logon type 5) for the exact reason.");
         }
 
         if (isFresh)

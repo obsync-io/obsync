@@ -27,11 +27,12 @@ public sealed class JobPreflightServiceTests
     private readonly IGitRemoteProbe _gitRemote = Substitute.For<IGitRemoteProbe>();
     private readonly IProxyProvider _proxy = Substitute.For<IProxyProvider>();
     private readonly IAppSettingsRepository _settings = Substitute.For<IAppSettingsRepository>();
+    private readonly ISchedulerHealthService _schedulerHealth = Substitute.For<ISchedulerHealthService>();
 
     private readonly SqlConnectionProfile _connection = new() { Name = "Prod", ServerName = "SVR" };
     private readonly GitRepositoryProfile _repository = new() { Name = "R", Owner = "o", RepositoryName = "r", DefaultBranch = "main" };
 
-    private JobPreflightService Build() => new(_probe, _gitHub, _credentials, _jobs, new SystemClock(), _gitRemote, _proxy, _settings);
+    private JobPreflightService Build() => new(_probe, _gitHub, _credentials, _jobs, new SystemClock(), _gitRemote, _proxy, _settings, _schedulerHealth);
 
     private JobPreflightRequest GitRequest(CommitMode mode = CommitMode.DirectCommit, string branch = "main") =>
         new(_connection, _repository, branch, mode, ExportPath: null, "environments/SVR/db1", EditingJobId: null);
@@ -52,9 +53,15 @@ public sealed class JobPreflightServiceTests
             .Returns(Result.Success<IReadOnlyList<string>>([.. branches]));
     }
 
+    /// <summary>Service runs as this user — the case where the other checks DO transfer.</summary>
+    private void SameAccountService() =>
+        _schedulerHealth.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.Healthy, "healthy", CurrentActor.Name));
+
     /// <summary>Makes the git transport probe succeed — the default substitute returns a null Result.</summary>
     private void GitTransportSucceeds()
     {
+        SameAccountService();
         _gitRemote.CheckAsync(Arg.Any<GitNetworkOptions>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Result.Success());
         _proxy.ResolveAsync(Arg.Any<CancellationToken>()).Returns((ProxyResolution?)null);
@@ -79,6 +86,77 @@ public sealed class JobPreflightServiceTests
     private void PermissionsReturn(string database, SqlDatabasePermissionReport report) =>
         _probe.CheckDatabasePermissionsAsync(Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), database, Arg.Any<CancellationToken>())
             .Returns(Result.Success(report));
+
+    private static ScheduleProfile Daily() => new() { Kind = ScheduleKind.Daily, TimeOfDay = new TimeOnly(23, 0) };
+
+    private JobPreflightRequest ScheduledRequest() =>
+        new(_connection, _repository, "main", CommitMode.DirectCommit, ExportPath: null,
+            "environments/SVR/db1", EditingJobId: null, Databases: null, Schedule: Daily());
+
+    [Fact]
+    public async Task AScheduledJob_WarnsWhenTheServiceRunsAsADifferentAccount()
+    {
+        // The check that makes the others honest. Everything above it ran in THIS process as the
+        // signed-in user; a scheduled run executes in the service under its own account, and both the
+        // credential vault and %LOCALAPPDATA% are per-account. Without this row a job could pass every
+        // check and then fail every scheduled run on a missing token.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _schedulerHealth.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.Healthy, "healthy", @"NT AUTHORITY\SYSTEM"));
+
+        var identity = Single(await Build().RunAsync(ScheduledRequest()), "Run identity");
+
+        Assert.Equal(DiagnosticStatus.Warning, identity.Status);
+        Assert.Contains(@"NT AUTHORITY\SYSTEM", identity.Detail);
+        Assert.Contains("PER ACCOUNT", identity.Detail);
+        Assert.Contains("obsync credential set", identity.Detail);
+    }
+
+    [Fact]
+    public async Task AScheduledJob_PassesWhenTheServiceRunsAsTheSameAccount()
+    {
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+
+        var identity = Single(await Build().RunAsync(ScheduledRequest()), "Run identity");
+
+        Assert.Equal(DiagnosticStatus.Pass, identity.Status);
+        Assert.Contains(CurrentActor.Name, identity.Detail);
+    }
+
+    [Fact]
+    public async Task AManualOnlyJob_HasNoSecondIdentityToReconcile()
+    {
+        // Manual runs execute in this process, so the checks above genuinely do transfer. Warning
+        // here would be noise on the common case.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _schedulerHealth.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.Healthy, "healthy", @"NT AUTHORITY\SYSTEM"));
+
+        var identity = Single(await Build().RunAsync(GitRequest()), "Run identity");
+
+        Assert.Equal(DiagnosticStatus.Pass, identity.Status);
+        Assert.Contains("Manual runs only", identity.Detail);
+    }
+
+    [Fact]
+    public async Task AnUnknownServiceAccount_WarnsRatherThanClaimingItIsFine()
+    {
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _schedulerHealth.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.NotInstalled, "not installed", null));
+
+        var identity = Single(await Build().RunAsync(ScheduledRequest()), "Run identity");
+
+        Assert.Equal(DiagnosticStatus.Warning, identity.Status);
+    }
 
     [Fact]
     public async Task AFailingGitTransport_FailsPreflight_WhileTheApiChecksStillPass()
@@ -250,15 +328,18 @@ public sealed class JobPreflightServiceTests
 
         var results = await Build().RunAsync(GitRequest());
 
-        Assert.Equal(6, results.Count);
+        Assert.Equal(7, results.Count);
         Assert.All(results, r => Assert.Equal(DiagnosticStatus.Pass, r.Status));
 
         // "Git connection" sits immediately after the API checks and before the local ones. It is a
         // separate row on purpose: it is the only one that proves the transport a RUN uses, and when
         // it disagrees with "Repository access" the disagreement is itself the diagnosis — API pass
         // with git fail means TLS or proxy, the reverse means token scope or SSO.
+        // "Run identity" sits last among the local checks because it qualifies all the ones before
+        // it: they ran in this process, as this user, and it says whether that is the identity a
+        // scheduled run will use.
         Assert.Equal(
-            ["SQL connection", "Repository access", "Branch 'main'", "Git connection", "Credentials", "Folder collision"],
+            ["SQL connection", "Repository access", "Branch 'main'", "Git connection", "Credentials", "Run identity", "Folder collision"],
             results.Select(r => r.Name));
     }
 
