@@ -2,6 +2,83 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.11.3 - 2026-09-06
+
+**Uninstall hardening**, from a four-agent review of the removal path — and a correction to 0.11.2.
+
+The MSI half of uninstalling was already right: every artifact the installer creates was traced to a
+removal path and found to have one. What was wrong sat either side of it — a shutdown budget aimed
+at the wrong deadline, and a decommissioning story that existed only in the source.
+
+Test suite: 1,305 → 1,321.
+
+### Fixed
+
+- **The service's stop budget was three times longer than anything waits.** 0.11.2 gave the host 90
+  seconds to drain and terminated the process at 92 if it had not, so that an installer would never
+  copy files over a live process. Windows Installer waits **a maximum of 30 seconds** for a service
+  to stop — documented on the `ServiceControl` table's `Wait` column, and not configurable from the
+  package — and then proceeds to delete the service and remove files regardless. The terminate was
+  therefore firing about a minute after the handles it was meant to release had already been
+  deferred to a reboot: it protected nothing, on the uninstall path and equally on the upgrade path
+  it was written for. The budget is now 20 seconds with a 2-second grace, sized against the
+  installer's cap, and the arithmetic is asserted rather than assumed. Shrinking it costs little —
+  the cooperative path finishes in seconds, and anything that does not is recovered at next start.
+- **Terminating the service orphaned its `git.exe` children.** Killing the host ends only the host,
+  and git is not an unrelated program: it runs from `tools\git\` inside the very folder an uninstall
+  is deleting and an upgrade is replacing, so an orphan held open exactly what the terminate existed
+  to release. Killing our own process tree is not possible — `Process.Kill` refuses when the tree
+  contains the caller — so running git processes are now tracked and swept first.
+- **An older build silently adopted a newer database.** The migration runner only ever asked "have I
+  applied this?", so a `__migrations` row for a version it had never heard of was invisible:
+  everything it knew was already applied, nothing was pending, and it started against a schema from
+  the future without so much as a log line. Uninstalling is the way in — the MSI's downgrade block
+  matches *installed* products sharing the UpgradeCode, and an uninstall deregisters the product
+  first, while the data root survives both because it lives outside the install folder. It now
+  refuses to start, naming the migrations it does not recognise.
+- **Log files were bounded on one axis only.** The file count was capped at 31 while Serilog's
+  default per-file cap is 1 GB. That matters most where nobody is looking: a service left on the
+  installer's Local System default writes forever while doing no useful work, into a directory that
+  resolves inside `C:\Windows\System32\config\systemprofile` and that an administrator cannot browse
+  without taking ownership.
+- `INSTALL.md` claimed the 0.11.2 unattended-uninstall fix landed in "0.12.0". It shipped in
+  **0.11.2**, and the note now also covers retirement rather than only upgrade.
+
+### Changed — documentation
+
+The uninstall was structurally clean and almost entirely undocumented. `INSTALL.md` now answers the
+questions it raises:
+
+- **The pre-uninstall credential step has moved to where someone uninstalling will find it** — it
+  was an H3 filed under *Silent install*, three sections above the uninstall commands, and it never
+  mentioned that `obsync.exe`, the tool it tells you to run, is removed by the very uninstall it
+  must precede.
+- **What uninstalling leaves behind**, named: the database, the git clones (usually the largest
+  item), logs and locks, the per-account credential vaults, the retained "Log on as a service"
+  right, and the Local System data root under `System32` — with the commands to remove them.
+- **A recovery path for anyone who has already uninstalled.** The credential key prefix
+  (`Obsync:GitHub:<id>` and friends) and the `cmdkey` commands appeared in no user-facing document,
+  so a live GitHub token could sit in a vault with nothing able to name it.
+- **Fleet retirement**, documented for the first time — including that Add/Remove Programs
+  advertises `MsiExec.exe /I{ProductCode}`, which is *maintenance mode*: a retirement script that
+  reads `UninstallString` and appends `/qn` silently removes nothing and exits 0. Resolve the
+  ProductCode at run time instead. Exit codes 1605 and 1641 are added, and a `/qn` uninstall cannot
+  close the desktop app across sessions, so it returns 3010 with the Add/Remove Programs entry
+  already gone.
+- **If an uninstall fails part-way** — a rollback restores the product but not the service's
+  recovery actions, its delayed start, or its logon password, and none of that is announced.
+
+### Internal
+
+- The stop budget, its drain share, its grace and the installer's cap now live together and are
+  asserted against each other, so the relationship survives someone changing one number.
+- Seven packaging tests pin the uninstall invariants: no permanent components, the PATH entry
+  removable, every component reachable from the feature, exactly one custom action and it cannot run
+  on uninstall, the service stopped-and-removed with a synchronous stop, and nothing in the package
+  addressing a path outside the install folder — which is what makes retained user data safe by
+  construction rather than by policy.
+- Both new guards were reverted individually to confirm their tests fail.
+
 ## 0.11.2 - 2026-09-06
 
 **Upgrade hardening.** A five-agent review of the upgrade path found that the product upgraded
