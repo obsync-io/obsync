@@ -1,7 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!--
+      net10.0-windows + WinForms purely for System.Windows.Forms.TextRenderer. MSI paints Text
+      controls with GDI DrawText, and TextRenderer is the only managed wrapper over the same API —
+      GDI+ (Graphics.MeasureString) measures differently and would not predict what the installer
+      actually clips. This product is Windows-only, so the narrower TFM costs nothing.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>

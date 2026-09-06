@@ -289,9 +289,30 @@ ame$) is
       <!-- Obsync: Segoe UI instead of the stock Tahoma — matches the app and every modern Windows
            wizard. Control rectangles are fixed installer units, so sizes stay conservative (9 pt
            body ≈ the Windows message font) to keep the stock layouts truncation-free. -->
-      <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" />
-      <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="12" />
-      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="9" Bold="yes" />
+      <!-- Obsync: colours from the app's own Colors.xaml, so the wizard and the application it
+           installs share one palette rather than only a logo.
+
+           Before this there was not a single colour anywhere in the installer: every string was
+           system-default black on system-default grey, and the ONLY brand presence in the whole
+           wizard was two BMP files. Colour is also the one styling lever MSI actually gives you —
+           there is no colour column in the Dialog or Control tables, so TextStyle is where the
+           entire palette has to live. Note it applies to Text controls only; buttons, checkboxes
+           and edits keep their system colours, which is correct (they should look like Windows).
+
+           Titles take AccentHover rather than AccentColor: #1B17FF is tuned to be an accent on a
+           surface, and at 9pt bold it reads as too loud for a heading. Body takes TextPrimary
+           instead of pure black for the same reason the app does — #000000 is heavier than any
+           ink the app uses. Nothing is drawn over the dark panel (page text starts at 135 units,
+           the panel ends at ~128), so these are all on white. -->
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Segoe UI" Size="9" Red="17" Green="24" Blue="39" />
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Segoe UI" Size="12" Red="17" Green="24" Blue="39" />
+      <TextStyle Id="WixUI_Font_Title" FaceName="Segoe UI" Size="9" Bold="yes" Red="21" Green="18" Blue="214" />
+
+      <!-- Secondary text, matching the app's Caption style (TextMuted). Used for the explanatory
+           notes on the Service Account page so they rank below the controls they describe — and,
+           at 8pt, one line is 13 units rather than 15, which is what lets two paragraphs fit
+           between the password field and BottomLine at all. -->
+      <TextStyle Id="WixUI_Font_Note" FaceName="Segoe UI" Size="8" Red="107" Green="114" Blue="128" />
 
       <Property Id="DefaultUIFont" Value="WixUI_Font_Normal" />
 
@@ -371,7 +392,7 @@ ame$) is
           <Publish Event="SpawnDialog" Value="CancelDlg" />
         </Control>
 
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose the Windows account that runs scheduled sync jobs." />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="Choose the account that runs scheduled sync jobs." />
         <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="{\WixUI_Font_Title}Service account" />
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
@@ -384,55 +405,67 @@ ame$) is
           </RadioButtonGroup>
         </Control>
 
-        <!-- Obsync: label heights are 12 units — a Segoe UI 9 line does not fit the classic 10-unit
-             label, and an overflowing MSI Text control path-ellipsizes text containing backslashes
-             ("Account ...\user):") instead of clipping or wrapping when that happens. -->
-        <Control Id="AccountLabel" Type="Text" TabSkip="no" X="36" Y="98" Width="304" Height="12" NoPrefix="no" Text="&amp;Account (DOMAIN\user or .\user):"
+        <!-- Obsync: one Segoe UI 9 line is 15 units — measured, and pinned by DialogTextFitTests.
+             These labels were 12, so each was cut through its descenders AND its true extent ran
+             into the edit box two units below it. Both are 15 now and sit 16 above their edit.
+             (An overflowing MSI Text control also path-ellipsizes text containing backslashes —
+             "Account ...\user):" — rather than wrapping, which is how this hid for so long.) -->
+        <Control Id="AccountLabel" Type="Text" TabSkip="no" X="36" Y="96" Width="304" Height="15" NoPrefix="no" Text="&amp;Account (DOMAIN\user or .\user):"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="AccountEdit" Type="Edit" X="36" Y="112" Width="304" Height="16" Property="SERVICE_ACCOUNT_NAME"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
-        <Control Id="PasswordLabel" Type="Text" TabSkip="no" X="36" Y="132" Width="304" Height="12" NoPrefix="no" Text="&amp;Password:"
+        <Control Id="PasswordLabel" Type="Text" TabSkip="no" X="36" Y="128" Width="304" Height="15" NoPrefix="no" Text="&amp;Password:"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
         <Control Id="PasswordEdit" Type="Edit" Password="yes" X="36" Y="146" Width="304" Height="16" Property="SERVICE_ACCOUNT_PWD"
                  EnableCondition="SERVICE_ACCOUNT_MODE = &quot;custom&quot;" DisableCondition="SERVICE_ACCOUNT_MODE &lt;&gt; &quot;custom&quot;" />
 
-        <!-- Obsync: two short paragraphs read better than one dense block. The first explains the
-             per-user credential-vault constraint; the second covers the gMSA case.
-             VaultNote wraps to exactly 2 lines in its 2-line box (verified 96-192 DPI) with about
-             two characters of slack, so growing the string means growing the box: 18 units are
-             free above BottomLine — VaultNote Y=168 Height=36, GmsaNote Y=208. -->
-        <Control Id="VaultNote" Type="Text" X="20" Y="172" Width="330" Height="24" NoPrefix="yes"
-                 Text="Credentials are stored per Windows account, so scheduled jobs read this account's vault. Simplest: the account you run the Obsync app as." />
-        <Control Id="GmsaNote" Type="Text" X="20" Y="202" Width="330" Height="24" NoPrefix="yes"
-                 Text="For a group Managed Service Account, enter DOMAIN\name$ with no password, then run `obsync credential set` as that account." />
+        <!-- Obsync: two short paragraphs read better than one dense block — the first states the
+             per-account vault constraint, the second covers gMSA.
+             Both boxes are 30 units, exactly two Segoe UI 9 lines, and both strings are written to
+             fit two lines at width 330 (61 characters per line, measured). They were 24 units
+             against strings that wrapped to three, so a third of each paragraph was invisible.
+             Both use WixUI_Font_Note (8pt, TextMuted), which ranks them below the controls they
+             describe and — because an 8pt line is 13 units rather than 15 — is what lets two
+             paragraphs fit here at all. The budget is hard: only 66 units separate the password
+             field from BottomLine at 234, so each note gets exactly two lines and the copy has to
+             fit them. DialogTextFitTests measures it in the note font rather than trusting anyone's
+             character count, which is the mistake that produced the previous sizes. -->
+        <Control Id="VaultNote" Type="Text" X="20" Y="170" Width="330" Height="26" NoPrefix="yes"
+                 Text="{\WixUI_Font_Note}Credentials are stored per Windows account — scheduled jobs read this account's vault." />
+        <Control Id="GmsaNote" Type="Text" X="20" Y="202" Width="330" Height="26" NoPrefix="yes"
+                 Text="{\WixUI_Font_Note}For a group Managed Service Account: DOMAIN\name$, no password. Store its secrets with obsync credential set." />
       </Dialog>
 
       <!-- Obsync: shown when "This account" is selected but no account was entered. The Text control
            gets three Segoe UI lines of headroom — an overflowing MSI Text control path-ellipsizes
            text that contains backslashes rather than wrapping further. -->
-      <Dialog Id="ObsyncAccountRequiredDlg" Width="260" Height="95" Title="[ProductName] Setup">
-        <Control Id="OK" Type="PushButton" X="100" Y="68" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
+      <Dialog Id="ObsyncAccountRequiredDlg" Width="260" Height="105" Title="[ProductName] Setup">
+        <Control Id="OK" Type="PushButton" X="100" Y="78" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
-        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="40" NoPrefix="yes"
+        <!-- 45 units = the three Segoe UI 9 lines this wraps to at width 194 (26 characters a line,
+             measured). It was 40, so the third line was cut; the dialog grew by 10 to keep the
+             button clear of it. -->
+        <Control Id="Text" Type="Text" X="48" Y="15" Width="194" Height="45" NoPrefix="yes"
                  Text="Enter an account (DOMAIN\user, or .\user for a local account), or choose Local System." />
       </Dialog>
 
       <!-- Obsync: shown when "This account" is selected with a blank password for an account that
            is not one of the passwordless kinds. Same shape as ObsyncAccountRequiredDlg, one line
            taller because the text names the exception. -->
-      <!-- Wider than ObsyncAccountRequiredDlg: at 194x55 units this text wraps to five Segoe UI 9
-           lines and the box holds four, and the clipped line contains a backslash, so MSI
-           path-ellipsizes it rather than clipping cleanly. 234x60 holds five with a line to spare
-           at every tested DPI, and the 18-unit right margin matches the sibling dialog. -->
-      <Dialog Id="ObsyncPasswordRequiredDlg" Width="300" Height="110" Title="[ProductName] Setup">
-        <Control Id="OK" Type="PushButton" X="122" Y="83" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
+      <!-- The claim this comment used to make — "234x60 holds five with a line to spare at every
+           tested DPI" — was arithmetic, not measurement, and it was wrong. At width 234 a Segoe UI 9
+           line holds 41 characters, so that 200-character string wrapped to five lines needing 75
+           units in a box of 60: the last line never rendered. Fixed by doing both — shorter copy AND
+           an honest box — and DialogTextFitTests now measures it instead of anyone estimating. -->
+      <Dialog Id="ObsyncPasswordRequiredDlg" Width="300" Height="120" Title="[ProductName] Setup">
+        <Control Id="OK" Type="PushButton" X="122" Y="93" Width="56" Height="17" Default="yes" Cancel="yes" Text="!(loc.WixUIOK)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
         <Control Id="Icon" Type="Icon" X="15" Y="15" Width="24" Height="24" ToolTip="!(loc.InvalidDirDlgIconTooltip)" FixedSize="yes" IconSize="32" Text="!(loc.InvalidDirDlgIcon)" />
         <Control Id="Text" Type="Text" X="48" Y="15" Width="234" Height="60" NoPrefix="yes"
-                 Text="Enter the password for this account. Without one the service is installed but cannot start. Only a group Managed Service Account (DOMAIN\name$) or a built-in service account logs on without a password." />
+                 Text="Enter the password for this account, or the service installs but cannot start. Only a gMSA (DOMAIN\name$) or a built-in service account logs on without one." />
       </Dialog>
     </UI>
 
