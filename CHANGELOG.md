@@ -2,6 +2,54 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.11.1 - 2026-09-06
+
+**Installer fixes.** The setup wizard's text has been silently clipped since 0.9.x, and the artwork
+used the brand accent as a background. Both are fixed. Nothing outside `packaging/` changed, so the
+engine, service and app are identical to 0.11.0.
+
+### Fixed
+
+- **Clipped text throughout the wizard.** The installer switched from Tahoma 8 to Segoe UI 9 without
+  re-laying out its controls. That raises the GDI line box from 13px to 15px, and installer units are
+  literal pixels that do *not* rescale with the font, so every box laid out for 13 was one size too
+  small. Affected, and now measured rather than estimated:
+  - **Account** and **Password** labels on the Service account page were 12 units for a 15-unit line,
+    cut through their descenders — and their true extents ran *into* the edit boxes two units below.
+  - Both explanatory notes on that page were 24 units against text wrapping to three lines, so a
+    third of each paragraph never rendered.
+  - The "enter a password" dialog was 60 units against 75 needed; its last line was invisible.
+  - The "enter an account" dialog was 40 against 45.
+- Copy on those pages was rewritten to fit its boxes, rather than boxes being grown past the point
+  the dialog can hold them.
+
+### Changed
+
+- **The welcome and finish artwork.** The side panel was a flat fill of `#1B17FF` across 29% of the
+  window. That token is named *AccentColor* in the app's own palette, whose actual surfaces are
+  `#F8FAFC` and `#111827` — an accent was being used as a ground, which is what made the wizard read
+  as dated beside the application. It is now a deep gradient holding the brand hue at the top where
+  the mark sits and settling into indigo ink, with a soft glow and two faint arcs echoing the mark.
+  The mark is 56px rather than 92px, and the panel content is left-aligned on a margin.
+- **The page banner.** Its 2px full-saturation rule is now a hairline in the app's border colour. It
+  previously sat directly above the system's own etched separator, so every inner page drew two
+  competing lines under its header.
+- **Text is coloured for the first time.** There was previously not a single colour anywhere in the
+  installer — every string was system black on system grey, and the only brand presence in the whole
+  wizard was two bitmap files. Page titles now use the app's AccentHover, body text its TextPrimary,
+  and the secondary notes a new muted style at 8pt. (`TextStyle` is the only colour lever MSI offers:
+  there is no colour column in its Dialog or Control tables at all.)
+
+### Internal
+
+- `DialogTextFitTests` measures every Text control in every locally authored dialog with the same GDI
+  API MSI paints with, and checks that no two controls overlap and nothing extends past its dialog.
+  Nothing previously asserted on a single coordinate, height, font or bitmap dimension, which is why
+  the clipping shipped. Character budgets are not sufficient — the same control width fits 56 or 61
+  characters depending on where the words break — so the strings are measured, not counted.
+- Verified by building the MSI and reading its `Control` and `TextStyle` tables back out, then
+  rendering the Service account page from those tables.
+
 ## 0.11.0 - 2026-09-06
 
 **Production hardening.** A five-agent adversarial review of 0.10.1.1 found 41 defects; this
