@@ -65,6 +65,14 @@ public partial class App : Application
                 .WriteTo.File(
                     System.IO.Path.Combine(ObsyncPaths.LogsRoot, "app-.log"),
                     rollingInterval: RollingInterval.Day,
+                    // Bounded on BOTH axes. Only the file count was capped, and Serilog's default
+                    // per-file cap is 1 GB, so 31 retained days had a theoretical ceiling of 31 GB.
+                    // That matters most where nobody is looking: a service left on the installer's
+                    // LocalSystem default writes here forever while doing no useful work, and its
+                    // log directory resolves inside C:\Windows\System32\config\systemprofile,
+                    // which an administrator cannot even browse without taking ownership.
+                    fileSizeLimitBytes: 16 * 1024 * 1024,
+                    rollOnFileSizeLimit: true,
                     retainedFileCountLimit: 31)
                 .CreateLogger();
 

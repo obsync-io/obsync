@@ -46,8 +46,39 @@ public sealed class DatabaseInitializer : IDatabaseInitializer
             cancellationToken).ConfigureAwait(false);
 
         var applied = await GetAppliedVersionsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var migrations = LoadMigrations().ToList();
 
-        foreach (var (version, sql) in LoadMigrations())
+        // Refuse a database written by a NEWER build, rather than running against a schema this one
+        // does not understand.
+        //
+        // The loop below only ever asks "have I applied this?", so a __migrations row for a version
+        // with no embedded resource here was simply invisible: every version this build knows about
+        // was already applied, nothing was pending, and startup succeeded silently against a schema
+        // from the future. Not even a log line.
+        //
+        // It is reachable, and uninstalling is how you get there. The MSI blocks a downgrade by
+        // matching installed products sharing the UpgradeCode — but uninstalling deregisters the
+        // product first, so uninstall-newer-then-install-older sails past it, and the data root
+        // survives both because it lives outside the install folder. Additive migrations happen to
+        // be survivable; a rebuilt or renamed table is not, and V005 and V011 both rebuild. There is
+        // no pre-migration backup to fall back on either.
+        //
+        // Compares names, not an ordering: migration files are append-only and are never renamed, so
+        // an unrecognized name means "written by something else", which is exactly the question.
+        var unknown = applied
+            .Except(migrations.Select(m => m.Version), StringComparer.Ordinal)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToList();
+        if (unknown.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"This Obsync database was created by a newer version and cannot be used by this one. "
+                + $"It contains schema migrations this build does not know about: {string.Join(", ", unknown)}. "
+                + "Install the newer version of Obsync again, or move the data folder aside to start fresh "
+                + "(doing so abandons the existing jobs, run history and audit log).");
+        }
+
+        foreach (var (version, sql) in migrations)
         {
             if (applied.Contains(version))
             {

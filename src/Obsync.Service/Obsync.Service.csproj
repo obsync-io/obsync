@@ -20,6 +20,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Obsync.Engine\Obsync.Engine.csproj" />
+    <!-- Direct, though it also arrives via Engine: the service lifetime sweeps orphaned git
+         children when it terminates on an expired shutdown budget. -->
+    <ProjectReference Include="..\Obsync.Git\Obsync.Git.csproj" />
     <ProjectReference Include="..\Obsync.Scheduler\Obsync.Scheduler.csproj" />
     <ProjectReference Include="..\Obsync.Data\Obsync.Data.csproj" />
     <ProjectReference Include="..\Obsync.Security\Obsync.Security.csproj" />

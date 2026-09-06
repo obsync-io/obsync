@@ -346,6 +346,12 @@ public sealed class GitCommandRunner : IGitCommandRunner
                 ex);
         }
 
+        // Tracked so a host that terminates itself on an expired shutdown budget can take its git
+        // children with it. Every ordinary exit path already kills the tree; this covers the one
+        // that cannot, and it matters because git lives inside the install folder an upgrade or an
+        // uninstall is trying to replace. See RunningGitProcesses.
+        using var tracked = RunningGitProcesses.Track(process);
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 

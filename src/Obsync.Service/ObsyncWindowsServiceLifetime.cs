@@ -84,7 +84,7 @@ internal sealed class ObsyncWindowsServiceLifetime : WindowsServiceLifetime
     /// shutdown, and this avoids racing them by microseconds and killing a process that did in
     /// fact finish cleanly.
     /// </summary>
-    private static readonly TimeSpan StoppedGrace = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StoppedGrace = ServiceShutdownBudget.TerminateGrace;
 
     private readonly IHostApplicationLifetime _applicationLifetime;
     private readonly ILogger<ObsyncWindowsServiceLifetime> _logger;
@@ -140,11 +140,20 @@ internal sealed class ObsyncWindowsServiceLifetime : WindowsServiceLifetime
         // the MSI's restart-on-failure recovery. That is the right outcome after a wedged drain
         // (the service comes back healthy) and is moot during an upgrade, where the service is
         // being deleted anyway.
+        // Terminating this process alone is not enough. git runs from inside the install folder
+        // (tools\git\), so an orphaned child would keep holding the very files the installer is
+        // about to replace or delete — the exact handles this terminate exists to release. Killing
+        // our own tree is not an option (Process.Kill refuses when the tree contains the caller),
+        // so the children are tracked and swept explicitly.
+        var orphans = Obsync.Git.RunningGitProcesses.KillAll();
+
         _logger.LogCritical(
             "The Obsync service did not finish stopping within {Timeout}s. Terminating so its files are "
-            + "released — a stop that is reported but not achieved lets an upgrade overwrite a live process. "
-            + "An in-flight run may be left to be recovered at next start.",
-            _shutdownTimeout.TotalSeconds);
+            + "released — a stop that is reported but not achieved lets an installer overwrite a live "
+            + "process. Killed {Orphans} git child process(es). An in-flight run may be left to be "
+            + "recovered at next start.",
+            _shutdownTimeout.TotalSeconds,
+            orphans);
 
         Serilog.Log.CloseAndFlush();
         Process.GetCurrentProcess().Kill();

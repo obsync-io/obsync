@@ -54,6 +54,14 @@ try
         .WriteTo.File(
             Path.Combine(ObsyncPaths.LogsRoot, "service-.log"),
             rollingInterval: RollingInterval.Day,
+            // Bounded on BOTH axes. Only the file count was capped, and Serilog's default
+            // per-file cap is 1 GB, so 31 retained days had a theoretical ceiling of 31 GB.
+            // That matters most where nobody is looking: a service left on the installer's
+            // LocalSystem default writes here forever while doing no useful work, and its
+            // log directory resolves inside C:\Windows\System32\config\systemprofile,
+            // which an administrator cannot even browse without taking ownership.
+            fileSizeLimitBytes: 16 * 1024 * 1024,
+            rollOnFileSizeLimit: true,
             retainedFileCountLimit: 31);
 
     if (WindowsServiceHelpers.IsWindowsService())
@@ -83,14 +91,10 @@ try
         builder.Services.UseObsyncWindowsServiceLifetime();
     }
 
-    // The 30s default has to cover the in-flight run drain AND Quartz's WaitForJobsToComplete, and
-    // the drain alone could consume all of it. One budget shared by every hosted service, so it is
-    // set here rather than being divided up implicitly by stop order.
-    //
-    // A budget only means something if the caller waiting on it knows about it: ObsyncWindowsServiceLifetime
-    // heartbeats this to the SCM while stopping, and terminates the process if it is exceeded, so
-    // this value is now an honest promise rather than a private hope.
-    builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(90));
+    // One budget shared by every hosted service, sized to fit inside the 30 seconds Windows
+    // Installer waits for a service to stop — see ServiceShutdownBudget, which explains why a
+    // larger number was worse than useless.
+    builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = ServiceShutdownBudget.Total);
     builder.Services.AddSerilog();
 
     builder.Services.AddObsyncSecurity();

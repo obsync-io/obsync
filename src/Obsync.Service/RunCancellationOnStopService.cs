@@ -17,8 +17,9 @@ public sealed class RunCancellationOnStopService : IHostedService
 {
     /// <summary>How long to wait for interrupted runs to persist their Cancelled result. Kept well
     /// inside the host's ShutdownTimeout so Quartz's own WaitForJobsToComplete still has a budget
-    /// after this returns.</summary>
-    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(20);
+    /// after this returns — see ServiceShutdownBudget for how the whole budget is apportioned and
+    /// why it has to fit inside the installer's 30-second cap.</summary>
+    private static readonly TimeSpan DrainTimeout = ServiceShutdownBudget.Drain;
 
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly ILogger<RunCancellationOnStopService> _logger;
