@@ -58,7 +58,16 @@
          and its PATH entry are orphaned with nothing tracking them, and any gap in service
          refcounting silently deletes the service Obsync exists to run. A loud, retryable 1072 beats
          a silently missing service. -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Obsync is already installed." />
+    <!-- AllowSameVersionUpgrades because the ProductCode is auto-generated, so every BUILD of a
+         given version is a distinct product. WiX's default emits VersionMax = this version
+         EXCLUSIVE, so a rebuilt 0.12.0 matched neither the upgrade row nor the downgrade row and
+         installed SIDE BY SIDE with an installed 0.12.0: two identical Add/Remove Programs entries
+         sharing one set of components, where the first uninstall silently removes nothing (every
+         refcount merely drops 2 -> 1) and the admin has to uninstall twice. Re-running the *same*
+         .msi file was always safe — same ProductCode, so MSI enters maintenance — but re-running a
+         rebuilt one was not, and nothing stops a release workflow being re-run for a tag. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Obsync is already installed."
+                  AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Product icon and Add/Remove Programs metadata. The icon Id must end in ".exe" because the
@@ -67,6 +76,34 @@
     <Property Id="ARPPRODUCTICON" Value="ObsyncApp.exe" />
     <Property Id="ARPHELPLINK" Value="https://github.com/obsync-io/obsync" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/obsync-io/obsync" />
+
+    <!-- Where the product is installed, remembered across upgrades and published to Add/Remove
+         Programs. Neither existed, and the pair of omissions compounded.
+
+         An upgrade is a fresh install of a new ProductCode, so nothing carried the previous
+         directory: INSTALLFOLDER fell back to the Directory table default. Someone who installed to
+         D:\Apps\Obsync got C:\Program Files\Obsync pre-filled in the wizard and had to notice, and
+         a silent upgrade RELOCATED the product with no prompt and exit 0. The old tree was removed
+         cleanly (RemoveExistingProducts runs the old product's own uninstall against its own
+         registered paths), so this was silent relocation rather than orphaning — but it also
+         defeated files-in-use detection entirely, because the new install's target paths were then
+         paths nobody held open, so Restart Manager found nothing to close while the old folder was
+         demolished around a running app.
+
+         ARPINSTALLLOCATION was empty, so an admin could not even read the current path back out of
+         Add/Remove Programs to know what to re-pass. Set after CostFinalize, which is where
+         INSTALLFOLDER acquires its resolved value.
+
+         Same "remember as a DEFAULT, never override" shape as SERVICE_ACCOUNT below: the search
+         lands in its own property, and the SetProperty is conditioned on INSTALLFOLDER being unset
+         so an explicit INSTALLFOLDER= on the command line still wins. -->
+    <Property Id="INSTALLFOLDER_REMEMBERED">
+      <RegistrySearch Id="RememberedInstallFolder" Root="HKLM" Key="SOFTWARE\Obsync"
+                      Name="InstallFolder" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLFOLDER" Value="[INSTALLFOLDER_REMEMBERED]" After="AppSearch"
+                 Condition="INSTALLFOLDER_REMEMBERED AND NOT INSTALLFOLDER" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 
     <!-- Windows Service logon account. Defaults to LocalSystem (functional host, but it cannot reach
          the interactive user's Credential Manager / data root, so scheduled runs need a real account
@@ -276,8 +313,22 @@
 
          CreateUser="no" is essential: the account already exists (domain, gMSA, or built-in) and
          this must only ADD the right, never create or modify the principal. UpdateIfExists makes it
-         idempotent across repair and upgrade. RemoveOnUninstall is deliberately left off: revoking
-         a right the site may have granted for its own reasons is not the uninstaller's business.
+         idempotent across repair and upgrade.
+
+         RemoveOnUninstall="no" is stated EXPLICITLY because WiX's default is yes, and the comment
+         here previously claimed the opposite was already true ("deliberately left off"). It was
+         not: the authoring compiled to Wix4User attributes 608, and adding the attribute compiles
+         to 864 — bit 0x100 (DontRemoveOnUninstall) was clear, so Wix4RemoveUser was scheduled and
+         the right WAS revoked. Two consequences, one of them nasty:
+           * uninstall revoked a right the site may have granted for its own reasons, which is the
+             thing the comment said this must never do;
+           * far worse, Wix4RemoveUser is a COMMIT custom action, so during an upgrade the old
+             product's removal revoked the right irreversibly, while the new product's re-grant
+             (Wix4ConfigureUsers at 3999) is undone by its rollback CA if the upgrade then fails.
+             A failed upgrade therefore left the service account WITHOUT SeServiceLogonRight, and
+             the resulting Error 1069 reads as a bad password — sending the admin to re-enter a
+             password that was never the problem, which is precisely the confusion this component
+             was added to end.
 
          Conditioned, because the right is meaningless for the built-in service principals —
          LocalSystem, LocalService and NetworkService hold it implicitly — and naming one here would
@@ -297,6 +348,7 @@ ame$) is
                  CreateUser="no"
                  UpdateIfExists="yes"
                  FailIfExists="no"
+                 RemoveOnUninstall="no"
                  LogonAsService="yes" />
     </Component>
 
@@ -304,6 +356,8 @@ ame$) is
     <Component Id="PathEntry" Directory="INSTALLFOLDER" Bitness="always64">
       <Environment Id="ObsyncPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
       <RegistryValue Root="HKLM" Key="Software\Obsync" Name="pathAdded" Type="integer" Value="1" KeyPath="yes" />
+      <!-- Read back by INSTALLFOLDER_REMEMBERED so the next upgrade stays where this one put it. -->
+      <RegistryValue Root="HKLM" Key="SOFTWARE\Obsync" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
     </Component>
   </Fragment>
 

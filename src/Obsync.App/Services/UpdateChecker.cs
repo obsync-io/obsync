@@ -58,6 +58,17 @@ public sealed class UpdateChecker : IUpdateChecker
                 return Failure("No published releases yet.");
             }
 
+            if (IsRateLimited(response))
+            {
+                // Distinguished from a generic failure because the remedy is completely different:
+                // nothing is wrong with this machine, its proxy, or its network. The check is
+                // unauthenticated, so GitHub's limit of 60 requests per hour applies to the whole
+                // site's egress IP — a large office can exhaust it during the morning login peak.
+                // Reported as an ordinary HTTP error, this sent people to investigate their proxy.
+                return Failure("GitHub's hourly limit for this network has been reached — this is a "
+                    + "shared limit for everyone behind the same address. Try again later.");
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 return Failure($"GitHub responded with {(int)response.StatusCode} ({response.StatusCode}).");
@@ -89,6 +100,20 @@ public sealed class UpdateChecker : IUpdateChecker
 
         static UpdateCheckResult Failure(string reason) => new(false, null, null, reason);
     }
+
+    /// <summary>
+    /// True when GitHub refused the request because the rate limit is exhausted, as opposed to any
+    /// other 403.
+    /// </summary>
+    /// <remarks>
+    /// GitHub signals an exhausted limit with 403 (or 429) plus <c>x-ratelimit-remaining: 0</c>. The
+    /// header is what separates it from a genuine authorization failure, which needs a different
+    /// answer from the user.
+    /// </remarks>
+    public static bool IsRateLimited(HttpResponseMessage response) =>
+        response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests
+        && response.Headers.TryGetValues("x-ratelimit-remaining", out var remaining)
+        && remaining.FirstOrDefault() == "0";
 
     /// <summary>
     /// Parses a release tag or version string: a leading <c>v</c>/<c>V</c> is stripped and 2–4

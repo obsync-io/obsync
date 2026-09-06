@@ -129,7 +129,9 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             }
             else if (result.IsUpdateAvailable)
             {
-                UpdateStatus = $"Obsync {result.LatestVersion} is available.";
+                // The preconditions travel with the offer, not in documentation the user would have
+                // to know to go and read — see UpgradeGuidance.
+                UpdateStatus = $"Obsync {result.LatestVersion} is available. {UpgradeGuidance.BeforeYouInstall}";
                 UpdateReleaseUrl = result.ReleaseUrl;
                 outcome = $"Update available ({result.LatestVersion})";
             }

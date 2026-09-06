@@ -196,6 +196,66 @@ Windows cannot remember the *password*, so:
   > what you pass. Upgrade those machines interactively, or uninstall interactively first. Every
   > version from 0.12.0 onwards is unaffected.
 
+### Deploying to a fleet (SCCM, Intune, GPO)
+
+**Detection rule — use the UpgradeCode, not the ProductCode.** The ProductCode is regenerated for
+every build, so a detection rule keyed on it breaks at every release. The stable identifier is the
+UpgradeCode `{7B2E9E9C-3C1E-4C7A-9E2B-0A1F6D5C4B30}`; a file-version rule against
+`%ProgramFiles%\Obsync\Obsync.App.exe` also works and is easier to express in Intune.
+
+**Exit codes.** Map these, or a successful upgrade gets reported as a failure:
+
+| Code | Meaning | Action |
+|---|---|---|
+| `0` | Success | — |
+| `3010` | Success, **reboot required** | Treat as success with a soft reboot. Files the running app held could not be replaced; the service is running the previous version's libraries and refuses to start until the restart completes. |
+| `1603` | Failed, nothing changed | See the reasons above — a missing `SERVICE_PASSWORD`, or an open service list (reported as 1923). Safe to retry. |
+| `1618` | Another installation in progress | Retry later. |
+
+A wrapper script of the form `if ($LASTEXITCODE -ne 0) { fail }` will report a perfectly good 3010
+upgrade as a failure. SCCM and Intune both map 3010 correctly out of the box.
+
+**Logs.** Add `/l*v C:\Windows\Temp\obsync-install.log` to the command line and collect that path;
+the `<Launch>` refusals above also write MsiInstaller event **10005** to the Application log, which
+survives without `/l*v`.
+
+**Deployments run as SYSTEM**, which matters here: job secrets live in the Windows Credential
+Manager of the account that runs them, and SYSTEM is not that account. Deploying the MSI installs
+the product but cannot populate the service account's vault — use `obsync credential set` under that
+account afterwards (see **Credentials** above).
+
+### If an upgrade fails part-way
+
+Nothing is lost: settings, jobs, run history and credentials live outside the install folder and are
+never touched. But two states need checking by hand, because Windows Installer cannot restore either
+one:
+
+1. **The service logon account.** A rollback re-creates the service from the package's own values,
+   and Windows never hands a password back to an installer, so the service may exist but be unable
+   to log on (error 1069). Repair it directly:
+
+   ```powershell
+   sc.exe config Obsync obj= "DOMAIN\svc_obsync" password= "..."   # or the services.msc Log On tab
+   Start-Service Obsync
+   ```
+
+2. **Whether the product is still registered at all.** `RemoveExistingProducts` runs before the
+   installer's own transaction begins, so a failure *after* the old version has been removed may
+   leave neither version installed. Check with
+   `Get-Package -Name Obsync` (or Add/Remove Programs). If nothing is listed, reinstall — and **pass
+   the account and password explicitly**:
+
+   ```powershell
+   msiexec /i Obsync-<version>-win-x64.msi /qn `
+       SERVICE_ACCOUNT="DOMAIN\svc_obsync" SERVICE_PASSWORD="..." INSTALLFOLDER="D:\Apps\Obsync"
+   ```
+
+   This matters more than it looks. A failed upgrade may have removed both places the installer
+   remembers the account from, so a bare retry finds nothing, falls back to **Local System**, and
+   **succeeds** — leaving a service that runs but never executes a schedule, with a green
+   deployment report. The app's dashboard warns about exactly this state ("the service is running
+   as a different account"), but nothing else will.
+
 ## What the service does
 
 The `Obsync` Windows service runs scheduled sync jobs **with the desktop app closed** (Quartz

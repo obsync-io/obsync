@@ -188,8 +188,20 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
                 return;
             }
 
-            await settings.SetLastUpdateCheckAsync(now);
             var result = await _services.GetRequiredService<IUpdateChecker>().CheckAsync();
+
+            // Stamped AFTER the call, and only when it actually reached GitHub. Stamping first meant
+            // any failure — a laptop offline at login, a proxy hiccup, or a shared egress IP that
+            // had spent the unauthenticated 60-per-hour budget — cost the machine its entire daily
+            // window. Behind one NAT, a site large enough to hit that limit during the morning login
+            // peak starved the same machines every day, and they never learned about an update. The
+            // check runs once per app launch and CheckAsync never throws, so retrying on the next
+            // launch cannot storm.
+            if (result.Error is null)
+            {
+                await settings.SetLastUpdateCheckAsync(now);
+            }
+
             if (!result.IsUpdateAvailable
                 || result.LatestVersion is not { } version
                 || version == await settings.GetLastNotifiedUpdateVersionAsync())
@@ -201,7 +213,7 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
             ShowToast(new ToastItem
             {
                 Title = $"Obsync {version} is available",
-                Message = $"You're on {VersionInfo.Of(typeof(App).Assembly)}. Open the release notes to download the update.",
+                Message = $"You're on {VersionInfo.Of(typeof(App).Assembly)}. {UpgradeGuidance.ShortNotice}",
                 IsInfo = true,
                 Url = result.ReleaseUrl,
                 ActionText = "View release",

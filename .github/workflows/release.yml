@@ -69,9 +69,25 @@ jobs:
           path: artifacts/*.msi
           if-no-files-found: error
 
+      # Until the MSI is code-signed there is no way for a downloader to tell a good copy from a
+      # tampered one, and enterprises that must allow-list it by hash have nothing authoritative to
+      # quote. A checksum published by the same workflow that built the artifact is not a substitute
+      # for a signature — it proves integrity, not origin — but it is the half that costs nothing.
+      - name: Checksum the MSI
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem artifacts/*.msi | ForEach-Object {
+              "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          }
+          if (-not $lines) { throw 'No MSI to checksum.' }
+          $lines | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+          Get-Content artifacts/SHA256SUMS.txt
+
       - name: Draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          files: artifacts/*.msi
+          files: |
+            artifacts/*.msi
+            artifacts/SHA256SUMS.txt
           generate_release_notes: true
