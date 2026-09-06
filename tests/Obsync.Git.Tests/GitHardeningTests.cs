@@ -164,7 +164,7 @@ public sealed class GitHardeningTests : IAsyncLifetime
     {
         // The auth header is scoped to this prefix. git matches http.<url>.* by longest URL prefix,
         // so the origin covers every path under it and nothing on another host.
-        Assert.Equal(expected, GitWorkspace.HttpScopePrefix(remote));
+        Assert.Equal(expected, GitNetworkEnvironment.HttpScopePrefix(remote));
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public sealed class GitHardeningTests : IAsyncLifetime
         // scoped key would then never match the remote, the header would not be sent, and the push
         // would fail to authenticate — a silent auth break in the name of hardening. The prefix is
         // sliced from the original string so it always matches literally.
-        Assert.Equal("https://github.com:443/", GitWorkspace.HttpScopePrefix("https://github.com:443/acme/repo.git"));
+        Assert.Equal("https://github.com:443/", GitNetworkEnvironment.HttpScopePrefix("https://github.com:443/acme/repo.git"));
     }
 
     [Fact]
@@ -188,7 +188,7 @@ public sealed class GitHardeningTests : IAsyncLifetime
             "http://ghe.corp.local:8080/team/db.git",
         })
         {
-            Assert.StartsWith(GitWorkspace.HttpScopePrefix(remote)!, remote, StringComparison.Ordinal);
+            Assert.StartsWith(GitNetworkEnvironment.HttpScopePrefix(remote)!, remote, StringComparison.Ordinal);
         }
     }
 
@@ -200,6 +200,6 @@ public sealed class GitHardeningTests : IAsyncLifetime
     public void HttpScopePrefix_IsNullWhenThereIsNoHttpRemoteToScopeTo(string? remote)
     {
         // No HTTP remote means an HTTP auth header is meaningless, so none is sent at all.
-        Assert.Null(GitWorkspace.HttpScopePrefix(remote));
+        Assert.Null(GitNetworkEnvironment.HttpScopePrefix(remote));
     }
 }

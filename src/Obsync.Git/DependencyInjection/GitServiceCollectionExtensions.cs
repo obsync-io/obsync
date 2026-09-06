@@ -10,6 +10,7 @@ public static class GitServiceCollectionExtensions
     {
         services.TryAddSingleton<IGitCommandRunner, GitCommandRunner>();
         services.TryAddSingleton<IGitWorkspace, GitWorkspace>();
+        services.TryAddSingleton<IGitRemoteProbe, GitRemoteProbe>();
         return services;
     }
 }

@@ -49,6 +49,21 @@ public sealed record SchedulerHealth(SchedulerHealthStatus Status, string Summar
     /// that comes with it is a diagnostics warning, not a "your schedules are dead" banner.</summary>
     public bool CanExecuteSchedules =>
         Status is SchedulerHealthStatus.Healthy or SchedulerHealthStatus.RunningAsAnotherAccount;
+
+    /// <summary>
+    /// Whether the user should be told something, which is a WIDER question than
+    /// <see cref="CanExecuteSchedules"/> and must not be confused with it.
+    /// </summary>
+    /// <remarks>
+    /// Every banner used to gate on <c>CanExecuteSchedules == false</c>, which silenced
+    /// <see cref="SchedulerHealthStatus.RunningAsAnotherAccount"/> on the Dashboard, the Jobs list,
+    /// Job Detail and the wizard's Schedule step — leaving it reachable only from Settings →
+    /// Diagnostics. That is the one state Obsync knows IN ADVANCE will fail: the triggers fire, so
+    /// schedules are not dead, but Credential Manager is per-account, so every run authenticates
+    /// with secrets the service cannot read. The product already owned the precise warning text and
+    /// displayed it only where nobody looks.
+    /// </remarks>
+    public bool NeedsAttention => Status is not SchedulerHealthStatus.Healthy;
 }
 
 /// <summary>

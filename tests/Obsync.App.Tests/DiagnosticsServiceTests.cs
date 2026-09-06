@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -33,7 +33,12 @@ public sealed class DiagnosticsServiceTests
         var schedulerHealth = Substitute.For<ISchedulerHealthService>();
         schedulerHealth.GetAsync(Arg.Any<CancellationToken>()).Returns(
             new SchedulerHealth(SchedulerHealthStatus.NotInstalled, "not installed"));
-        return new DiagnosticsService(probe, gitHub, git, credentials, serverRepo, repoRepo,
+        // The transport probe defaults to "unreachable" rather than a substitute default, so a test
+        // that does not care about it still exercises the pair-of-rows behaviour deliberately.
+        var gitRemote = Substitute.For<IGitRemoteProbe>();
+        gitRemote.CheckAsync(Arg.Any<GitNetworkOptions>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Failure("no remote in tests"));
+        return new DiagnosticsService(probe, gitHub, git, gitRemote, credentials, serverRepo, repoRepo,
             Substitute.For<IProxyProvider>(), Substitute.For<IAppSettingsRepository>(), schedulerHealth,
             Substitute.For<Obsync.Data.IDbConnectionFactory>(), SystemClock.Instance);
     }

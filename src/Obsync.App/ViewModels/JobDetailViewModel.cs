@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -228,7 +228,7 @@ public sealed partial class JobDetailViewModel : ObservableObject
 
         // Never show a schedule (or next-run time) as live when the background service can't run it.
         var health = SchedulerHealthService.NeedsScheduler(job) ? await _schedulerHealth.GetAsync() : null;
-        SchedulerWarning = health?.CanExecuteSchedules == false ? health.Summary : null;
+        SchedulerWarning = health is { NeedsAttention: true } ? health.Summary : null;
 
         var runs = await _runs.GetForJobAsync(jobId, 50);
         Runs.Clear();

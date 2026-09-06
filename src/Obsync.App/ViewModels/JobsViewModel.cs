@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.App.Services;
@@ -132,7 +132,7 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
         var health = jobs.Any(SchedulerHealthService.NeedsScheduler)
             ? await _schedulerHealth.GetAsync()
             : null;
-        SchedulerWarning = health?.CanExecuteSchedules == false ? health.Summary : null;
+        SchedulerWarning = health is { NeedsAttention: true } ? health.Summary : null;
     }
 
     // AllowConcurrentExecutions so different jobs can run at once; CanRun blocks a second run of the

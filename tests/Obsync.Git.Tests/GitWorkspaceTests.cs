@@ -336,6 +336,60 @@ public sealed class GitWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task Prepare_RemovesAStaleRefLockThatWouldWedgeTheWorkspaceForever()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+        await File.WriteAllTextAsync(CreateFile(workPath, "schemas", "first.sql"), "CREATE SCHEMA [a];");
+        Assert.True((await _workspace.CommitAllAsync(context, "first", "body")).Success);
+        Assert.True((await _workspace.PushAsync(context)).IsSuccess);
+
+        // A kill during checkout/commit strands refs/heads/<branch>.lock. Measured: rev-parse and
+        // fetch BOTH still exit 0, so the corrupt-workspace self-heal (which is gated on fetch
+        // failing) never triggers — and `checkout -f -B` then fails with "cannot lock ref" on every
+        // run forever, until a human deletes a file inside .git. Only index.lock used to be cleaned.
+        var refLock = Path.Combine(workPath, ".git", "refs", "heads", $"{context.Branch}.lock");
+        Directory.CreateDirectory(Path.GetDirectoryName(refLock)!);
+        await File.WriteAllTextAsync(refLock, "");
+
+        var prepared = await _workspace.PrepareAsync(context);
+
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.False(File.Exists(refLock));
+    }
+
+    [Fact]
+    public async Task Prepare_RemovesAStaleConfigLock_SoTheRemoteCanStillBeRepointed()
+    {
+        if (!GitAvailable())
+        {
+            return;
+        }
+
+        var remote = await InitBareRemoteAsync();
+        var workPath = Path.Combine(_root, "work");
+        var context = NewContext(remote, workPath);
+        Assert.True((await _workspace.PrepareAsync(context)).IsSuccess);
+
+        // A stranded config.lock fails every `git config` write, including `remote set-url`. That
+        // call used to be best-effort, so the failure was swallowed and the workspace silently kept
+        // pushing to whatever remote it had — reinstating the exact bug set-url exists to prevent.
+        await File.WriteAllTextAsync(Path.Combine(workPath, ".git", "config.lock"), "");
+
+        var prepared = await _workspace.PrepareAsync(context);
+
+        Assert.True(prepared.IsSuccess, prepared.Error);
+        Assert.False(File.Exists(Path.Combine(workPath, ".git", "config.lock")));
+    }
+
+    [Fact]
     public async Task Prepare_PointsOriginAtTheProfileRemoteUrl()
     {
         if (!GitAvailable())

@@ -41,6 +41,21 @@ public interface IGitHubService
     Task<Result<IReadOnlyList<string>>> GetBranchesAsync(string token, string owner, string name, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Whether the target branch has protection that could reject a push, independently of whether
+    /// the token has write permission.
+    /// </summary>
+    /// <remarks>
+    /// <c>repository.permissions.push</c> is the collaborator ROLE, computed before and entirely
+    /// independently of ref-update policy. Branch protection, push rulesets, required reviews,
+    /// required status checks, required linear history and required signed commits all leave it
+    /// <c>true</c> and still reject the push with GH006. The engine already ships a dedicated
+    /// explanation for that rejection — this is the check that stops the product diagnosing a
+    /// condition it never looked for.
+    /// </remarks>
+    Task<Result<bool>> IsBranchProtectedAsync(
+        string token, string owner, string name, string branch, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a pull request from <paramref name="headBranch"/> into <paramref name="baseBranch"/> and,
     /// if <paramref name="reviewers"/> is non-empty, requests them (best-effort). A failed
     /// <see cref="Result"/> means the PR itself could not be opened (e.g. missing PR permission).
@@ -148,6 +163,41 @@ public sealed class GitHubService : IGitHubService
         {
             // An HttpClient timeout, not user cancellation (which must propagate).
             return Result.Failure<IReadOnlyList<GitHubRepository>>("The request to GitHub timed out.");
+        }
+    }
+
+    public async Task<Result<bool>> IsBranchProtectedAsync(
+        string token, string owner, string name, string branch, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
+
+            // Branch.Get, not the protection endpoint: `Protected` comes back for any collaborator,
+            // whereas GET /branches/{b}/protection needs ADMIN on the repository and 403s for the
+            // ordinary write token this product is designed around. Knowing that protection exists
+            // is enough to warn; enumerating which rules apply is not worth requiring admin for.
+            var result = await WithRetryAsync(
+                () => client.Repository.Branch.Get(owner, name, branch), cancellationToken).ConfigureAwait(false);
+            return Result.Success(result.Protected);
+        }
+        catch (NotFoundException)
+        {
+            // No such branch. Not this check's business — the branch-exists check reports it — and
+            // reporting a protection failure here would give the same problem two contradictory rows.
+            return Result.Success(false);
+        }
+        catch (ApiException ex)
+        {
+            return Result.Failure<bool>($"GitHub error: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            return Result.Failure<bool>($"Could not reach GitHub: {ex.Message}");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Result.Failure<bool>("The request to GitHub timed out.");
         }
     }
 

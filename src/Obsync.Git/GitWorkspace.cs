@@ -36,6 +36,12 @@ public sealed class GitWorkspaceContext
     /// written to <c>.git/config</c>.
     /// </summary>
     public string? ProxyUrl { get; init; }
+
+    /// <summary>Which TLS stack the bundled git validates certificates with.</summary>
+    public GitTlsBackend TlsBackend { get; init; } = GitTlsBackend.Default;
+
+    /// <summary>PEM CA bundle for the OpenSSL backend; ignored by the schannel backends.</summary>
+    public string? CaBundlePath { get; init; }
 }
 
 /// <summary>The outcome of a commit attempt.</summary>
@@ -101,18 +107,40 @@ public sealed partial class GitWorkspace : IGitWorkspace
             // strands .git/index.lock and every later index operation fails with "File exists".
             // Obsync serializes all workspace access via a cross-process per-repository lock, so
             // any lock file that exists here is stale by construction and safe to delete.
-            var indexLock = Path.Combine(gitDir, "index.lock");
-            if (File.Exists(indexLock))
-            {
-                _logger.LogWarning("Removing a stale git index.lock left by an interrupted run: {Path}", indexLock);
-                File.Delete(indexLock);
-            }
+            RemoveStaleLocks(gitDir);
 
             // Only clone consumes RemoteUrl, so an edited repository profile would keep pushing to
-            // the old remote forever. Idempotent and local. Best-effort: on a corrupt workspace
-            // this fails, and the fetch below detects and heals the corruption.
-            _ = await _git.RunAsync(
+            // the old remote forever. Idempotent and local.
+            //
+            // NOT best-effort any more. It was, and a stranded config.lock made it fail silently —
+            // which quietly reinstated the exact bug this line exists to fix, with every subsequent
+            // run pushing to the previous remote. A remote we cannot set is a remote we cannot
+            // trust, so it fails the run instead.
+            var setUrl = await _git.RunAsync(
                 context.LocalPath, ["remote", "set-url", "origin", context.RemoteUrl], cancellationToken).ConfigureAwait(false);
+            if (!setUrl.Success)
+            {
+                // Two very different causes, and only one is fatal here. A CORRUPT workspace fails
+                // this too, and it must still reach the fetch below — that is what detects the
+                // corruption and recreates the clone. Failing outright would turn a self-healing
+                // condition into a permanent one, which the recovery test catches.
+                //
+                // On a HEALTHY workspace there is no such excuse: the cause is a stranded
+                // config.lock or a permissions problem, and continuing would push to whatever remote
+                // the config still names. That is the silent-wrong-remote bug this call exists to
+                // prevent, so it fails instead of being swallowed as it used to be.
+                var healthy = (await _git.RunAsync(context.LocalPath, ["rev-parse", "--git-dir"], cancellationToken)
+                    .ConfigureAwait(false)).Success;
+                if (healthy)
+                {
+                    return Result.Failure(
+                        $"git could not point the workspace at the repository's remote: {Summarize(setUrl.StandardError)}");
+                }
+
+                _logger.LogWarning(
+                    "Could not set the remote on {Path}; the workspace looks corrupt and will be recreated.",
+                    context.LocalPath);
+            }
 
             // Clones deployed before these repository defaults existed (see CloneFreshAsync) must
             // pick them up too. `git config` set is a cheap local write, fine on every prepare;
@@ -400,6 +428,77 @@ public sealed partial class GitWorkspace : IGitWorkspace
         return GitCommitResult.Committed(sha);
     }
 
+    /// <summary>
+    /// Deletes every stale git lock file in a workspace Obsync is about to use.
+    /// </summary>
+    /// <remarks>
+    /// Obsync serialises all workspace access through a cross-process per-repository lock, so any
+    /// git lock file present at this point is stale by construction — the process that created it is
+    /// gone. And they ARE created: git process trees are killed on cancellation and on the command
+    /// timeout, mid-write.
+    /// <para>
+    /// Only <c>index.lock</c> used to be cleaned, which left the other two unrecoverable. A stranded
+    /// <c>refs/heads/&lt;branch&gt;.lock</c> fails <c>checkout -f -B</c> with "cannot lock ref" on
+    /// every run FOREVER, and it is invisible to the corrupt-workspace self-heal below because that
+    /// is gated on fetch failing — measured: with the ref lock present, <c>rev-parse --git-dir</c>
+    /// and <c>fetch</c> both exit 0, so nothing triggers a reclone. A stranded <c>config.lock</c>
+    /// fails every <c>git config</c> write, including the <c>remote set-url</c> above.
+    /// </para>
+    /// </remarks>
+    private void RemoveStaleLocks(string gitDir)
+    {
+        foreach (var lockFile in EnumerateLockFiles(gitDir))
+        {
+            try
+            {
+                File.SetAttributes(lockFile, FileAttributes.Normal);
+                File.Delete(lockFile);
+                _logger.LogWarning("Removed a stale git lock left by an interrupted run: {Path}", lockFile);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Report nothing here: the command that needs it will fail with git's own message,
+                // which is more specific than anything this loop could say.
+                _logger.LogWarning(ex, "Could not remove a stale git lock: {Path}", lockFile);
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateLockFiles(string gitDir)
+    {
+        foreach (var name in (string[])["index.lock", "config.lock", "HEAD.lock", "packed-refs.lock"])
+        {
+            var path = Path.Combine(gitDir, name);
+            if (File.Exists(path))
+            {
+                yield return path;
+            }
+        }
+
+        // refs/**/*.lock — one per ref git was mid-update on. Enumerated rather than named because
+        // the branch is per-job and PR mode cuts a fresh one every run.
+        var refs = Path.Combine(gitDir, "refs");
+        if (!Directory.Exists(refs))
+        {
+            yield break;
+        }
+
+        string[] refLocks;
+        try
+        {
+            refLocks = Directory.GetFiles(refs, "*.lock", SearchOption.AllDirectories);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            yield break;
+        }
+
+        foreach (var path in refLocks)
+        {
+            yield return path;
+        }
+    }
+
     /// <summary>Most paths handed to one <c>check-ignore</c>; enough to catch a rule, short enough for argv.</summary>
     private const int IgnoreProbeSampleSize = 32;
 
@@ -446,68 +545,14 @@ public sealed partial class GitWorkspace : IGitWorkspace
             : Result.Failure($"git push failed: {Summarize(push.StandardError)}");
     }
 
-    /// <summary>
-    /// The <c>scheme://host[:port]/</c> prefix an <c>http.&lt;url&gt;.*</c> key must carry to apply to this
-    /// remote, or null when the remote is not HTTP(S) — in which case an HTTP auth header is
-    /// meaningless and is simply not sent. git matches these keys by longest URL prefix, so the
-    /// origin prefix covers every path under it while excluding any other host.
-    /// </summary>
-    internal static string? HttpScopePrefix(string? remoteUrl)
-    {
-        if (!Uri.TryCreate(remoteUrl, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
-        {
-            return null;
-        }
-
-        // Cut the ORIGINAL string rather than rebuilding from the parsed Uri: Uri normalizes an
-        // explicitly written default port away, so "https://host:443/x" would yield "https://host/"
-        // — and if git matches ports strictly the header would silently not be sent and the push
-        // would fail to authenticate. Slicing guarantees the scope is a literal prefix of the URL
-        // git is handed, whatever either side normalizes.
-        var afterScheme = remoteUrl!.IndexOf("://", StringComparison.Ordinal) + 3;
-        var slash = remoteUrl.IndexOf('/', afterScheme);
-        return slash < 0 ? remoteUrl + "/" : remoteUrl[..(slash + 1)];
-    }
-
     private async Task<GitCommandResult> RunNetworkAsync(
         string workingDirectory, GitWorkspaceContext context, IReadOnlyList<string> args, CancellationToken cancellationToken)
     {
-        // Secrets travel as GIT_CONFIG_* ENVIRONMENT variables, never as -c command-line arguments:
-        // Windows process-creation auditing (Event 4688, Sysmon, EDR) records child command lines
-        // verbatim into machine-wide security logs, which would capture the token and any proxy
-        // credentials; environment blocks are not captured. Nothing is written to .git/config.
-        var environment = new Dictionary<string, string>();
-        void AddConfig(string key, string value)
-        {
-            var index = environment.Count / 2;
-            environment[$"GIT_CONFIG_KEY_{index}"] = key;
-            environment[$"GIT_CONFIG_VALUE_{index}"] = value;
-        }
-
-        // Scope the header to the remote we mean to authenticate to. Unscoped, `http.extraheader`
-        // applies to whatever host the command ends up contacting — and `url.<other>.insteadOf` in
-        // the machine's config silently rewrites the remote before the request is made, so the
-        // token was delivered to the rewritten host on the first request, with the user seeing only
-        // "repository not found". An internal mirror or proxy pushed by ordinary config management
-        // is enough; no attacker is required. Measured both ways: unscoped, the header arrives at
-        // the rewritten host; scoped, it is withheld there and still sent to the real remote.
-        if (!string.IsNullOrEmpty(context.AuthorizationHeader)
-            && HttpScopePrefix(context.RemoteUrl) is { } scope)
-        {
-            AddConfig($"http.{scope}.extraheader", context.AuthorizationHeader);
-        }
-
-        // Route network operations through the configured proxy (may carry credentials).
-        if (!string.IsNullOrEmpty(context.ProxyUrl))
-        {
-            AddConfig("http.proxy", context.ProxyUrl);
-        }
-
-        if (environment.Count > 0)
-        {
-            environment["GIT_CONFIG_COUNT"] = (environment.Count / 2).ToString();
-        }
+        // Built by GitNetworkEnvironment so this call and the preflight reachability probe are
+        // configured identically — same auth scoping, same proxy, same TLS backend. A probe that
+        // differs from the run it vouches for is how five green ticks preceded a failing clone.
+        var environment = GitNetworkEnvironment.Build(new GitNetworkOptions(
+            context.RemoteUrl, context.AuthorizationHeader, context.ProxyUrl, context.TlsBackend, context.CaBundlePath));
 
         var maxAttempts = Math.Max(1, context.NetworkRetryCount);
         var attempt = 0;

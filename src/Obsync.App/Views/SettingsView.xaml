@@ -212,6 +212,36 @@
                                            Style="{StaticResource Caption}" Margin="0,6,0,0" />
                                 <TextBlock Text="{Binding ProxyStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
                                            Visibility="{Binding ProxyStatus, Converter={StaticResource NullToVisibility}}" />
+
+                                <Separator Margin="0,20,0,16" />
+
+                                <TextBlock Text="Git TLS" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                           Text="How the bundled git validates certificates. Only git is affected — GitHub API calls always use Windows. Change this only if git operations fail with a certificate error while the API works." />
+
+                                <TextBlock Text="TLS BACKEND" Style="{StaticResource Caption}" />
+                                <ComboBox ItemsSource="{Binding GitTlsBackends}" SelectedItem="{Binding SelectedGitTlsBackend}" Margin="0,4,0,8">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Converter={StaticResource EnumDisplay}}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <TextBlock Text="{Binding GitTlsBackendHint}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16" />
+
+                                <StackPanel Visibility="{Binding IsOpenSslTls, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="CA BUNDLE FILE (OPTIONAL, PEM)" Style="{StaticResource Caption}" />
+                                    <TextBox Text="{Binding GitCaBundlePath, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,6" />
+                                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                               Text="OpenSSL cannot read the Windows certificate store. On a network that inspects TLS, export your corporate root certificate to a .pem/.crt file and point at it here, or git will not trust anything." />
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Save TLS settings" Style="{StaticResource PrimaryButton}" Command="{Binding SaveGitTlsCommand}"
+                                            IsEnabled="{Binding IsBusy, Converter={StaticResource InverseBool}}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding GitTlsStatus}" Style="{StaticResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Visibility="{Binding GitTlsStatus, Converter={StaticResource NullToVisibility}}" />
                             </StackPanel>
                         </Border>
 

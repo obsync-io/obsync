@@ -1,3 +1,4 @@
+﻿using System.IO;
 using System.Collections.ObjectModel;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -473,6 +474,10 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         SmtpPassword = string.Empty;
         SmtpPasswordShouldClear?.Invoke(this, EventArgs.Empty);
 
+        var gitTls = await _settings.GetGitTlsAsync();
+        SelectedGitTlsBackend = gitTls.Backend;
+        GitCaBundlePath = gitTls.CaBundlePath ?? string.Empty;
+
         var proxy = await _settings.GetProxyAsync();
         SelectedProxyMode = proxy.Mode;
         ProxyUrl = proxy.Url ?? string.Empty;
@@ -890,6 +895,89 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         catch (Exception ex)
         {
             AlertStatus = $"Test failed — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    // --- Git TLS --------------------------------------------------------------------------------
+
+    [ObservableProperty] private GitTlsBackend _selectedGitTlsBackend = GitTlsBackend.Default;
+    [ObservableProperty] private string _gitCaBundlePath = string.Empty;
+    [ObservableProperty] private string? _gitTlsStatus;
+
+    public IReadOnlyList<GitTlsBackend> GitTlsBackends { get; } = Enum.GetValues<GitTlsBackend>();
+
+    /// <summary>True for the OpenSSL backend, which is the only one that can use a CA bundle file.</summary>
+    public bool IsOpenSslTls => SelectedGitTlsBackend == GitTlsBackend.OpenSsl;
+
+    /// <summary>Plain-language consequence of the selected backend, shown under the picker.</summary>
+    public string GitTlsBackendHint => SelectedGitTlsBackend switch
+    {
+        GitTlsBackend.Schannel =>
+            "Windows certificate store, with revocation checking. Corporate roots deployed by Group Policy are "
+            + "trusted. Fails if the network blocks the certificate authority's revocation responder.",
+        GitTlsBackend.SchannelNoRevocationCheck =>
+            "Windows certificate store, revocation checking skipped. Use when the network blocks the CA's "
+            + "revocation responder (CRYPT_E_REVOCATION_OFFLINE). A revoked certificate would be accepted, so "
+            + "prefer allowing outbound port 80 to the CA where you can.",
+        GitTlsBackend.OpenSsl =>
+            "git's own certificate list, revocation not checked. Unaffected by a blocked revocation responder, "
+            + "but it cannot see the Windows store — supply a CA bundle below if this network inspects TLS.",
+        _ => "Whatever the bundled git uses by default (Windows). Leave this unless git operations fail with a "
+             + "certificate error while the GitHub API works.",
+    };
+
+    partial void OnSelectedGitTlsBackendChanged(GitTlsBackend value)
+    {
+        OnPropertyChanged(nameof(IsOpenSslTls));
+        OnPropertyChanged(nameof(GitTlsBackendHint));
+    }
+
+    [RelayCommand]
+    private async Task SaveGitTlsAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        var bundle = GitCaBundlePath.Trim().Trim('"').Trim();
+
+        // Refuse a bundle path git cannot use rather than saving a setting that silently makes every
+        // clone fail: OpenSSL treats an unreadable sslCAInfo as "trust nothing".
+        if (SelectedGitTlsBackend == GitTlsBackend.OpenSsl && bundle.Length > 0)
+        {
+            if (!Path.IsPathFullyQualified(bundle))
+            {
+                GitTlsStatus = "The CA bundle needs a full path — git runs from a different working directory.";
+                return;
+            }
+
+            if (!File.Exists(bundle))
+            {
+                GitTlsStatus = $"No file at {bundle}.";
+                return;
+            }
+        }
+
+        IsBusy = true;
+        try
+        {
+            await _settings.UpsertGitTlsAsync(new GitTlsSettings
+            {
+                Backend = SelectedGitTlsBackend,
+                CaBundlePath = bundle.Length == 0 ? null : bundle,
+            });
+            await _audit.WriteAsync(
+                AuditAction.SettingsChanged, "Settings", "gitTls", null, $"TLS backend: {SelectedGitTlsBackend}");
+            GitTlsStatus = "Saved — the next git operation uses these settings.";
+        }
+        catch (Exception ex)
+        {
+            GitTlsStatus = $"Could not save — {ex.Message}";
         }
         finally
         {

@@ -206,6 +206,6 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         var health = jobs.Any(SchedulerHealthService.NeedsScheduler)
             ? await _schedulerHealth.GetAsync()
             : null;
-        SchedulerWarning = health?.CanExecuteSchedules == false ? health.Summary : null;
+        SchedulerWarning = health is { NeedsAttention: true } ? health.Summary : null;
     }
 }

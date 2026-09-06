@@ -69,6 +69,10 @@ public interface IAppSettingsRepository
     /// </summary>
     Task<AlertDeliveryFailure?> GetLastAlertFailureAsync(CancellationToken cancellationToken = default);
     Task SetLastAlertFailureAsync(AlertDeliveryFailure? failure, CancellationToken cancellationToken = default);
+
+    /// <summary>How the bundled git validates TLS certificates (see <see cref="GitTlsSettings"/>).</summary>
+    Task<GitTlsSettings> GetGitTlsAsync(CancellationToken cancellationToken = default);
+    Task UpsertGitTlsAsync(GitTlsSettings settings, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IAppSettingsRepository" />
@@ -87,6 +91,7 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     private const string SchedulerHeartbeatKey = "schedulerHeartbeat";
     private const string NavCollapsedKey = "navCollapsed";
     private const string LastAlertFailureKey = "lastAlertFailure";
+    private const string GitTlsKey = "gitTls";
 
     private static readonly IReadOnlyList<string> DefaultProductionTags = ["prod", "production"];
 
@@ -102,6 +107,29 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
 
     public Task UpsertProxyAsync(ProxySettings settings, CancellationToken cancellationToken = default) =>
         SetValueAsync(ProxyKey, ObsyncJson.Serialize(settings), cancellationToken);
+
+    public async Task<GitTlsSettings> GetGitTlsAsync(CancellationToken cancellationToken = default)
+    {
+        var json = await GetValueAsync(GitTlsKey, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(json))
+        {
+            return new GitTlsSettings();
+        }
+
+        try
+        {
+            return ObsyncJson.Deserialize<GitTlsSettings>(json) ?? new GitTlsSettings();
+        }
+        catch (JsonException)
+        {
+            // Degrade to the default backend. This is read on the engine's run path; a corrupt value
+            // must not stop syncing, and the default is what every install starts on anyway.
+            return new GitTlsSettings();
+        }
+    }
+
+    public Task UpsertGitTlsAsync(GitTlsSettings settings, CancellationToken cancellationToken = default) =>
+        SetValueAsync(GitTlsKey, ObsyncJson.Serialize(settings), cancellationToken);
 
     public async Task<AlertSettings> GetAlertSettingsAsync(CancellationToken cancellationToken = default)
     {

@@ -13,6 +13,14 @@ public static class ObsyncPaths
     public static string Root { get; } = ResolveRoot(Environment.GetEnvironmentVariable("OBSYNC_DATA_ROOT"));
 
     /// <summary>
+    /// Set when <see cref="Root"/> could not be resolved the normal way and a fallback was used.
+    /// Null in every healthy deployment. Surfaced by diagnostics and the support bundle, because
+    /// the condition is otherwise invisible: the service starts, heartbeats, and reports itself
+    /// perfectly healthy against a database the app will never look at.
+    /// </summary>
+    public static string? RootResolutionWarning { get; private set; }
+
+    /// <summary>
     /// Applies the <c>OBSYNC_DATA_ROOT</c> override, or falls back to the per-user default.
     /// <para>
     /// The override must be FULLY QUALIFIED. A relative value resolves against the current
@@ -43,7 +51,92 @@ public static class ObsyncPaths
             }
         }
 
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Obsync");
+        return DefaultRoot();
+    }
+
+    /// <summary>
+    /// The per-user default, guaranteed FULLY QUALIFIED.
+    /// <para>
+    /// <see cref="Environment.GetFolderPath(Environment.SpecialFolder)"/> returns
+    /// <see cref="string.Empty"/> — it does not throw — when the folder cannot be resolved, which is
+    /// the ordinary result for a service identity whose profile hive is not loaded (a gMSA or
+    /// managed account, or a profile removed by the "delete profiles older than N days" policy).
+    /// <c>Path.Combine("", "Obsync")</c> then yields the RELATIVE path <c>"Obsync"</c>, and a
+    /// service's working directory is <c>C:\Windows\System32</c> — so the service silently created
+    /// and heartbeated into <c>C:\Windows\System32\Obsync</c> while the app never saw it, and no
+    /// amount of correcting the logon account helped. Being relative, it also re-targeted the
+    /// database, locks and workspaces if anything changed the process working directory mid-life.
+    /// </para>
+    /// <para>
+    /// The override path has enforced <see cref="Path.IsPathFullyQualified"/> since it was written,
+    /// for exactly this reason; the fallback simply never got the same guard. Each step below is
+    /// tried in turn and the first fully-qualified answer wins, so a healthy deployment is
+    /// unchanged. Reaching past the first step is abnormal and is recorded in
+    /// <see cref="RootResolutionWarning"/> rather than thrown: this runs in a static initializer,
+    /// where a throw kills the host before any logger exists.
+    /// </para>
+    /// </summary>
+    private static string DefaultRoot()
+    {
+        var root = DefaultRoot(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+            Environment.GetEnvironmentVariable("USERPROFILE"),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            out var warning);
+        RootResolutionWarning = warning;
+        return root;
+    }
+
+    /// <summary>
+    /// The resolution itself, with every input passed in. Separated so the fallbacks are directly
+    /// testable: on a healthy machine the first step always succeeds, so a test that reads the real
+    /// environment can never reach the branches that matter — which is exactly why the original
+    /// <c>NoOverride_UsesThePerUserDefault</c> test passed even when both sides evaluated to the
+    /// relative string <c>"Obsync"</c>.
+    /// </summary>
+    internal static string DefaultRoot(
+        string? knownFolder, string? localAppData, string? userProfile, string? commonAppData, out string? warning)
+    {
+        warning = null;
+        if (Qualified(knownFolder) is { } fromKnownFolder)
+        {
+            return Path.Combine(fromKnownFolder, "Obsync");
+        }
+
+        // The environment variable is not equivalent to the known folder (the shell API ignores it
+        // deliberately), but when the known folder is unavailable it is the best remaining record
+        // of where this account's local data belongs.
+        if (Qualified(localAppData) is { } fromEnvironment)
+        {
+            warning =
+                "The Local Application Data folder could not be resolved for this account, so Obsync fell back to "
+                + "the LOCALAPPDATA environment variable. This usually means the account's Windows profile is not "
+                + "loaded — common for a managed service account.";
+            return Path.Combine(fromEnvironment, "Obsync");
+        }
+
+        if (Qualified(userProfile) is { } fromProfile)
+        {
+            warning =
+                "The Local Application Data folder could not be resolved for this account, so Obsync fell back to "
+                + "the user profile folder. This usually means the account's Windows profile is not loaded.";
+            return Path.Combine(fromProfile, "AppData", "Local", "Obsync");
+        }
+
+        // Last resort: machine-wide, always fully qualified, and writable by a service. It is NOT
+        // per-user, so hosts running as different accounts would share it — stated plainly in the
+        // warning, because a shared root that is visible is far better than a relative path under
+        // System32 that nobody can find.
+        var root = Qualified(commonAppData) ?? Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+        warning =
+            "No per-account data folder could be resolved, so Obsync is using a machine-wide folder under "
+            + $"{root}. Every account on this machine shares it. Set OBSYNC_DATA_ROOT (machine-scoped) to choose "
+            + "the location deliberately.";
+        return Path.Combine(root, "Obsync");
+
+        static string? Qualified(string? candidate) =>
+            !string.IsNullOrWhiteSpace(candidate) && Path.IsPathFullyQualified(candidate) ? candidate : null;
     }
 
     /// <summary>The local SQLite state database file.</summary>

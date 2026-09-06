@@ -599,6 +599,11 @@ public sealed class SyncEngine : ISyncEngine
         var proxyUrl = (await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false))?.GitProxyUrl;
         // Committer identity is configurable in Settings so git blame reflects the owning team.
         var committer = await _appSettings.GetCommitterAsync(cancellationToken).ConfigureAwait(false);
+
+        // Machine-wide, like the proxy above: it describes the network this installation sits on.
+        // Read per run rather than cached so a fix applied in Settings takes effect on the next run
+        // instead of requiring a service restart — which is exactly when someone is changing it.
+        var gitTls = await _appSettings.GetGitTlsAsync(cancellationToken).ConfigureAwait(false);
         var gitContext = new GitWorkspaceContext
         {
             RemoteUrl = context.Repository.EffectiveRemoteUrl,
@@ -610,6 +615,8 @@ public sealed class SyncEngine : ISyncEngine
             CommitterEmail = string.IsNullOrWhiteSpace(committer.Email) ? _options.CommitterEmail : committer.Email!.Trim(),
             NetworkRetryCount = context.Job.Advanced.GitRetryCount,
             ProxyUrl = proxyUrl,
+            TlsBackend = gitTls.Backend,
+            CaBundlePath = gitTls.CaBundlePath,
         };
 
         context.Report(SyncPhase.PreparingRepository, "Preparing the GitHub workspace…");
@@ -2232,9 +2239,13 @@ public sealed class SyncEngine : ISyncEngine
             return "The remote branch has commits Obsync does not have — pull/merge the branch, then re-run.";
         }
 
-        if (text.Contains("could not resolve host") || text.Contains("unable to access") || text.Contains("timed out"))
+        // Transport-level causes (TLS trust, blocked revocation, proxy 407, DNS, connectivity) are
+        // shared with the preflight reachability probe, so both surfaces name the same cause the
+        // same way — and they must be consulted BEFORE any catch-all, because git reports all of
+        // them behind one "fatal: unable to access …" line.
+        if (GitTransportDiagnosis.TryExplain(error) is { } transport)
         {
-            return "Could not reach GitHub — check network connectivity and the repository URL.";
+            return transport;
         }
 
         var firstLine = (error ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();

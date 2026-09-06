@@ -39,8 +39,38 @@ public sealed class GitCommandRunner : IGitCommandRunner
     /// </summary>
     private static readonly TimeSpan NetworkCommandTimeout = TimeSpan.FromMinutes(10);
 
-    /// <summary>How long a local command may run. These are index and ref operations; minutes is already extreme.</summary>
+    /// <summary>
+    /// How long a cheap local command may run — <c>config</c>, <c>rev-parse</c>, <c>remote</c>,
+    /// <c>check-ignore</c>. These touch a handful of files; minutes is already extreme.
+    /// </summary>
     private static readonly TimeSpan LocalCommandTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// How long a local command that scales with the size of the working tree may run.
+    /// </summary>
+    /// <remarks>
+    /// The timeout used to be chosen by whether the caller passed an environment block — that is,
+    /// by "does this command carry secrets", which has nothing to do with how long it takes. So
+    /// <c>add -A</c>, <c>commit</c>, <c>checkout</c> and <c>clean</c> all got the two-minute cheap
+    /// budget while this codebase explicitly designs for estates where "a VLDB run writes 100k+
+    /// script files" and "a million-file first run". <c>git add -A</c> hashes and writes a loose
+    /// object per file; at that scale on Windows with on-access AV it exceeds two minutes routinely.
+    /// <para>
+    /// The consequence was not a slow run but a permanently stuck job: the command was killed at
+    /// exit 124, the run failed, state was correctly not advanced — so the next run repeated the
+    /// identical work and failed identically, forever. The kill is also
+    /// <c>Kill(entireProcessTree)</c> mid-index-write, which is what strands the lock files
+    /// <c>GitWorkspace.RemoveStaleLocks</c> now has to clean up.
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan TreeScaleCommandTimeout = TimeSpan.FromHours(2);
+
+    /// <summary>
+    /// Local commands whose cost scales with the number of files in the working tree, and which
+    /// therefore get <see cref="TreeScaleCommandTimeout"/> rather than the cheap budget.
+    /// </summary>
+    private static readonly HashSet<string> TreeScaleCommands =
+        new(StringComparer.Ordinal) { "add", "commit", "checkout", "clean", "reset", "status", "gc" };
 
     /// <summary>Exit code reported for a command Obsync terminated on timeout (matching GNU timeout).</summary>
     internal const int TimedOutExitCode = 124;
@@ -178,6 +208,39 @@ public sealed class GitCommandRunner : IGitCommandRunner
         string workingDirectory, IReadOnlyList<string> arguments, CancellationToken cancellationToken = default) =>
         RunAsync(workingDirectory, arguments, environment: null, cancellationToken);
 
+    /// <summary>
+    /// Picks a timeout from what the command actually does. Network commands are recognised by
+    /// carrying an environment block (only <c>RunNetworkAsync</c> supplies one, and it always does
+    /// — the auth header and proxy live there); the rest are classified by verb.
+    /// </summary>
+    internal static TimeSpan SelectTimeout(IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment)
+    {
+        if (environment is not null)
+        {
+            return NetworkCommandTimeout;
+        }
+
+        // The verb is the first argument that is not a `-c key=value` pair or a bare flag.
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var argument = arguments[i];
+            if (argument == "-c")
+            {
+                i++;
+                continue;
+            }
+
+            if (argument.StartsWith('-'))
+            {
+                continue;
+            }
+
+            return TreeScaleCommands.Contains(argument) ? TreeScaleCommandTimeout : LocalCommandTimeout;
+        }
+
+        return LocalCommandTimeout;
+    }
+
     public async Task<GitCommandResult> RunAsync(
         string workingDirectory, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string>? environment, CancellationToken cancellationToken = default)
@@ -267,7 +330,7 @@ public sealed class GitCommandRunner : IGitCommandRunner
         // row stayed "Running" because the orphan cleaner skips a run whose lock is still held.
         // Contending jobs then waited their full 30 minutes per occurrence, and with Quartz's
         // ten-thread pool enough of them starved jobs on unrelated repositories too.
-        var timeout = environment is null ? LocalCommandTimeout : NetworkCommandTimeout;
+        var timeout = SelectTimeout(arguments, environment);
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
 

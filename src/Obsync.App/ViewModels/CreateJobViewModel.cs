@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
@@ -512,7 +512,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         _existingJobs = await _jobs.GetAllAsync();
 
         var health = await _schedulerHealth.GetAsync();
-        ScheduleServiceNotice = health is { CanExecuteSchedules: false }
+        ScheduleServiceNotice = health is { NeedsAttention: true }
             ? $"{health.Summary} The schedule is saved either way and starts working once the service is running."
             : null;
     }

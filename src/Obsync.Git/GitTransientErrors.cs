@@ -50,6 +50,28 @@ public static class GitTransientErrors
         "returned error: 401",
         "returned error: 403",
         "returned error: 404",
+        // TLS policy. Every one of these is a deterministic decision made locally before a byte of
+        // payload moves — a blocked CRL/OCSP responder, a corporate root the bundled ca-bundle.crt
+        // does not carry, an expired or mismatched certificate. They all arrive inside a
+        // "fatal: unable to access …" line, so without these entries a condition that cannot
+        // possibly change within seconds was retried with backoff, and the user was shown a
+        // "retrying" narrative for something retrying cannot fix.
+        "schannel:",
+        "ssl certificate problem",
+        "certificate verify failed",
+        "crypt_e_revocation_offline",
+        "crypt_e_no_revocation_check",
+        "sec_e_untrusted_root",
+        "sec_e_cert_expired",
+        "unable to get local issuer certificate",
+        "self signed certificate",
+        "ssl_error",
+        // Proxy authentication. 401/403/404 were already permanent; 407 is the same class of
+        // answer — the proxy rejected the credentials — and is what a service account gets when the
+        // manual proxy password lives in a vault it cannot read.
+        "returned error: 407",
+        "received http code 407",
+        "proxy authentication required",
     ];
 
     /// <summary>True when <paramref name="stderr"/> indicates a retryable network condition.</summary>

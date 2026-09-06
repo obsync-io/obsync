@@ -1,7 +1,8 @@
-using System.IO;
+﻿using System.IO;
 using NSubstitute;
 using Obsync.App.Services;
 using Obsync.Data.Repositories;
+using Obsync.Git;
 using Obsync.GitHub;
 using Obsync.Metadata;
 using Obsync.Shared;
@@ -23,11 +24,14 @@ public sealed class JobPreflightServiceTests
     private readonly IGitHubService _gitHub = Substitute.For<IGitHubService>();
     private readonly ICredentialStore _credentials = Substitute.For<ICredentialStore>();
     private readonly IJobRepository _jobs = Substitute.For<IJobRepository>();
+    private readonly IGitRemoteProbe _gitRemote = Substitute.For<IGitRemoteProbe>();
+    private readonly IProxyProvider _proxy = Substitute.For<IProxyProvider>();
+    private readonly IAppSettingsRepository _settings = Substitute.For<IAppSettingsRepository>();
 
     private readonly SqlConnectionProfile _connection = new() { Name = "Prod", ServerName = "SVR" };
     private readonly GitRepositoryProfile _repository = new() { Name = "R", Owner = "o", RepositoryName = "r", DefaultBranch = "main" };
 
-    private JobPreflightService Build() => new(_probe, _gitHub, _credentials, _jobs, new SystemClock());
+    private JobPreflightService Build() => new(_probe, _gitHub, _credentials, _jobs, new SystemClock(), _gitRemote, _proxy, _settings);
 
     private JobPreflightRequest GitRequest(CommitMode mode = CommitMode.DirectCommit, string branch = "main") =>
         new(_connection, _repository, branch, mode, ExportPath: null, "environments/SVR/db1", EditingJobId: null);
@@ -38,6 +42,7 @@ public sealed class JobPreflightServiceTests
 
     private void GitHubSucceeds(bool canWrite = true, params string[] branches)
     {
+        GitTransportSucceeds();
         _credentials.Retrieve(CredentialKeys.GitHubToken(_repository.Id)).Returns("tok");
         _credentials.Exists(Arg.Any<string>()).Returns(true);
         _gitHub.CheckRepositoryAccessAsync("tok", "o", "r", Arg.Any<CancellationToken>())
@@ -45,6 +50,20 @@ public sealed class JobPreflightServiceTests
                 TokenValid: true, Login: "alice", RepositoryFound: true, CanRead: true, CanWrite: canWrite, Detail: null)));
         _gitHub.GetBranchesAsync("tok", "o", "r", Arg.Any<CancellationToken>())
             .Returns(Result.Success<IReadOnlyList<string>>([.. branches]));
+    }
+
+    /// <summary>Makes the git transport probe succeed — the default substitute returns a null Result.</summary>
+    private void GitTransportSucceeds()
+    {
+        _gitRemote.CheckAsync(Arg.Any<GitNetworkOptions>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Success());
+        _proxy.ResolveAsync(Arg.Any<CancellationToken>()).Returns((ProxyResolution?)null);
+        _settings.GetGitTlsAsync(Arg.Any<CancellationToken>()).Returns(new GitTlsSettings());
+
+        // Unprotected by default. Protection is warned about, not failed, so a substitute returning
+        // "protected" would turn every healthy-path assertion into a warning.
+        _gitHub.IsBranchProtectedAsync("tok", "o", "r", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Success(false));
     }
 
     private void NoOtherJobs() =>
@@ -60,6 +79,75 @@ public sealed class JobPreflightServiceTests
     private void PermissionsReturn(string database, SqlDatabasePermissionReport report) =>
         _probe.CheckDatabasePermissionsAsync(Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), database, Arg.Any<CancellationToken>())
             .Returns(Result.Success(report));
+
+    [Fact]
+    public async Task AFailingGitTransport_FailsPreflight_WhileTheApiChecksStillPass()
+    {
+        // This is the incident that started the review: the REST checks go to api.github.com over
+        // HttpClient (which does not check certificate revocation), the run goes to github.com over
+        // MinGit and schannel (which does). So the dialog showed five green ticks and the first run
+        // died on git clone. The two rows disagreeing IS the diagnosis, so both must be present.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitRemote.CheckAsync(Arg.Any<GitNetworkOptions>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Failure("The network blocked git's certificate revocation check."));
+
+        var results = await Build().RunAsync(GitRequest());
+
+        var transport = Single(results, "Git connection");
+        Assert.Equal(DiagnosticStatus.Fail, transport.Status);
+        Assert.Contains("revocation", transport.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(DiagnosticStatus.Pass, Single(results, "Repository access").Status);
+    }
+
+    [Fact]
+    public async Task AProtectedBranch_WarnsInDirectCommitMode()
+    {
+        // permissions.push is the collaborator ROLE and stays true under branch protection, so
+        // "Write / push — Contents ✓" was vouching for something it never checked. The engine already
+        // ships a GH006 explanation for the rejection this produces.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitHub.IsBranchProtectedAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Success(true));
+
+        var branch = Single(await Build().RunAsync(GitRequest()), "Branch 'main'");
+
+        Assert.Equal(DiagnosticStatus.Warning, branch.Status);
+        Assert.Contains("PROTECTED", branch.Detail);
+        Assert.Contains("signed commits", branch.Detail);
+    }
+
+    [Fact]
+    public async Task AProtectedBaseBranch_IsFineInPullRequestMode()
+    {
+        // PR mode pushes to its own head branch and merges through review — which is what protection
+        // is asking for. Warning here would be noise on a correctly configured job.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitHub.IsBranchProtectedAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Success(true));
+
+        var branch = Single(await Build().RunAsync(GitRequest(CommitMode.PullRequest)), "Branch 'main'");
+
+        Assert.Equal(DiagnosticStatus.Pass, branch.Status);
+    }
+
+    [Fact]
+    public async Task AFailedProtectionLookup_DoesNotInventAWarning()
+    {
+        // An admin-only endpoint or a network blip is not evidence of protection.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitHub.IsBranchProtectedAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Failure<bool>("GitHub error: 403"));
+
+        Assert.Equal(DiagnosticStatus.Pass, Single(await Build().RunAsync(GitRequest()), "Branch 'main'").Status);
+    }
 
     [Fact]
     public async Task UnreadableDefinitions_FailPreflight()
@@ -162,10 +250,15 @@ public sealed class JobPreflightServiceTests
 
         var results = await Build().RunAsync(GitRequest());
 
-        Assert.Equal(5, results.Count);
+        Assert.Equal(6, results.Count);
         Assert.All(results, r => Assert.Equal(DiagnosticStatus.Pass, r.Status));
+
+        // "Git connection" sits immediately after the API checks and before the local ones. It is a
+        // separate row on purpose: it is the only one that proves the transport a RUN uses, and when
+        // it disagrees with "Repository access" the disagreement is itself the diagnosis — API pass
+        // with git fail means TLS or proxy, the reverse means token scope or SSO.
         Assert.Equal(
-            ["SQL connection", "Repository access", "Branch 'main'", "Credentials", "Folder collision"],
+            ["SQL connection", "Repository access", "Branch 'main'", "Git connection", "Credentials", "Folder collision"],
             results.Select(r => r.Name));
     }
 

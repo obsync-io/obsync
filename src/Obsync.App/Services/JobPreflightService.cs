@@ -1,5 +1,6 @@
 using System.IO;
 using Obsync.Data.Repositories;
+using Obsync.Git;
 using Obsync.GitHub;
 using Obsync.Metadata;
 using Obsync.Shared;
@@ -43,14 +44,22 @@ public sealed class JobPreflightService : IJobPreflightService
     private readonly ICredentialStore _credentials;
     private readonly IJobRepository _jobs;
     private readonly IClock _clock;
+    private readonly IGitRemoteProbe _gitRemote;
+    private readonly IProxyProvider _proxy;
+    private readonly IAppSettingsRepository _settings;
 
-    public JobPreflightService(ISqlServerProbe probe, IGitHubService gitHub, ICredentialStore credentials, IJobRepository jobs, IClock clock)
+    public JobPreflightService(
+        ISqlServerProbe probe, IGitHubService gitHub, ICredentialStore credentials, IJobRepository jobs, IClock clock,
+        IGitRemoteProbe gitRemote, IProxyProvider proxy, IAppSettingsRepository settings)
     {
         _probe = probe;
         _gitHub = gitHub;
         _credentials = credentials;
         _jobs = jobs;
         _clock = clock;
+        _gitRemote = gitRemote;
+        _proxy = proxy;
+        _settings = settings;
     }
 
     private DiagnosticResult Result(string name, DiagnosticStatus status, string detail) =>
@@ -82,6 +91,7 @@ public sealed class JobPreflightService : IJobPreflightService
         else
         {
             results.AddRange(await CheckRepositoryAsync(request, cancellationToken).ConfigureAwait(false));
+            results.Add(await CheckGitTransportAsync(request, cancellationToken).ConfigureAwait(false));
         }
 
         results.Add(CheckCredentials(request));
@@ -184,7 +194,7 @@ public sealed class JobPreflightService : IJobPreflightService
 
             if (branches.Value.Contains(request.Branch, StringComparer.Ordinal))
             {
-                return Result(name, DiagnosticStatus.Pass, "The branch exists on the remote.");
+                return await CheckBranchProtectionAsync(token, request, name, cancellationToken).ConfigureAwait(false);
             }
 
             // A missing branch is fatal only for PR mode (the engine refuses a missing base branch);
@@ -196,6 +206,97 @@ public sealed class JobPreflightService : IJobPreflightService
         catch (Exception ex)
         {
             return Result(name, DiagnosticStatus.Warning, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The branch exists — but for a mode that pushes to it directly, existing is not the same as
+    /// accepting a push.
+    /// </summary>
+    /// <remarks>
+    /// A protected branch leaves <c>permissions.push</c> true and still rejects the push with GH006,
+    /// so "Write / push — Contents ✓" was reporting something it had not checked. Only direct-commit
+    /// mode is at risk: pull-request mode pushes to its own head branch and merges through review,
+    /// which is precisely what protection is asking for. Warning rather than Fail, because a rule
+    /// set may well admit this account — the point is that the user is told before the first run
+    /// rather than after it.
+    /// </remarks>
+    private async Task<DiagnosticResult> CheckBranchProtectionAsync(
+        string token, JobPreflightRequest request, string name, CancellationToken cancellationToken)
+    {
+        const string exists = "The branch exists on the remote.";
+        if (request.CommitMode != CommitMode.DirectCommit)
+        {
+            return Result(name, DiagnosticStatus.Pass, exists);
+        }
+
+        var protection = await _gitHub.IsBranchProtectedAsync(
+            token, request.Repository!.Owner, request.Repository.RepositoryName, request.Branch, cancellationToken)
+            .ConfigureAwait(false);
+
+        // A failed lookup is not evidence of protection — say the branch exists and leave it there
+        // rather than inventing a warning from a network blip.
+        if (protection.IsFailure || !protection.Value)
+        {
+            return Result(name, DiagnosticStatus.Pass, exists);
+        }
+
+        return Result(name, DiagnosticStatus.Warning,
+            "The branch exists but is PROTECTED. Direct commits may be rejected (GitHub error GH006) even though the "
+            + "token has write permission — protection rules are evaluated separately. Switch the job to Pull request "
+            + "mode, or allow this account to push to the branch. Note that a 'require signed commits' rule will "
+            + "always reject Obsync: its commits are deliberately unsigned.");
+    }
+
+    /// <summary>
+    /// Proves that GIT can reach and authenticate to the repository — with the bundled binary, the
+    /// configured proxy, and the configured TLS backend — rather than inferring it from a REST call.
+    /// </summary>
+    /// <remarks>
+    /// Every other repository check here talks to <c>api.github.com</c> over .NET's
+    /// <c>HttpClient</c>; runs talk to <c>github.com</c> over MinGit and schannel. The two disagree
+    /// in ways that decide whether a job works: .NET does not check certificate revocation and git
+    /// does, .NET reads the Windows trust store and git's OpenSSL backend does not, and the proxy
+    /// reaches each of them by a different route. That gap is why this dialog could report five
+    /// green ticks immediately before the first run died on <c>git clone</c>.
+    /// <para>
+    /// <c>ls-remote</c> transfers no objects, so this costs one TLS handshake and a ref listing.
+    /// </para>
+    /// </remarks>
+    private async Task<DiagnosticResult> CheckGitTransportAsync(JobPreflightRequest request, CancellationToken cancellationToken)
+    {
+        const string name = "Git connection";
+        if (request.Repository is not { } repository)
+        {
+            return Result(name, DiagnosticStatus.Fail, "Select a repository on the Destination step first.");
+        }
+
+        try
+        {
+            var token = _credentials.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+            if (string.IsNullOrEmpty(token))
+            {
+                return Result(name, DiagnosticStatus.Fail,
+                    "No access token is stored for this repository, so git cannot authenticate.");
+            }
+
+            var proxyUrl = (await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false))?.GitProxyUrl;
+            var tls = await _settings.GetGitTlsAsync(cancellationToken).ConfigureAwait(false);
+            var options = new GitNetworkOptions(
+                repository.EffectiveRemoteUrl,
+                GitHubService.BuildAuthorizationHeader(token),
+                proxyUrl,
+                tls.Backend,
+                tls.CaBundlePath);
+
+            var probe = await _gitRemote.CheckAsync(options, request.Branch, cancellationToken).ConfigureAwait(false);
+            return probe.IsSuccess
+                ? Result(name, DiagnosticStatus.Pass, $"git reached {repository.Owner}/{repository.RepositoryName} and authenticated.")
+                : Result(name, DiagnosticStatus.Fail, probe.Error ?? "git could not reach the repository.");
+        }
+        catch (Exception ex)
+        {
+            return Result(name, DiagnosticStatus.Fail, ex.Message);
         }
     }
 

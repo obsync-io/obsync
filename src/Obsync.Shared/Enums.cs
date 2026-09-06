@@ -107,6 +107,37 @@ public enum RunTrigger
     Cli = 4,
 }
 
+/// <summary>
+/// Which TLS stack the bundled git validates certificates with. Only git is affected — the GitHub
+/// REST calls go through .NET's <c>HttpClient</c>, which always uses the Windows stack.
+/// </summary>
+/// <remarks>
+/// The two backends trust different things, and that difference is the whole reason this setting
+/// exists. <see cref="Schannel"/> uses the Windows certificate store, so a corporate root pushed by
+/// Group Policy is trusted — and it checks revocation, which fails CLOSED when the CA's OCSP/CRL
+/// responder is unreachable (a firewall blocking outbound port 80 is enough).
+/// <see cref="OpenSsl"/> uses the CA bundle shipped inside MinGit, so it is unaffected by a blocked
+/// responder but does not see the Windows store at all.
+/// </remarks>
+public enum GitTlsBackend
+{
+    /// <summary>Whatever the bundled git is built with (schannel on Windows). No override sent.</summary>
+    Default = 0,
+
+    /// <summary>Windows certificate store and revocation checking.</summary>
+    Schannel = 1,
+
+    /// <summary>
+    /// git's own bundled CA list, with revocation checking skipped. The remedy for a network that
+    /// blocks the CA's revocation responder — at the cost of accepting a certificate that has been
+    /// revoked, so the firewall rule is the better fix where it is obtainable.
+    /// </summary>
+    OpenSsl = 2,
+
+    /// <summary>Windows store, but revocation treated as best-effort instead of fail-closed.</summary>
+    SchannelNoRevocationCheck = 3,
+}
+
 /// <summary>How Obsync reaches the internet for GitHub API + git operations.</summary>
 public enum ProxyMode
 {

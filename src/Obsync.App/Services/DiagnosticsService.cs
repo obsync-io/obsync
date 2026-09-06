@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Obsync.Data;
 using Obsync.Data.Repositories;
 using Obsync.Git;
@@ -41,6 +41,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
     private readonly ISqlServerProbe _probe;
     private readonly IGitHubService _gitHub;
     private readonly IGitCommandRunner _git;
+    private readonly IGitRemoteProbe _gitRemote;
     private readonly ICredentialStore _credentials;
     private readonly IConnectionProfileRepository _servers;
     private readonly IRepositoryProfileRepository _repositories;
@@ -54,6 +55,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         ISqlServerProbe probe,
         IGitHubService gitHub,
         IGitCommandRunner git,
+        IGitRemoteProbe gitRemote,
         ICredentialStore credentials,
         IConnectionProfileRepository servers,
         IRepositoryProfileRepository repositories,
@@ -66,6 +68,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         _probe = probe;
         _gitHub = gitHub;
         _git = git;
+        _gitRemote = gitRemote;
         _credentials = credentials;
         _servers = servers;
         _repositories = repositories;
@@ -99,6 +102,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         foreach (var repository in await _repositories.GetAllAsync(cancellationToken).ConfigureAwait(false))
         {
             results.Add(await CheckRepositoryAsync(repository, cancellationToken).ConfigureAwait(false));
+            results.Add(await CheckRepositoryTransportAsync(repository, cancellationToken).ConfigureAwait(false));
         }
 
         return results;
@@ -342,6 +346,49 @@ public sealed class DiagnosticsService : IDiagnosticsService
                 { CanWrite: false } => new DiagnosticResult(name, DiagnosticStatus.Warning, "Read-only token — pushes will fail (needs Contents: write).", _clock.UtcNow),
                 _ => new DiagnosticResult(name, DiagnosticStatus.Pass, $"Read + write (as {report.Login}).", _clock.UtcNow),
             };
+        }
+        catch (Exception ex)
+        {
+            return new DiagnosticResult(name, DiagnosticStatus.Fail, ex.Message, _clock.UtcNow);
+        }
+    }
+
+    /// <summary>
+    /// The same repository, reached the way a RUN reaches it: bundled git, configured proxy,
+    /// configured TLS backend.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately separate from the API check above rather than replacing it. When one passes and
+    /// the other fails, the pair IS the diagnosis — an API pass with a git fail is a transport
+    /// problem (TLS trust, blocked revocation, proxy), and a git pass with an API fail is a token
+    /// scope or SSO problem. Collapsing them into one row would throw that away, and the previous
+    /// "Git CLI" check only ran <c>git --version</c>, which proves the binary launches and nothing
+    /// about whether it can talk to anything.
+    /// </remarks>
+    private async Task<DiagnosticResult> CheckRepositoryTransportAsync(
+        GitRepositoryProfile repository, CancellationToken cancellationToken)
+    {
+        var name = $"git · {repository.FullName}";
+        var token = _credentials.Retrieve(CredentialKeys.GitHubToken(repository.Id));
+        if (string.IsNullOrEmpty(token))
+        {
+            return new DiagnosticResult(name, DiagnosticStatus.Warning, "No access token stored for this repository.", _clock.UtcNow);
+        }
+
+        try
+        {
+            var proxyUrl = (await _proxy.ResolveAsync(cancellationToken).ConfigureAwait(false))?.GitProxyUrl;
+            var tls = await _settings.GetGitTlsAsync(cancellationToken).ConfigureAwait(false);
+            var probe = await _gitRemote.CheckAsync(
+                new GitNetworkOptions(
+                    repository.EffectiveRemoteUrl, GitHubService.BuildAuthorizationHeader(token),
+                    proxyUrl, tls.Backend, tls.CaBundlePath),
+                repository.DefaultBranch,
+                cancellationToken).ConfigureAwait(false);
+
+            return probe.IsSuccess
+                ? new DiagnosticResult(name, DiagnosticStatus.Pass, "git reached the repository and authenticated.", _clock.UtcNow)
+                : new DiagnosticResult(name, DiagnosticStatus.Fail, probe.Error ?? "git could not reach the repository.", _clock.UtcNow);
         }
         catch (Exception ex)
         {
