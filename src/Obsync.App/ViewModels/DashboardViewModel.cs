@@ -173,6 +173,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         // "Needs attention": everything already loaded for the cards feeds it — the recent-run
         // window doubles as the error-quote source, and the server list is one local read.
         var servers = await _connections.GetAllAsync();
+        var allRepositories = await _repositories.GetAllAsync();
         var runErrors = recent
             .Where(r => !string.IsNullOrEmpty(r.ErrorMessage))
             .ToDictionary(r => r.Id, r => r.ErrorMessage!);
@@ -190,7 +191,7 @@ public sealed partial class DashboardViewModel : ObservableObject, IAsyncViewMod
         // this process, under this user, whose vault is the one that works).
         var alertFailure = await _settings.GetLastAlertFailureAsync();
 
-        var attention = AttentionModel.Build(jobs, servers, runErrors, skippedOccurrences, now, alertFailure);
+        var attention = AttentionModel.Build(jobs, servers, allRepositories, runErrors, skippedOccurrences, now, alertFailure);
         AttentionItems.Clear();
         foreach (var item in attention.Take(AttentionModel.MaxRows))
         {

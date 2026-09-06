@@ -95,6 +95,49 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
 
     public bool Exists(string key) => Retrieve(key) is not null;
 
+    public IReadOnlyList<string> Enumerate(string keyPrefix)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(keyPrefix);
+
+        // CredEnumerate's own filter is a wildcard match on the target name, but it is documented as
+        // matching only a TRAILING wildcard and it behaves differently again when the caller has the
+        // per-session enumerate flag. Enumerating everything and filtering here is both simpler and
+        // exact — a machine holds tens of credentials, not thousands.
+        if (!CredEnumerate(null, 0, out var count, out var arrayPtr))
+        {
+            var error = Marshal.GetLastWin32Error();
+
+            // An empty vault reports ERROR_NOT_FOUND rather than zero entries.
+            return error == ErrorNotFound ? [] : throw Failure(error, "enumerate", keyPrefix);
+        }
+
+        try
+        {
+            var keys = new List<string>();
+            for (var i = 0; i < count; i++)
+            {
+                var entryPtr = Marshal.ReadIntPtr(arrayPtr, i * IntPtr.Size);
+                var entry = Marshal.PtrToStructure<Credential>(entryPtr);
+                if (entry.Type != CredTypeGeneric || entry.TargetName == IntPtr.Zero)
+                {
+                    continue;
+                }
+
+                var target = Marshal.PtrToStringUni(entry.TargetName);
+                if (target is not null && target.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    keys.Add(target);
+                }
+            }
+
+            return keys;
+        }
+        finally
+        {
+            CredFree(arrayPtr);
+        }
+    }
+
     /// <summary>
     /// Builds the exception for a failed Credential Manager call, keeping BOTH the Windows
     /// description and the numeric code.
@@ -132,6 +175,10 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
         public IntPtr TargetAlias;
         public IntPtr UserName;
     }
+
+    [LibraryImport("advapi32.dll", EntryPoint = "CredEnumerateW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CredEnumerate(string? filter, int flags, out int count, out IntPtr credentialsPtr);
 
     [LibraryImport("advapi32.dll", EntryPoint = "CredReadW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]

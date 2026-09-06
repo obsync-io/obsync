@@ -35,6 +35,7 @@ public static class AppServices
         services.AddSingleton<ISupportBundleWriter, SupportBundleWriter>();
         // Optional pre-save checks on the wizard's Review step (advisory — never blocks Save).
         services.AddSingleton<IJobPreflightService, JobPreflightService>();
+        services.AddSingleton<IWorkspaceReclaimer, WorkspaceReclaimer>();
         services.AddSingleton<IRunReportWriter, RunReportWriter>();
         // Recent-logs panel on the Diagnostics tab (reads the newest app/service log files).
         services.AddSingleton<ILogFileReader>(_ => new LogFileReader(ObsyncPaths.LogsRoot));

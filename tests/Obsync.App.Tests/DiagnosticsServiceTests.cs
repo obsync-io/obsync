@@ -38,7 +38,10 @@ public sealed class DiagnosticsServiceTests
         var gitRemote = Substitute.For<IGitRemoteProbe>();
         gitRemote.CheckAsync(Arg.Any<GitNetworkOptions>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Result.Failure("no remote in tests"));
-        return new DiagnosticsService(probe, gitHub, git, gitRemote, credentials, serverRepo, repoRepo,
+        var workspaces = Substitute.For<IWorkspaceReclaimer>();
+        workspaces.FindOrphansAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<OrphanedWorkspace>>([]));
+        return new DiagnosticsService(probe, gitHub, git, gitRemote, workspaces, credentials, serverRepo, repoRepo,
             Substitute.For<IProxyProvider>(), Substitute.For<IAppSettingsRepository>(), schedulerHealth,
             Substitute.For<Obsync.Data.IDbConnectionFactory>(), SystemClock.Instance);
     }

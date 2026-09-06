@@ -118,6 +118,17 @@ public sealed class GitCommandRunner : IGitCommandRunner
         // `protocol.ext.allow=always` beats a catch-all `never` no matter who set it. Naming them
         // puts the deny on the same key, where being applied last is what decides it. Measured: with
         // only the catch-all, an ext:: remote still executed.
+        // Obsync's OWN bundled gitconfig ships filter.lfs.* with required=true, and git-lfs is not
+        // bundled with it. On any repository where somebody once enabled LFS — a .gitattributes with
+        // "filter=lfs" — the clone's checkout then fails FATALLY with "external filter
+        // 'git-lfs filter-process' failed", and the user sees a raw dump with no hint that the
+        // missing piece is in our own toolchain.
+        //
+        // required=false downgrades that to a warning: the LFS-tracked files check out as their
+        // pointer text, which is exactly what the index already holds, so they register as unchanged
+        // and never appear in a diff. Obsync versions SQL scripts; it has no business round-tripping
+        // somebody else's LFS blobs, and refusing to run is the wrong answer to not needing them.
+        ("filter.lfs.required", "false"),
         ("protocol.ext.allow", "never"),
         ("protocol.ssh.allow", "never"),
         ("protocol.allow", "never"),
@@ -315,10 +326,24 @@ public sealed class GitCommandRunner : IGitCommandRunner
         process.OutputDataReceived += (_, e) => { if (e.Data is not null) { stdout.AppendLine(e.Data); } };
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { stderr.AppendLine(e.Data); } };
 
-        if (!process.Start())
+        try
+        {
+            // Process.Start() returns false only when an existing process object is reused; a MISSING
+            // executable throws Win32Exception. So this crafted message was unreachable and the
+            // caller got .NET's "An error occurred trying to start process 'git'…" instead, which
+            // names neither the resolved path nor the fact that Obsync ships its own git.
+            if (!process.Start())
+            {
+                throw new InvalidOperationException($"git ({GitExecutable}) could not be started.");
+            }
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
         {
             throw new InvalidOperationException(
-                $"Failed to start the git process ({GitExecutable}). Is git installed and on PATH?");
+                $"Obsync could not start git at '{GitExecutable}'. {ex.Message} "
+                + @"Obsync normally uses the git bundled with it under tools\git; reinstall Obsync if that folder "
+                + "is missing, or set OBSYNC_GIT to a git.exe to use instead.",
+                ex);
         }
 
         process.BeginOutputReadLine();
@@ -343,6 +368,13 @@ public sealed class GitCommandRunner : IGitCommandRunner
             // Our timeout, not the caller's cancellation: report a failed command rather than
             // throwing, so the run is recorded as Failed with a reason instead of Cancelled.
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+
+            // Let the async output readers drain before the StringBuilders are read. The parameterless
+            // WaitForExit (unlike WaitForExitAsync) waits for the redirected streams to reach EOF, so
+            // without it this raced its own readers and could return torn output — a truncated or
+            // interleaved final line in the very error the user is trying to read.
+            try { process.WaitForExit(); } catch { /* already gone */ }
+
             _logger.LogError(
                 "git {Args} exceeded {Minutes} minutes and was terminated.",
                 string.Join(' ', RedactArguments(arguments)), timeout.TotalMinutes);

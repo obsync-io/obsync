@@ -1,5 +1,6 @@
-using System.Linq;
+﻿using System.Linq;
 using NSubstitute;
+using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.Data.Repositories;
 using Obsync.GitHub;
@@ -153,7 +154,7 @@ public sealed class RepositoryTokenCheckTests
         var clock = Substitute.For<IClock>();
         clock.UtcNow.Returns(DateTimeOffset.UnixEpoch);
 
-        var vm = new RepositoriesViewModel(repositories, gitHub, credentials, clock, Substitute.For<IAuditWriter>());
+        var vm = new RepositoriesViewModel(repositories, gitHub, credentials, clock, Substitute.For<IAuditWriter>(), Substitute.For<IWorkspaceReclaimer>());
         await vm.CheckTokenCommand.ExecuteAsync(profile);
 
         await repositories.Received(1).UpdateValidationStatusAsync(
@@ -171,7 +172,7 @@ public sealed class RepositoryTokenCheckTests
         var repositories = Substitute.For<IRepositoryProfileRepository>();
         var vm = new RepositoriesViewModel(
             repositories, GitHub(branches: ["main"]), CredentialsWithToken(),
-            Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
+            Substitute.For<IClock>(), Substitute.For<IAuditWriter>(), Substitute.For<IWorkspaceReclaimer>());
 
         await vm.CheckTokenCommand.ExecuteAsync(profile);
 
@@ -192,7 +193,7 @@ public sealed class RepositoryTokenCheckTests
 
         var repositories = Substitute.For<IRepositoryProfileRepository>();
         var vm = new RepositoriesViewModel(
-            repositories, gitHub, CredentialsWithToken(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
+            repositories, gitHub, CredentialsWithToken(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>(), Substitute.For<IWorkspaceReclaimer>());
 
         await vm.CheckTokenCommand.ExecuteAsync(profile);
 

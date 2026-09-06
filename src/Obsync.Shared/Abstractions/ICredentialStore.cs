@@ -18,6 +18,23 @@ public interface ICredentialStore
 
     /// <summary>True when a secret exists for <paramref name="key"/>.</summary>
     bool Exists(string key);
+
+    /// <summary>
+    /// Every key this store holds that begins with <paramref name="keyPrefix"/>.
+    /// </summary>
+    /// <remarks>
+    /// Needed to find ORPHANS — secrets whose profile has been deleted. Obsync's keys embed the
+    /// profile's GUID, so once the row is gone nothing left in the product can name the secret, and
+    /// a live GitHub token with Contents:write could sit in a vault indefinitely with no surface
+    /// able to list or remove it. That is worse in the case the product itself creates: it tells
+    /// users to store the same secret under the service account too, and deleting the profile in
+    /// the app only ever removes the copy in the signed-in user's vault.
+    /// <para>
+    /// Defaulted to empty rather than abstract so the in-memory fakes used throughout the tests do
+    /// not all have to implement enumeration they have no use for. The Windows store overrides it.
+    /// </para>
+    /// </remarks>
+    IReadOnlyList<string> Enumerate(string keyPrefix) => [];
 }
 
 /// <summary>Builds the stable Credential Manager keys Obsync uses for each secret kind.</summary>

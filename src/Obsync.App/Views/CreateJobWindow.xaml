@@ -1,4 +1,4 @@
-<Window x:Class="Obsync.App.Views.CreateJobWindow"
+﻿<Window x:Class="Obsync.App.Views.CreateJobWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="{Binding Title}" Height="760" Width="760"
@@ -404,7 +404,8 @@
                                 <ItemsControl ItemsSource="{Binding DatabasesView}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}" Margin="0,4" />
+                                            <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected}" Margin="0,4"
+                                                      IsEnabled="{Binding IsOnline}" />
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
@@ -709,6 +710,9 @@
                             <TextBlock Text="LOCK TIMEOUT (SECONDS, 0 = SERVER DEFAULT)" Style="{StaticResource Caption}" />
                             <TextBox Text="{Binding LockTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
                                      MaxLength="5" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                            <TextBlock Text="GIT NETWORK ATTEMPTS (1 = NO RETRY)" Style="{StaticResource Caption}" />
+                            <TextBox Text="{Binding GitRetryCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
+                                     MaxLength="2" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
                             <CheckBox Content="Incremental scripting (recommended for very large databases)"
                                       IsChecked="{Binding IncrementalScripting}" Margin="0,0,0,6" />
                             <TextBlock Text="Skips objects unchanged since the last run using SQL Server's modify_date. Permission- or extended-property-only changes don't update modify_date — turn this off and run once to capture those."

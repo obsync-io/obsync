@@ -11,6 +11,13 @@ namespace Obsync.Metadata;
 ///   <item><c>CONNECT</c> — open a connection to each database.</item>
 ///   <item><c>VIEW DEFINITION</c> — read object definitions (<c>sys.sql_modules</c>, SMO scripting).</item>
 ///   <item><c>VIEW DATABASE STATE</c> — read database metadata used during scripting.</item>
+///   <item><c>SELECT</c> — ONLY when reference-data versioning is enabled, because that feature
+///     reads table CONTENTS (<c>ReferenceDataReader</c> issues <c>COUNT_BIG</c> and <c>SELECT</c>),
+///     and none of the three grants above permits it. Without it this script produced an account
+///     that could pick reference tables in the wizard — that picker reads <c>sys.tables</c> and
+///     partition metadata, both visible under VIEW DEFINITION, so the row counts even looked right
+///     — and then failed at run time on the first SELECT. Settings calls this script "exactly what
+///     Obsync needs", which it was not for that job shape.</item>
 /// </list>
 /// Output is deterministic (stable ordering, LF line endings) so a DBA reviewing it sees no churn.
 /// <see cref="BuildRevoke"/> produces the matching inverse script for offboarding the account.
@@ -24,7 +31,13 @@ public static class SqlPermissionScriptBuilder
     /// server-level section (VIEW ANY DEFINITION / VIEW SERVER STATE in master, plus msdb's
     /// SQLAgentReaderRole for Agent-job scripting) precedes the per-database grants.
     /// </summary>
-    public static string Build(string accountName, IReadOnlyList<string> databases, bool includeServerObjects = false)
+    /// <param name="includeReferenceData">
+    /// Also grant SELECT, for jobs that version reference-data table CONTENTS. Off by default: the
+    /// point of this script is least privilege, and most jobs never read a row.
+    /// </param>
+    public static string Build(
+        string accountName, IReadOnlyList<string> databases, bool includeServerObjects = false,
+        bool includeReferenceData = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
 
@@ -58,6 +71,11 @@ public static class SqlPermissionScriptBuilder
             builder.Append("GRANT CONNECT TO ").Append(user).Append(";\n");
             builder.Append("GRANT VIEW DEFINITION TO ").Append(user).Append(";\n");
             builder.Append("GRANT VIEW DATABASE STATE TO ").Append(user).Append(";\n");
+            if (includeReferenceData)
+            {
+                builder.Append("GRANT SELECT TO ").Append(user).Append(";\n");
+            }
+
             builder.Append("GO\n");
         }
 
@@ -70,7 +88,9 @@ public static class SqlPermissionScriptBuilder
     /// are deliberately left commented — the account may be shared with other tools, so removal
     /// needs a human decision.
     /// </summary>
-    public static string BuildRevoke(string accountName, IReadOnlyList<string> databases, bool includeServerObjects = false)
+    public static string BuildRevoke(
+        string accountName, IReadOnlyList<string> databases, bool includeServerObjects = false,
+        bool includeReferenceData = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
 
@@ -100,6 +120,11 @@ public static class SqlPermissionScriptBuilder
             builder.Append("REVOKE CONNECT FROM ").Append(user).Append(";\n");
             builder.Append("REVOKE VIEW DEFINITION FROM ").Append(user).Append(";\n");
             builder.Append("REVOKE VIEW DATABASE STATE FROM ").Append(user).Append(";\n");
+            if (includeReferenceData)
+            {
+                builder.Append("REVOKE SELECT FROM ").Append(user).Append(";\n");
+            }
+
             builder.Append("GO\n\n");
             AppendDropUserGuidance(builder, user);
         }

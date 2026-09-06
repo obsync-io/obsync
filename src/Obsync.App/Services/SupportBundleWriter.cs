@@ -131,7 +131,22 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
         {
             try
             {
-                archive.CreateEntryFromFile(log.FullName, $"logs/{log.Name}", CompressionLevel.Optimal);
+                // SCRUBBED, not copied verbatim. Every JSON entry in this bundle goes through
+                // SecretRedactor, and these files were the one asymmetry: a support bundle is the
+                // artefact that leaves the machine and gets attached to a ticket, so it is the last
+                // place to rely on nothing ever having logged a secret. Serilog has no redacting
+                // sink here, and a library quoting a token back into an exception message it logs
+                // would land in these files untouched.
+                //
+                // Read line by line rather than whole-file: a rolling log can be tens of megabytes
+                // and this runs on the UI thread's task.
+                var entry = archive.CreateEntry($"logs/{log.Name}", CompressionLevel.Optimal);
+                using var source = new StreamReader(log.OpenRead());
+                using var destination = new StreamWriter(entry.Open());
+                while (source.ReadLine() is { } line)
+                {
+                    destination.WriteLine(SecretRedactor.Scrub(line) ?? line);
+                }
             }
             catch (IOException)
             {

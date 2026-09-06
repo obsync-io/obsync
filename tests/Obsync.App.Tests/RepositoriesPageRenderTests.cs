@@ -1,8 +1,9 @@
-using System.IO;
+﻿using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using NSubstitute;
+using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.App.Views;
 using Obsync.Data.Repositories;
@@ -38,7 +39,7 @@ public sealed class RepositoriesPageRenderTests
                 // Page, with rows present so the grid path (not just the empty state) is exercised.
                 var pageVm = new RepositoriesViewModel(
                     Substitute.For<IRepositoryProfileRepository>(), Substitute.For<IGitHubService>(),
-                    Substitute.For<ICredentialStore>(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>());
+                    Substitute.For<ICredentialStore>(), Substitute.For<IClock>(), Substitute.For<IAuditWriter>(), Substitute.For<IWorkspaceReclaimer>());
                 pageVm.Repositories.Add(new GitRepositoryProfile
                 {
                     Name = "SQLTest", Owner = "acme", RepositoryName = "sql-history", DefaultBranch = "main",

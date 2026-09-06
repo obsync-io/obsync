@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.Data.Repositories;
 using Obsync.Metadata;
@@ -159,18 +159,39 @@ public sealed partial class ServerDialogViewModel : ObservableObject
             profile.ServerEdition = test.IsSuccess ? test.Value.Edition : _editingServerEdition;
             profile.ServerVersion = test.IsSuccess ? test.Value.ProductVersion : _editingServerVersion;
 
-            await _repository.UpsertAsync(profile);
-
+            // SECRET FIRST, then the row — see RepositoryDialogViewModel for why. A store failure
+            // must leave no half-saved profile behind, and no missing audit event for one that was
+            // in fact created.
+            var storedSecret = false;
             if (AuthenticationMode == SqlAuthenticationMode.SqlLogin)
             {
                 if (!string.IsNullOrEmpty(Password))
                 {
                     _credentialStore.Store(CredentialKeys.SqlPassword(profile.Id), Password);
+                    storedSecret = true;
                 }
             }
             else
             {
+                // Windows auth needs no password; clearing it is the only way a switched profile
+                // stops leaving a usable SQL login behind in the vault. Deliberately BEFORE the row,
+                // so a failure here aborts rather than leaving the secret orphaned by a saved
+                // profile that no longer references it.
                 _credentialStore.Delete(CredentialKeys.SqlPassword(profile.Id));
+            }
+
+            try
+            {
+                await _repository.UpsertAsync(profile);
+            }
+            catch
+            {
+                if (storedSecret && !IsEditMode)
+                {
+                    try { _credentialStore.Delete(CredentialKeys.SqlPassword(profile.Id)); } catch { /* best effort */ }
+                }
+
+                throw;
             }
 
             await _audit.WriteAsync(

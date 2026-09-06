@@ -1,4 +1,4 @@
-namespace Obsync.Shared.Models;
+﻿namespace Obsync.Shared.Models;
 
 /// <summary>
 /// A reusable SQL Server connection. The password for <see cref="SqlAuthenticationMode.SqlLogin"/>
@@ -107,6 +107,37 @@ public sealed class GitRepositoryProfile
 
     /// <summary>Detail of the last validation: the verdict on success, or what went wrong.</summary>
     public string? LastValidationDetail { get; set; }
+
+    /// <summary>How long a validation is treated as current before the badge stops claiming health.</summary>
+    /// <remarks>
+    /// Thirty days is chosen against what actually expires: a fine-grained PAT's shortest common
+    /// lifetime is 30 days and the default is 90, so a monthly re-check catches an expiry before a
+    /// scheduled run does. It is not a security boundary — nothing is revoked when it lapses.
+    /// </remarks>
+    public static readonly TimeSpan ValidationFreshness = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// True when the recorded validation is too old to still be asserting anything.
+    /// </summary>
+    /// <remarks>
+    /// A green "Valid" pill used to be permanent: a token validated in January and expired in March
+    /// still showed green in September, because nothing re-evaluated it and the age lived only in a
+    /// hover tooltip. The badge is the surface people read, so the badge has to decay.
+    /// </remarks>
+    public bool IsValidationStale(DateTimeOffset now) =>
+        LastValidationStatus != RepositoryValidationStatus.Unvalidated
+        && (LastValidatedAt is not { } at || now - at > ValidationFreshness);
+
+    /// <summary>The status to DISPLAY, which reverts to Unvalidated once the check has gone stale.</summary>
+    public RepositoryValidationStatus EffectiveValidationStatus(DateTimeOffset now) =>
+        IsValidationStale(now) ? RepositoryValidationStatus.Unvalidated : LastValidationStatus;
+
+    /// <summary>
+    /// What the badge renders. Populated on load from the injected clock — like the job list's
+    /// display fields — rather than computed from the wall clock inside the model, so the decay is
+    /// testable and the model stays free of ambient time.
+    /// </summary>
+    public RepositoryValidationStatus DisplayValidationStatus { get; set; } = RepositoryValidationStatus.Unvalidated;
 
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

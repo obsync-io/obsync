@@ -104,6 +104,25 @@ Manager, which is what gMSA logons require. Prerequisites, before running the MS
    For **LocalSystem** or an `NT SERVICE\...` account, `psexec -s obsync credential set ...` is
    simpler and interactive.
 
+### Removing secrets before uninstalling
+
+Uninstalling does **not** clear Windows Credential Manager, and it cannot: the vault is
+per-account, and the uninstaller runs as SYSTEM, so it has no way to reach the vaults holding
+the secrets. Deleting a repository in the app only ever removes the copy in the signed-in
+user's vault — the copy stored for the service account survives, and because the key embeds the
+profile's id, nothing in the product can name it afterwards.
+
+Before uninstalling, clear each vault that holds Obsync secrets — as that account:
+
+```powershell
+obsync credential list             # what this account holds, including orphans
+obsync credential prune --yes      # remove secrets whose profile is gone
+psexec -s obsync credential prune --yes    # the same, for LocalSystem
+```
+
+`prune` compares against the database at the data root `obsync whoami` reports. Run it against
+the wrong root and every live secret looks orphaned, which is why `--yes` is required.
+
 ## Repair, uninstall, upgrade
 
 ```powershell

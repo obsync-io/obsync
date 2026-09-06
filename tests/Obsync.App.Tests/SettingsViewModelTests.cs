@@ -1,4 +1,4 @@
-using NSubstitute;
+﻿using NSubstitute;
 using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.Data.Repositories;
@@ -32,7 +32,7 @@ public sealed class SettingsViewModelTests
         Substitute.For<IRunAlertService>(),
         Substitute.For<IUpdateChecker>(),
         Substitute.For<ILogFileReader>(),
-        Substitute.For<ISupportInfoService>());
+        Substitute.For<ISupportInfoService>(), Substitute.For<IWorkspaceReclaimer>());
 
     [Fact]
     public async Task SaveAlerts_KeepsTheStoredSmtpPassword_WhenEmailAlertsAreDisabled()
@@ -201,7 +201,7 @@ public sealed class SettingsViewModelTests
             Substitute.For<IRunAlertService>(),
             updates,
             Substitute.For<ILogFileReader>(),
-            Substitute.For<ISupportInfoService>());
+            Substitute.For<ISupportInfoService>(), Substitute.For<IWorkspaceReclaimer>());
 
         await vm.CheckForUpdatesCommand.ExecuteAsync(null);
 
@@ -232,7 +232,7 @@ public sealed class SettingsViewModelTests
             Substitute.For<IRunAlertService>(),
             Substitute.For<IUpdateChecker>(),
             logs,
-            Substitute.For<ISupportInfoService>());
+            Substitute.For<ISupportInfoService>(), Substitute.For<IWorkspaceReclaimer>());
 
         await vm.EnsureLogsLoadedAsync();
         Assert.Equal(3, vm.FilteredLogEntries.Count);

@@ -1,4 +1,4 @@
-using NSubstitute;
+﻿using NSubstitute;
 using Obsync.App.Services;
 using Obsync.App.ViewModels;
 using Obsync.Data.Repositories;
@@ -25,7 +25,7 @@ public sealed class MainViewModelActivationTests
         Substitute.For<IRunAlertService>(),
         Substitute.For<IUpdateChecker>(),
         Substitute.For<ILogFileReader>(),
-        Substitute.For<ISupportInfoService>());
+        Substitute.For<ISupportInfoService>(), Substitute.For<IWorkspaceReclaimer>());
 
     [Fact]
     public async Task RefreshOnActivation_SkipsTheSettingsSection()

@@ -51,6 +51,7 @@ internal static class AttentionModel
     public static IReadOnlyList<AttentionItem> Build(
         IReadOnlyList<SyncJob> jobs,
         IReadOnlyList<SqlConnectionProfile> servers,
+        IReadOnlyList<GitRepositoryProfile> repositories,
         IReadOnlyDictionary<Guid, string> runErrors,
         IReadOnlyDictionary<Guid, string> skippedOccurrences,
         DateTimeOffset now,
@@ -99,6 +100,27 @@ internal static class AttentionModel
         {
             items.Add(new(AttentionSeverity.Error,
                 $"Server “{server.Name}” failed its last connection test", "Open Servers", null));
+        }
+
+        // Repositories had no equivalent loop at all, which is an odd asymmetry: a server that
+        // failed its last test raised a row, while a repository whose stored status was Failed —
+        // an expired token, a repository that no longer resolves — raised nothing anywhere.
+        foreach (var repository in repositories.Where(r => r.LastValidationStatus == RepositoryValidationStatus.Failed))
+        {
+            items.Add(new(AttentionSeverity.Error,
+                $"Repository “{repository.Name}” failed its last check — {FirstLine(repository.LastValidationDetail ?? "check it in Repositories")}",
+                "Open Repositories", null, "Repositories"));
+        }
+
+        // ...and a check nobody has re-run in a month is not evidence of health. The green pill was
+        // permanent, so a token validated in January and expired in March still read as Valid in
+        // September; only the hover tooltip carried the age.
+        foreach (var repository in repositories.Where(r => r.IsValidationStale(now)))
+        {
+            items.Add(new(AttentionSeverity.Warning,
+                $"Repository “{repository.Name}” has not been checked since "
+                + (repository.LastValidatedAt is { } at ? at.LocalDateTime.ToString("d MMM yyyy") : "it was added"),
+                "Open Repositories", null, "Repositories"));
         }
 
         // Last, and Error rather than Warning: runs are still completing normally, so nothing else

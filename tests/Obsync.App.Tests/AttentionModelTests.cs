@@ -42,7 +42,7 @@ public sealed class AttentionModelTests
             DayScope = MaintenanceDayScope.WeekdaysOnly,
         };
 
-        var items = AttentionModel.Build([starved], [], new Dictionary<Guid, string>(), NoSkips, Now);
+        var items = AttentionModel.Build([starved], [], [], new Dictionary<Guid, string>(), NoSkips, Now);
 
         var row = Assert.Single(items);
         Assert.Equal(AttentionSeverity.Warning, row.Severity);
@@ -56,7 +56,7 @@ public sealed class AttentionModelTests
         // The exclusion must be narrow: a job that can run and has not is still overdue.
         var overdue = Job("Stalled", RunStatus.Succeeded, nextRunAt: Now.AddHours(-1));
 
-        var items = AttentionModel.Build([overdue], [], new Dictionary<Guid, string>(), NoSkips, Now);
+        var items = AttentionModel.Build([overdue], [], [], new Dictionary<Guid, string>(), NoSkips, Now);
 
         Assert.Contains("missed its scheduled run", Assert.Single(items).Text);
     }
@@ -74,7 +74,7 @@ public sealed class AttentionModelTests
         var runErrors = new Dictionary<Guid, string> { [failedRunId] = "Login failed for user 'svc'.\nStack trace…" };
 
         var items = AttentionModel.Build(
-            [failed, warned, overdue, healthy], [badServer, goodServer], runErrors, NoSkips, Now);
+            [failed, warned, overdue, healthy], [badServer, goodServer], [], runErrors, NoSkips, Now);
 
         Assert.Equal(4, items.Count);
 
@@ -102,7 +102,7 @@ public sealed class AttentionModelTests
     {
         var failed = Job("Broken", RunStatus.Failed, Guid.NewGuid());
 
-        var items = AttentionModel.Build([failed], [], new Dictionary<Guid, string>(), NoSkips, Now);
+        var items = AttentionModel.Build([failed], [], [], new Dictionary<Guid, string>(), NoSkips, Now);
 
         Assert.Equal("Job “Broken” failed", Assert.Single(items).Text);
     }
@@ -123,7 +123,7 @@ public sealed class AttentionModelTests
             [job.Id] = "Another job sharing this repository kept its workspace busy.\nSecond line.",
         };
 
-        var row = Assert.Single(AttentionModel.Build([job], [], new Dictionary<Guid, string>(), skips, Now));
+        var row = Assert.Single(AttentionModel.Build([job], [], [], new Dictionary<Guid, string>(), skips, Now));
 
         Assert.Equal(AttentionSeverity.Warning, row.Severity);
         Assert.Equal(
@@ -139,7 +139,7 @@ public sealed class AttentionModelTests
         var job = Job("Nightly", RunStatus.Failed, nextRunAt: Now.AddHours(1));
         var skips = new Dictionary<Guid, string> { [job.Id] = "Workspace busy." };
 
-        var items = AttentionModel.Build([job], [], new Dictionary<Guid, string>(), skips, Now);
+        var items = AttentionModel.Build([job], [], [], new Dictionary<Guid, string>(), skips, Now);
 
         Assert.Equal(2, items.Count);
         Assert.Contains(items, i => i.Text.Contains("failed", StringComparison.Ordinal));
@@ -161,6 +161,6 @@ public sealed class AttentionModelTests
             new SqlConnectionProfile { Name = "T", LastTestStatus = ConnectionTestStatus.Untested },
         };
 
-        Assert.Empty(AttentionModel.Build(jobs, servers, new Dictionary<Guid, string>(), NoSkips, Now));
+        Assert.Empty(AttentionModel.Build(jobs, servers, [], new Dictionary<Guid, string>(), NoSkips, Now));
     }
 }

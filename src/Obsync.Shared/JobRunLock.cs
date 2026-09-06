@@ -25,9 +25,22 @@ public static class JobRunLock
     /// sharing one clone from interleaving git operations.
     /// </summary>
     /// <summary>How long to keep retrying an ambiguous access denial before treating it as real.</summary>
-    private const int DeniedRetries = 5;
+    /// <summary>
+    /// Attempts made before an <see cref="UnauthorizedAccessException"/> is believed.
+    /// </summary>
+    /// <remarks>
+    /// Windows reports STATUS_DELETE_PENDING — a lock file the previous holder has closed but the
+    /// filesystem has not finished removing — with the SAME error as a genuine ACL denial, so the
+    /// only way to tell them apart is to wait and see. 5 x 20ms gave a 100ms budget, which an
+    /// antivirus or EDR filter driver holding the delete routinely outlives; the escaping exception
+    /// is then recorded as a FAILED run reading "check the folder's permissions", which alerts and
+    /// sends the reader after a permissions problem that does not exist. The test harness had
+    /// already found 100ms too thin and polls for two seconds.
+    /// </remarks>
+    private const int DeniedRetries = 40;
 
-    private static readonly TimeSpan DeniedRetryDelay = TimeSpan.FromMilliseconds(20);
+    /// <summary>Pause between attempts; 40 x 50ms is a two-second budget, matching the harness.</summary>
+    private static readonly TimeSpan DeniedRetryDelay = TimeSpan.FromMilliseconds(50);
 
     public static IDisposable? TryAcquire(string locksRoot, string name)
     {

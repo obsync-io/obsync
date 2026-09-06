@@ -33,6 +33,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     private readonly IUpdateChecker _updates;
     private readonly ILogFileReader _logs;
     private readonly ISupportInfoService _supportInfo;
+    private readonly IWorkspaceReclaimer _workspaces;
 
     public SettingsViewModel(
         IAuditWriter audit,
@@ -44,7 +45,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         IRunAlertService alerts,
         IUpdateChecker updates,
         ILogFileReader logs,
-        ISupportInfoService supportInfo)
+        ISupportInfoService supportInfo,
+        IWorkspaceReclaimer workspaces)
     {
         _audit = audit;
         _diagnostics = diagnostics;
@@ -56,6 +58,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         _updates = updates;
         _logs = logs;
         _supportInfo = supportInfo;
+        _workspaces = workspaces;
     }
 
     /// <summary>One audit event per saved settings section — the section name only, never values.</summary>
@@ -902,6 +905,46 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         }
     }
 
+    /// <summary>
+    /// Deletes clone directories that no repository profile claims.
+    /// </summary>
+    /// <remarks>
+    /// Until this existed nothing ever reclaimed one. A workspace path is keyed on the repository
+    /// profile's id, so deleting the profile left the clone — gigabytes, on a schema estate — with no
+    /// reference anywhere in the product; relocating this folder leaked the whole previous tree the
+    /// same way. Diagnostics reports them, and this is where that report leads.
+    /// </remarks>
+    [RelayCommand]
+    private async Task ReclaimWorkspacesAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var (removed, bytes) = await _workspaces.ReclaimOrphansAsync();
+            WorkspacesStatus = removed == 0
+                ? "No orphaned clones — every workspace belongs to a repository."
+                : $"Reclaimed {removed} orphaned clone(s), freeing {DiagnosticsService.FormatBytes(bytes)}.";
+            if (removed > 0)
+            {
+                await _audit.WriteAsync(
+                    AuditAction.SettingsChanged, "Settings", "workspaces", null, $"Reclaimed {removed} orphaned clone(s)");
+            }
+        }
+        catch (Exception ex)
+        {
+            WorkspacesStatus = $"Could not reclaim — {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     // --- Git TLS --------------------------------------------------------------------------------
 
     [ObservableProperty] private GitTlsBackend _selectedGitTlsBackend = GitTlsBackend.Default;
@@ -1093,6 +1136,12 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     /// <summary>Adds the server-level section (VIEW ANY DEFINITION / VIEW SERVER STATE + msdb Agent read).</summary>
     [ObservableProperty] private bool _includeServerObjects;
 
+    /// <summary>
+    /// Add SELECT for jobs that version reference-data table CONTENTS. Off by default so the
+    /// generated script stays least-privilege for the common job, which never reads a row.
+    /// </summary>
+    [ObservableProperty] private bool _includeReferenceDataPermissions;
+
     /// <summary>Names which script the preview shows ("Grant script" / "Revoke script"); the copy and
     /// save buttons act on whichever was generated last.</summary>
     [ObservableProperty] private string? _permissionScriptLabel;
@@ -1126,8 +1175,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         }
 
         PermissionScript = revoke
-            ? SqlPermissionScriptBuilder.BuildRevoke(account, databases, IncludeServerObjects)
-            : SqlPermissionScriptBuilder.Build(account, databases, IncludeServerObjects);
+            ? SqlPermissionScriptBuilder.BuildRevoke(account, databases, IncludeServerObjects, IncludeReferenceDataPermissions)
+            : SqlPermissionScriptBuilder.Build(account, databases, IncludeServerObjects, IncludeReferenceDataPermissions);
         _permissionScriptIsRevoke = revoke;
         PermissionScriptLabel = revoke ? "Revoke script" : "Grant script";
 
@@ -1135,7 +1184,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
         await _audit.WriteAsync(
             AuditAction.PermissionScriptGenerated, "PermissionScript", null, account,
             $"{(revoke ? "Revoke" : "Grant")} · {databases.Count} database(s)"
-            + (IncludeServerObjects ? " · server-level included" : string.Empty));
+            + (IncludeServerObjects ? " · server-level included" : string.Empty)
+            + (IncludeReferenceDataPermissions ? " · reference data (SELECT) included" : string.Empty));
     }
 
     private bool HasScript => !string.IsNullOrWhiteSpace(PermissionScript);

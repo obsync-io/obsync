@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.Data.Repositories;
@@ -21,6 +21,7 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
     private readonly ICredentialStore _credentialStore;
     private readonly IClock _clock;
     private readonly IAuditWriter _audit;
+    private readonly Services.IWorkspaceReclaimer _workspaces;
 
     [ObservableProperty] private bool _isBusy;
     [ObservableProperty] private string? _statusMessage;
@@ -29,21 +30,27 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
 
     public RepositoriesViewModel(
         IRepositoryProfileRepository repository, IGitHubService gitHub, ICredentialStore credentialStore,
-        IClock clock, IAuditWriter audit)
+        IClock clock, IAuditWriter audit, Services.IWorkspaceReclaimer workspaces)
     {
         _repository = repository;
         _gitHub = gitHub;
         _credentialStore = credentialStore;
         _clock = clock;
         _audit = audit;
+        _workspaces = workspaces;
     }
 
     public async Task LoadAsync()
     {
         var repositories = await _repository.GetAllAsync();
+        var now = _clock.UtcNow;
         Repositories.Clear();
         foreach (var repository in repositories)
         {
+            // A validation nobody has re-run in a month stops asserting health — the pill was
+            // otherwise permanent, so a token validated in January and expired in March still read
+            // as Valid in September, with the age visible only on hover.
+            repository.DisplayValidationStatus = repository.EffectiveValidationStatus(now);
             Repositories.Add(repository);
         }
     }
@@ -112,12 +119,32 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
             // surfaces before the token is removed — otherwise the token would be orphaned.
             await _repository.DeleteAsync(repository.Id);
             _credentialStore.Delete(CredentialKeys.GitHubToken(repository.Id));
+
+            // Reclaim the clone. The workspace path is keyed on this profile's id and nothing else,
+            // so once the row is gone the directory — potentially many gigabytes of a schema estate
+            // — has no remaining reference in the product and nothing could ever find it again.
+            // Best-effort by design: everything in a workspace is regenerable, so failing to delete
+            // it must never fail the delete the user actually asked for.
+            var reclaimed = await _workspaces.ReclaimForRepositoryAsync(repository.Id);
+
             await _audit.WriteAsync(AuditAction.RepositoryDeleted, "Repository", repository.Id.ToString(), repository.Name);
             await LoadAsync();
+            StatusMessage = reclaimed > 0
+                ? $"Deleted {repository.Name} and reclaimed {FormatBytes(reclaimed)} of workspace."
+                : $"Deleted {repository.Name}.";
         }
         catch (Exception ex)
         {
             StatusMessage = $"Could not delete {repository.Name} — it may still be used by a sync job. ({ex.Message})";
         }
     }
+
+    /// <summary>Human-readable size for the reclaim message; whole units, no false precision.</summary>
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.#} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.#} MB",
+        >= 1L << 10 => $"{bytes / (double)(1L << 10):0.#} KB",
+        _ => $"{bytes} bytes",
+    };
 }

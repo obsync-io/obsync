@@ -42,6 +42,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
     private readonly IGitHubService _gitHub;
     private readonly IGitCommandRunner _git;
     private readonly IGitRemoteProbe _gitRemote;
+    private readonly IWorkspaceReclaimer _workspaces;
     private readonly ICredentialStore _credentials;
     private readonly IConnectionProfileRepository _servers;
     private readonly IRepositoryProfileRepository _repositories;
@@ -56,6 +57,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         IGitHubService gitHub,
         IGitCommandRunner git,
         IGitRemoteProbe gitRemote,
+        IWorkspaceReclaimer workspaces,
         ICredentialStore credentials,
         IConnectionProfileRepository servers,
         IRepositoryProfileRepository repositories,
@@ -69,6 +71,7 @@ public sealed class DiagnosticsService : IDiagnosticsService
         _gitHub = gitHub;
         _git = git;
         _gitRemote = gitRemote;
+        _workspaces = workspaces;
         _credentials = credentials;
         _servers = servers;
         _repositories = repositories;
@@ -92,6 +95,8 @@ public sealed class DiagnosticsService : IDiagnosticsService
             CheckDiskSpace(workspacesRoot),
             await CheckSchedulerAsync(cancellationToken).ConfigureAwait(false),
             await CheckProxyAsync(cancellationToken).ConfigureAwait(false),
+            await CheckOrphanedWorkspacesAsync(cancellationToken).ConfigureAwait(false),
+            CheckDataRoot(),
         };
 
         foreach (var server in await _servers.GetAllAsync(cancellationToken).ConfigureAwait(false))
@@ -120,6 +125,62 @@ public sealed class DiagnosticsService : IDiagnosticsService
         var workspacesOverride = await _settings.GetWorkspacesRootOverrideAsync(cancellationToken).ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(workspacesOverride) ? ObsyncPaths.WorkspacesRoot : workspacesOverride;
     }
+
+    /// <summary>
+    /// Reports clone directories that no repository profile claims, and how much disk they hold.
+    /// </summary>
+    /// <remarks>
+    /// The low-disk check warns AFTER the fact and cannot say why. On a schema estate each clone is
+    /// gigabytes, and until now nothing ever reclaimed one: the workspace path is keyed on the
+    /// repository profile's id, so deleting the profile left the directory with no reference
+    /// anywhere in the product. Relocating the workspaces root in Settings leaks the whole previous
+    /// tree the same way.
+    /// </remarks>
+    private async Task<DiagnosticResult> CheckOrphanedWorkspacesAsync(CancellationToken cancellationToken)
+    {
+        const string name = "Orphaned workspaces";
+        try
+        {
+            var orphans = await _workspaces.FindOrphansAsync(cancellationToken).ConfigureAwait(false);
+            if (orphans.Count == 0)
+            {
+                return new DiagnosticResult(name, DiagnosticStatus.Pass, "None — every clone belongs to a repository.", _clock.UtcNow);
+            }
+
+            var bytes = orphans.Sum(o => o.Bytes);
+            return new DiagnosticResult(
+                name, DiagnosticStatus.Warning,
+                $"{orphans.Count} clone(s) with no repository, holding {FormatBytes(bytes)}. "
+                + "Reclaim them under Settings → Local data.",
+                _clock.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            return new DiagnosticResult(name, DiagnosticStatus.Warning, ex.Message, _clock.UtcNow);
+        }
+    }
+
+    /// <summary>
+    /// Reports a data root that had to fall back, which is otherwise completely invisible.
+    /// </summary>
+    /// <remarks>
+    /// A service identity with no loaded profile cannot resolve Local Application Data, and the
+    /// fallback chain then picks somewhere else — possibly a machine-wide folder shared by every
+    /// account. The service starts, heartbeats and reports itself healthy against a database the app
+    /// will never look at, so nothing else in the product can tell the user.
+    /// </remarks>
+    private DiagnosticResult CheckDataRoot() =>
+        ObsyncPaths.RootResolutionWarning is { } warning
+            ? new DiagnosticResult("Data root", DiagnosticStatus.Warning, warning, _clock.UtcNow)
+            : new DiagnosticResult("Data root", DiagnosticStatus.Pass, ObsyncPaths.Root, _clock.UtcNow);
+
+    internal static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.#} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.#} MB",
+        >= 1L << 10 => $"{bytes / (double)(1L << 10):0.#} KB",
+        _ => $"{bytes} bytes",
+    };
 
     private async Task<DiagnosticResult> CheckGitAsync(CancellationToken cancellationToken)
     {

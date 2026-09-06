@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Obsync.Data.Repositories;
@@ -216,13 +216,39 @@ public sealed partial class RepositoryDialogViewModel : ObservableObject
                 CreatedAt = _editingId is null ? _clock.UtcNow : _editingCreatedAt,
                 UpdatedAt = _clock.UtcNow,
             };
-            await _repository.UpsertAsync(profile);
-
+            // SECRET FIRST, then the row. The other order committed the profile and then let a
+            // credential-store failure surface as "Could not save" — so the user believed nothing
+            // had happened while a repository existed with no token, the next scheduled run failed
+            // on the missing secret, and no audit event was written for a repository that had in
+            // fact been created. In edit mode it was worse: the profile moved to new coordinates
+            // while the OLD secret stayed in the vault.
+            //
             // Trimmed: a pasted token often carries a trailing newline, which the Octokit path
             // sends verbatim (the git path already trims).
-            if (Token.Trim() is { Length: > 0 } token)
+            var token = Token.Trim();
+            var storedSecret = false;
+            if (token.Length > 0)
             {
                 _credentialStore.Store(CredentialKeys.GitHubToken(profile.Id), token);
+                storedSecret = true;
+            }
+
+            try
+            {
+                await _repository.UpsertAsync(profile);
+            }
+            catch
+            {
+                // Roll the secret back so a failed save leaves NOTHING behind — an orphaned token is
+                // a live credential no surface in the product can name, let alone remove. Only for a
+                // secret this call itself wrote: on edit with a blank token box the existing one must
+                // survive, which is what the box means.
+                if (storedSecret && !IsEditMode)
+                {
+                    try { _credentialStore.Delete(CredentialKeys.GitHubToken(profile.Id)); } catch { /* best effort */ }
+                }
+
+                throw;
             }
 
             await _audit.WriteAsync(

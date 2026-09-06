@@ -215,9 +215,14 @@ static async Task<int> CredentialAsync(IServiceProvider provider, string[] args)
         return await ListCredentialsAsync(provider, credentials);
     }
 
+    if (action == "prune")
+    {
+        return await PruneCredentialsAsync(provider, credentials, args.Contains("--yes", StringComparer.OrdinalIgnoreCase));
+    }
+
     if (action is not ("set" or "delete"))
     {
-        Console.Error.WriteLine("Usage: obsync credential <list|set|delete> [github|sql|smtp|proxy] [name-or-id]");
+        Console.Error.WriteLine("Usage: obsync credential <list|set|delete|prune> [github|sql|smtp|proxy] [name-or-id]");
         return 2;
     }
 
@@ -343,6 +348,20 @@ static async Task<int> ListCredentialsAsync(IServiceProvider provider, ICredenti
     Write("(email alerts)", "smtp", CredentialKeys.SmtpPassword());
     Write("(http proxy)", "proxy", CredentialKeys.Proxy());
 
+    var orphans = FindOrphanedCredentials(credentials, repositories, connections);
+    if (orphans.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"{orphans.Count} ORPHANED secret(s) — the profile that owned them is gone:");
+        foreach (var key in orphans)
+        {
+            Console.WriteLine($"  {key}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Remove them with: obsync credential prune");
+    }
+
     Console.WriteLine();
     Console.WriteLine("Scheduled runs read these from the SERVICE account's vault, which is not this one");
     Console.WriteLine("unless the service runs as the account shown above.");
@@ -363,6 +382,106 @@ static async Task<int> ListCredentialsAsync(IServiceProvider provider, ICredenti
 
         Console.WriteLine($"{Truncate(name, 46),-46} {kind,-8} {present}");
     }
+}
+
+/// <summary>
+/// Secrets in this vault whose owning profile no longer exists.
+/// </summary>
+/// <remarks>
+/// Obsync's keys embed the profile GUID, so once the row is deleted nothing in the product can name
+/// the secret — a GitHub token with Contents:write could sit here indefinitely with no surface able
+/// to list it, let alone remove it. The product CAUSES this: it tells users to store the same secret
+/// under the service account as well, and deleting the profile in the app only ever removes the copy
+/// in the signed-in user's vault.
+/// </remarks>
+static IReadOnlyList<string> FindOrphanedCredentials(
+    ICredentialStore credentials,
+    IReadOnlyList<GitRepositoryProfile> repositories,
+    IReadOnlyList<SqlConnectionProfile> connections)
+{
+    IReadOnlyList<string> all;
+    try
+    {
+        all = credentials.Enumerate("Obsync:");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Could not enumerate the vault — {ex.Message}");
+        return [];
+    }
+
+    var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        CredentialKeys.SmtpPassword(),
+        CredentialKeys.Proxy(),
+    };
+    foreach (var repository in repositories)
+    {
+        live.Add(CredentialKeys.GitHubToken(repository.Id));
+    }
+
+    foreach (var connection in connections)
+    {
+        // Every connection, not just password ones: switching a profile to Windows auth already
+        // deletes its secret, and treating the leftover as an orphan would race that.
+        live.Add(CredentialKeys.SqlPassword(connection.Id));
+    }
+
+    return [.. all
+        .Where(key => !live.Contains(key))
+        // The diagnostics sentinel is written and deleted within one probe; a copy left by a crashed
+        // probe is not an orphaned SECRET and must not be reported as one.
+        .Where(key => !key.Equals("Obsync:diagnostic-probe", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)];
+}
+
+/// <summary>Deletes every orphaned secret in this account's vault.</summary>
+static async Task<int> PruneCredentialsAsync(IServiceProvider provider, ICredentialStore credentials, bool confirmed)
+{
+    var repositories = await provider.GetRequiredService<IRepositoryProfileRepository>().GetAllAsync();
+    var connections = await provider.GetRequiredService<IConnectionProfileRepository>().GetAllAsync();
+    var orphans = FindOrphanedCredentials(credentials, repositories, connections);
+
+    if (orphans.Count == 0)
+    {
+        Console.WriteLine("No orphaned secrets — nothing to remove.");
+        return 0;
+    }
+
+    foreach (var key in orphans)
+    {
+        Console.WriteLine($"  {key}");
+    }
+
+    if (!confirmed)
+    {
+        // Deleting a secret is irreversible, and this reads the SAME database the app does: run it
+        // against the wrong data root and every live secret looks orphaned. Requiring --yes makes
+        // that a deliberate act rather than a typo.
+        Console.WriteLine();
+        Console.WriteLine($"{orphans.Count} secret(s) would be deleted from {CurrentActor.Name}'s vault.");
+        Console.WriteLine("Re-run with --yes to remove them. Check 'obsync whoami' first: this compares against the");
+        Console.WriteLine("database at the data root shown there, so the wrong root would report live secrets as orphans.");
+        return 0;
+    }
+
+    var removed = 0;
+    foreach (var key in orphans)
+    {
+        try
+        {
+            credentials.Delete(key);
+            removed++;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Could not delete '{key}' — {ex.Message}");
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Removed {removed} of {orphans.Count} orphaned secret(s) from {CurrentActor.Name}'s vault.");
+    return removed == orphans.Count ? 0 : 1;
 }
 
 /// <summary>
@@ -447,6 +566,8 @@ static int PrintHelp()
           obsync credential set <kind> [name-or-id]
           obsync credential delete <kind> [name-or-id]
                                       kind: github | sql | smtp | proxy
+          obsync credential prune [--yes]
+                                      Remove secrets whose profile was deleted
           obsync version              Show the CLI version
           obsync help                 Show this help
 

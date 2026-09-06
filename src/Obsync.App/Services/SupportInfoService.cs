@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using Obsync.Data;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
@@ -26,17 +26,20 @@ public sealed class SupportInfoService : ISupportInfoService
     private readonly IDbConnectionFactory _connectionFactory;
     private readonly IDiagnosticsService _diagnostics;
     private readonly IClock _clock;
+    private readonly ISchedulerHealthService _schedulerHealth;
 
     public SupportInfoService(
         IAppSettingsRepository settings,
         IDbConnectionFactory connectionFactory,
         IDiagnosticsService diagnostics,
-        IClock clock)
+        IClock clock,
+        ISchedulerHealthService schedulerHealth)
     {
         _settings = settings;
         _connectionFactory = connectionFactory;
         _diagnostics = diagnostics;
         _clock = clock;
+        _schedulerHealth = schedulerHealth;
     }
 
     public async Task<IReadOnlyList<SupportInfoRow>> GetAsync(CancellationToken cancellationToken = default) =>
@@ -61,11 +64,31 @@ public sealed class SupportInfoService : ISupportInfoService
             // otherwise read as fresh indefinitely and report a phantom service version.
             var age = heartbeat is null ? (TimeSpan?)null : _clock.UtcNow - heartbeat.TimestampUtc;
             var fresh = age is { } a && a >= TimeSpan.Zero && a <= SchedulerHealthService.HeartbeatFreshness;
-            return fresh ? heartbeat!.Version : "not running";
+            if (fresh)
+            {
+                return heartbeat!.Version;
+            }
+
+            // "not running" was flatly wrong in the case support hits most. Freshness is judged from
+            // THIS user's database, so a service running perfectly well under another account —
+            // heartbeating into that account's database — reported as not running, and sent the
+            // engineer chasing a service-start fault instead of a logon-account one. The scheduler
+            // health check already distinguishes the two; borrow its verdict rather than guessing
+            // from a heartbeat that was never going to appear here.
+            var health = await _schedulerHealth.GetAsync(cancellationToken).ConfigureAwait(false);
+            return health.Status switch
+            {
+                SchedulerHealthStatus.NotInstalled => "not installed",
+                SchedulerHealthStatus.NotRunning => "installed, not running",
+                SchedulerHealthStatus.NotExecutingYourJobs =>
+                    $"running as {health.ServiceAccount ?? "another account"} — not against this database",
+                SchedulerHealthStatus.Unresponsive => $"running as {health.ServiceAccount ?? "?"}, not reporting in",
+                _ => health.ServiceAccount is { Length: > 0 } account ? $"running as {account}" : "unknown",
+            };
         }
         catch (Exception)
         {
-            return "not running";
+            return "unknown";
         }
     }
 

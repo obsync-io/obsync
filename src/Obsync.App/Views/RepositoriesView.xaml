@@ -1,4 +1,4 @@
-<UserControl x:Class="Obsync.App.Views.RepositoriesView"
+﻿<UserControl x:Class="Obsync.App.Views.RepositoriesView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <UserControl.Resources>
@@ -130,7 +130,7 @@
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <!-- Clean single badge; the validation detail + time live in a hover tooltip. -->
-                                    <ContentControl Content="{Binding LastValidationStatus}" ContentTemplate="{StaticResource ValidationStatusBadgeTemplate}"
+                                    <ContentControl Content="{Binding DisplayValidationStatus}" ContentTemplate="{StaticResource ValidationStatusBadgeTemplate}"
                                                     HorizontalAlignment="Left" VerticalAlignment="Center">
                                         <ContentControl.Style>
                                             <Style TargetType="ContentControl">

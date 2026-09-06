@@ -1060,7 +1060,7 @@ public sealed class SyncEngine : ISyncEngine
                 workers,
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && SqlTransientErrors.IsTransient(ex))
+        catch (Exception ex) when (ex is not OperationCanceledException && SqlTransientErrors.IsContainable(ex))
         {
             // A TRANSIENT reader failure partway through used to fail the whole RUN, not just this
             // database: the exception escaped to the top, FinalizeAsync never ran, and nothing was
@@ -1528,36 +1528,81 @@ public sealed class SyncEngine : ISyncEngine
             MaxRetries = context.Job.Advanced.SqlRetryCount,
         };
 
-        await ChannelPipeline.RunAsync(
-            _serverProvider.ScriptAsync(request, cancellationToken),
-            (raw, ct) => raw.SkipReason is not null
-                ? RecordSkipAsync(raw)
-                : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
-            workers,
-            cancellationToken).ConfigureAwait(false);
+        // Contained exactly as the database pass is. ScriptServerAsync runs FIRST, before a single
+        // database is touched, so anything escaping here failed the entire run before any work had
+        // been done — where the identical event inside a database pass produces a Warning and a
+        // successful partial commit. A login that cannot open its default database, or a one-second
+        // blip while a reader opens, was enough.
+        try
+        {
+            await ChannelPipeline.RunAsync(
+                _serverProvider.ScriptAsync(request, cancellationToken),
+                (raw, ct) => raw.SkipReason is not null
+                    ? RecordSkipAsync(raw)
+                    : ApplyItemAsync(raw.Identity, raw.Script, _pathMapper.MapRelativePath(raw.Identity), ct),
+                workers,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && SqlTransientErrors.IsContainable(ex))
+        {
+            // Same rule as the database pass: only containable failures. A safety stop whose whole
+            // purpose is to fail the run must keep doing so.
+            context.IncrementFailed();
+            skipped.Add($"server-level objects — scripting stopped partway: {ex.Message}");
+            context.Log(
+                SyncLogLevel.Warning,
+                "Scripting the server-level objects stopped partway; they were left incomplete and their "
+                + "deletions were suspended.",
+                ex.ToString());
+
+            // Nothing was fully enumerated, so every server-scoped type is unreliable this run and
+            // none of their prior files may be deleted.
+            foreach (var type in serverTypes)
+            {
+                failedTypes[type] = 0;
+            }
+        }
 
         // The server-configuration artifact always rides with the server pass: one cheap bulk query,
         // and drifted sp_configure values are exactly what instance versioning exists to catch.
-        var configuration = await _artifactReader.ReadServerConfigurationAsync(
-            context.Connection, context.SqlPassword,
-            context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
-            cancellationToken).ConfigureAwait(false);
-        await ApplyItemAsync(
-            ArtifactIdentity("server-configuration"), configuration, RepositoryLayout.ServerConfigurationFile, cancellationToken)
-            .ConfigureAwait(false);
+        //
+        // Both artifacts below go through the same reported-skip wrapper the database pass uses for
+        // its catalog reads: they open their OWN connections and execute their own readers, so an
+        // unwrapped failure here failed the run for a file that is a nice-to-have.
+        await GenerateServerArtifactAsync(
+            "server-configuration", RepositoryLayout.ServerConfigurationFile,
+            () => _artifactReader.ReadServerConfigurationAsync(
+                context.Connection, context.SqlPassword,
+                context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+                cancellationToken)).ConfigureAwait(false);
 
         // The server security review rides the server pass the same way: sysadmin membership, the
         // sa login, password policy, and high-risk server grants, versioned so drift is a commit.
         if (context.Job.Selection.IncludeSecurityReview)
         {
-            var findings = await _securityReader.ReadServerFindingsAsync(
-                context.Connection, context.SqlPassword,
-                context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
-                cancellationToken).ConfigureAwait(false);
-            var review = SecurityReviewWriter.Build($"server {context.Connection.ServerName}", findings);
-            await ApplyItemAsync(
-                ArtifactIdentity("server-security-review"), review, RepositoryLayout.ServerSecurityReviewFile, cancellationToken)
-                .ConfigureAwait(false);
+            await GenerateServerArtifactAsync(
+                "server-security-review", RepositoryLayout.ServerSecurityReviewFile,
+                async () => SecurityReviewWriter.Build(
+                    $"server {context.Connection.ServerName}",
+                    await _securityReader.ReadServerFindingsAsync(
+                        context.Connection, context.SqlPassword,
+                        context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
+                        cancellationToken).ConfigureAwait(false))).ConfigureAwait(false);
+        }
+
+        async Task GenerateServerArtifactAsync(string name, string repositoryFile, Func<Task<string>> read)
+        {
+            var identity = ArtifactIdentity(name);
+            try
+            {
+                var content = await read().ConfigureAwait(false);
+                await ApplyItemAsync(identity, content, repositoryFile, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                context.IncrementFailed();
+                skipped.Add($"{name} — {ex.Message}");
+            }
         }
 
         if (!skipped.IsEmpty)
@@ -2737,9 +2782,16 @@ public sealed class SyncEngine : ISyncEngine
         public void IncrementDeleted() => Interlocked.Increment(ref _deleted);
         public void IncrementFailed() => Interlocked.Increment(ref _failed);
 
-        // Changes are added concurrently by workers; Logs and PendingStates only from single-threaded stages.
+        // Changes are added concurrently by workers; PendingStates only from single-threaded stages.
         private readonly List<ObjectChange> _changes = [];
         private readonly Lock _changesGate = new();
+
+        // Logs were documented as single-threaded and were NOT: ApplyItemAsync runs on N pipeline
+        // workers and reaches DeleteRecordedFile, which logs when a stored path resolves outside the
+        // workspace. An unsynchronised List.Add from several workers tears its size/array growth —
+        // losing entries, or throwing out of List.Add and surfacing as an unexplained run failure.
+        // The hazard was recognised for _changes above and simply missed here.
+        private readonly Lock _logsGate = new();
 
         /// <summary>Records one change. Called concurrently by pipeline workers — a locked List is
         /// far cheaper at VLDB scale than a ConcurrentBag (no per-thread segments, no copy to read).</summary>
@@ -2800,14 +2852,22 @@ public sealed class SyncEngine : ISyncEngine
         /// would outlive the run. Scrubbing at the funnel is what makes "redact at source" true for
         /// this path rather than a convention each new call site has to remember.
         /// </summary>
-        public void Log(SyncLogLevel level, string message, string? detail = null) =>
-            Logs.Add(new SyncRunLog
+        public void Log(SyncLogLevel level, string message, string? detail = null)
+        {
+            var entry = new SyncRunLog
             {
                 RunId = Guid.Empty,
                 Timestamp = DateTimeOffset.UtcNow,
                 Level = level,
                 Message = SecretRedactor.Scrub(message) ?? message,
                 Detail = SecretRedactor.Scrub(detail),
-            });
+            };
+
+            // Scrubbing happens outside the lock; only the append is contended.
+            lock (_logsGate)
+            {
+                Logs.Add(entry);
+            }
+        }
     }
 }

@@ -15,9 +15,24 @@ using Obsync.Shared.Objects;
 namespace Obsync.App.ViewModels;
 
 /// <summary>A database that can be selected for inclusion in a job.</summary>
-public sealed partial class SelectableDatabase(string name) : ObservableObject
+public sealed partial class SelectableDatabase(string name, bool isOnline = true) : ObservableObject
 {
     public string Name { get; } = name;
+
+    /// <summary>
+    /// False for a database that is OFFLINE, RESTORING, RECOVERING or otherwise not accepting
+    /// connections.
+    /// </summary>
+    /// <remarks>
+    /// The probe already returns this and the wizard used to throw it away one line before building
+    /// the checklist, so a database mid-restore was offered identically to a healthy one. Picking it
+    /// produces a run that fails or writes an empty tree — the engine's own offline filter applies
+    /// only to the all-user-databases scope, never to an explicitly chosen list.
+    /// </remarks>
+    public bool IsOnline { get; } = isOnline;
+
+    /// <summary>Checklist label — the name, plus why this one cannot be scripted right now.</summary>
+    public string Display => IsOnline ? Name : $"{Name}   ·   not online";
 
     [ObservableProperty] private bool _isSelected;
 }
@@ -125,6 +140,14 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private int _maxParallelWorkers;
     [ObservableProperty] private int _queryTimeoutSeconds = 120;
     [ObservableProperty] private int _lockTimeoutSeconds;
+
+    /// <summary>
+    /// Total attempts for a network git operation (1 = no retry). Exposed because it was
+    /// import-only: a remote known to fail fast — a blocked TLS policy, a proxy rejecting the
+    /// credentials — was retried three times with backoff on every run and no user could turn it
+    /// down.
+    /// </summary>
+    [ObservableProperty] private int _gitRetryCount = 3;
     [ObservableProperty] private bool _incrementalScripting = true;
 
     /// <summary>Comma-separated schema allow-list; empty = all schemas.</summary>
@@ -588,8 +611,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
         MaxParallelWorkers = job.Advanced.MaxParallelWorkers;
         QueryTimeoutSeconds = job.Advanced.SqlCommandTimeoutSeconds;
         LockTimeoutSeconds = job.Advanced.SqlLockTimeoutSeconds;
+        GitRetryCount = job.Advanced.GitRetryCount;
         IncrementalScripting = job.Advanced.IncrementalScripting;
-        ShowAdvanced = job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0
+        ShowAdvanced = job.Advanced.GitRetryCount != 3
+            || job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0
             || job.Advanced.SqlCommandTimeoutSeconds != 120 || !job.Advanced.IncrementalScripting;
     }
 
@@ -626,7 +651,13 @@ public sealed partial class CreateJobViewModel : ObservableObject
             Databases.Clear();
             foreach (var database in result.Value)
             {
-                Databases.Add(new SelectableDatabase(database.Name) { IsSelected = selected.Contains(database.Name) });
+                Databases.Add(new SelectableDatabase(database.Name, database.IsOnline)
+                {
+                    // An offline database is never auto-selected, even if it was selected before it
+                    // went offline: re-ticking it is one click, and silently keeping a doomed
+                    // selection is how a job starts failing after a restore nobody remembers.
+                    IsSelected = database.IsOnline && selected.Contains(database.Name),
+                });
             }
 
             StatusMessage = $"Found {result.Value.Count} database(s).";
@@ -862,7 +893,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         {
             ReviewItems.Add(new ReviewItem("Run on service startup", "Yes"));
         }
-        if (MaxParallelWorkers != 0 || LockTimeoutSeconds != 0 || QueryTimeoutSeconds != 120 || !IncrementalScripting)
+        if (MaxParallelWorkers != 0 || LockTimeoutSeconds != 0 || QueryTimeoutSeconds != 120 || !IncrementalScripting
+            || GitRetryCount != 3)
         {
             var workers = MaxParallelWorkers == 0 ? "auto" : MaxParallelWorkers.ToString();
             var lockText = LockTimeoutSeconds == 0 ? "server default" : $"{LockTimeoutSeconds}s";
@@ -1009,6 +1041,8 @@ public sealed partial class CreateJobViewModel : ObservableObject
         job.Advanced.MaxParallelWorkers = Math.Max(0, MaxParallelWorkers);
         job.Advanced.SqlCommandTimeoutSeconds = Math.Max(1, QueryTimeoutSeconds);
         job.Advanced.SqlLockTimeoutSeconds = Math.Max(0, LockTimeoutSeconds);
+        // At least one attempt, or the operation would never run at all.
+        job.Advanced.GitRetryCount = Math.Clamp(GitRetryCount, 1, 10);
         job.Advanced.IncrementalScripting = IncrementalScripting;
         job.UpdatedAt = _clock.UtcNow;
         if (!IsEditMode)

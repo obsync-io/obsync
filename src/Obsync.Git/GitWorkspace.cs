@@ -256,11 +256,6 @@ public sealed partial class GitWorkspace : IGitWorkspace
     /// </summary>
     private async Task<Result> CloneFreshAsync(GitWorkspaceContext context, CancellationToken cancellationToken)
     {
-        if (Directory.Exists(context.LocalPath))
-        {
-            DeleteDirectory(context.LocalPath);
-        }
-
         var parent = Path.GetDirectoryName(Path.GetFullPath(context.LocalPath));
         if (!string.IsNullOrEmpty(parent))
         {
@@ -286,7 +281,17 @@ public sealed partial class GitWorkspace : IGitWorkspace
                 "-c", "core.fsyncMethod=batch",
                 context.RemoteUrl, context.LocalPath,
             ],
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            // Per ATTEMPT, not once: a clone that fails partway still leaves a destination behind,
+            // and git refuses to clone into an existing path. Everything here is regenerable — from
+            // the remote and from SQL Server — so deleting it is always safe.
+            beforeAttempt: () =>
+            {
+                if (Directory.Exists(context.LocalPath))
+                {
+                    DeleteDirectory(context.LocalPath);
+                }
+            }).ConfigureAwait(false);
         if (!clone.Success)
         {
             return Result.Failure($"git clone failed: {Summarize(clone.StandardError)}");
@@ -545,8 +550,15 @@ public sealed partial class GitWorkspace : IGitWorkspace
             : Result.Failure($"git push failed: {Summarize(push.StandardError)}");
     }
 
+    /// <param name="beforeAttempt">
+    /// Run before EVERY attempt, including retries. Clone needs this: its destination cleanup used
+    /// to sit above the retry loop, so attempts 2 and 3 ran against whatever attempt 1 had partially
+    /// created and failed with "destination path already exists" — making clone retries strictly
+    /// less reliable than fetch and push retries, which have no such state.
+    /// </param>
     private async Task<GitCommandResult> RunNetworkAsync(
-        string workingDirectory, GitWorkspaceContext context, IReadOnlyList<string> args, CancellationToken cancellationToken)
+        string workingDirectory, GitWorkspaceContext context, IReadOnlyList<string> args,
+        CancellationToken cancellationToken, Action? beforeAttempt = null)
     {
         // Built by GitNetworkEnvironment so this call and the preflight reachability probe are
         // configured identically — same auth scoping, same proxy, same TLS backend. A probe that
@@ -559,6 +571,7 @@ public sealed partial class GitWorkspace : IGitWorkspace
         while (true)
         {
             attempt++;
+            beforeAttempt?.Invoke();
             var result = await _git.RunAsync(workingDirectory, args, environment, cancellationToken).ConfigureAwait(false);
             if (result.Success || attempt >= maxAttempts || !GitTransientErrors.IsTransient(result.StandardError))
             {

@@ -33,7 +33,7 @@ public sealed class SupportInfoServiceTests : IAsyncLifetime, IDisposable
 
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private SupportInfoService NewService(IClock? clock = null)
+    private SupportInfoService NewService(IClock? clock = null, ISchedulerHealthService? schedulerHealth = null)
     {
         var diagnostics = Substitute.For<IDiagnosticsService>();
         diagnostics.GetGitVersionAsync(Arg.Any<CancellationToken>()).Returns("git version 2.45.0 — from PATH");
@@ -41,7 +41,17 @@ public sealed class SupportInfoServiceTests : IAsyncLifetime, IDisposable
             _provider.GetRequiredService<IAppSettingsRepository>(),
             _provider.GetRequiredService<IDbConnectionFactory>(),
             diagnostics,
-            clock ?? SystemClock.Instance);
+            clock ?? SystemClock.Instance,
+            schedulerHealth ?? NotInstalled());
+    }
+
+    /// <summary>The default fallback verdict for tests that are not about the service's state.</summary>
+    private static ISchedulerHealthService NotInstalled()
+    {
+        var health = Substitute.For<ISchedulerHealthService>();
+        health.GetAsync(Arg.Any<CancellationToken>())
+            .Returns(new SchedulerHealth(SchedulerHealthStatus.NotInstalled, "not installed"));
+        return health;
     }
 
     [Fact]
@@ -61,11 +71,43 @@ public sealed class SupportInfoServiceTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
-    public async Task GetAsync_ReportsNotRunning_WithoutAFreshHeartbeat()
+    public async Task GetAsync_WithoutAFreshHeartbeat_ReportsWhatTheSchedulerCheckActuallyFound()
     {
+        // Was "not running" flat, for every case. Freshness is judged from THIS user's database, so
+        // the absence of a heartbeat says nothing about the service — only that it is not
+        // heartbeating HERE.
         var rows = await NewService().GetAsync();
 
-        Assert.Equal("not running", rows.Single(r => r.Key == "Windows Service").Value);
+        Assert.Equal("not installed", rows.Single(r => r.Key == "Windows Service").Value);
+    }
+
+    [Fact]
+    public async Task GetAsync_AServiceRunningUnderAnotherAccount_IsNotReportedAsNotRunning()
+    {
+        // The case support hits most, and the one the old text was worst at: the service IS running,
+        // under another account, heartbeating into that account's database. Reporting "not running"
+        // sent the engineer after a service-start fault instead of a logon-account one.
+        var health = Substitute.For<ISchedulerHealthService>();
+        health.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.NotExecutingYourJobs, "wrong account", @"NT AUTHORITY\SYSTEM"));
+
+        var rows = await NewService(schedulerHealth: health).GetAsync();
+
+        var value = rows.Single(r => r.Key == "Windows Service").Value;
+        Assert.Contains(@"NT AUTHORITY\SYSTEM", value);
+        Assert.DoesNotContain("not running", value);
+    }
+
+    [Fact]
+    public async Task GetAsync_AStoppedService_SaysSo()
+    {
+        var health = Substitute.For<ISchedulerHealthService>();
+        health.GetAsync(Arg.Any<CancellationToken>()).Returns(
+            new SchedulerHealth(SchedulerHealthStatus.NotRunning, "stopped", @"ACME\svc"));
+
+        var rows = await NewService(schedulerHealth: health).GetAsync();
+
+        Assert.Equal("installed, not running", rows.Single(r => r.Key == "Windows Service").Value);
     }
 
     [Fact]
