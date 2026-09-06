@@ -1,5 +1,6 @@
 using System.ServiceProcess;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Obsync.Engine.DependencyInjection;
@@ -36,6 +37,14 @@ IHost? host = null;
 
 try
 {
+    // Before anything else, and before a single Obsync type is touched: refuse to run on a
+    // half-applied upgrade. Thrown rather than exited so it takes the reporting path below, which
+    // is what gets it into the Windows event log.
+    if (BuildIntegrity.DescribeMismatch() is { } mismatch)
+    {
+        throw new InvalidOperationException(mismatch);
+    }
+
     ObsyncPaths.EnsureCreated();
 
     // Now that the log directory exists, swap in the full logger with the rolling file sink.
@@ -64,9 +73,23 @@ try
 
     builder.Services.AddWindowsService(options => options.ServiceName = "Obsync");
 
+    // AddWindowsService registers WindowsServiceLifetime, whose stop reports SERVICE_STOPPED when
+    // its budget expires whether or not the host actually drained, and which asks the SCM for zero
+    // time while doing so. An MSI upgrade stops this service and then immediately overwrites its
+    // files, so both are load-bearing — see ObsyncWindowsServiceLifetime. Registered only when
+    // genuinely running as a service; a console/dev run keeps ConsoleLifetime.
+    if (WindowsServiceHelpers.IsWindowsService())
+    {
+        builder.Services.UseObsyncWindowsServiceLifetime();
+    }
+
     // The 30s default has to cover the in-flight run drain AND Quartz's WaitForJobsToComplete, and
     // the drain alone could consume all of it. One budget shared by every hosted service, so it is
     // set here rather than being divided up implicitly by stop order.
+    //
+    // A budget only means something if the caller waiting on it knows about it: ObsyncWindowsServiceLifetime
+    // heartbeats this to the SCM while stopping, and terminates the process if it is exceeded, so
+    // this value is now an honest promise rather than a private hope.
     builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(90));
     builder.Services.AddSerilog();
 
@@ -78,15 +101,8 @@ try
     builder.Services.AddObsyncScheduler();
 
     builder.Services.AddQuartz();
-    builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
-    // Registered AFTER the Quartz hosted service on purpose: hosted services stop in reverse
-    // registration order, so this cancels in-flight runs BEFORE Quartz waits for them.
-    builder.Services.AddHostedService<RunCancellationOnStopService>();
-    builder.Services.AddHostedService<JobSchedulingBootstrapper>();
-    // Keeps the live schedule in sync with the database so app changes apply without a restart.
-    builder.Services.AddHostedService<JobReconciliationService>();
-    // Prunes run history per the retention setting (startup + daily).
-    builder.Services.AddHostedService<RunRetentionService>();
+    // Order matters and is asserted by tests — see ObsyncHostedServices.
+    builder.Services.AddObsyncHostedServices();
 
     // RunAsync is deliberately expanded here. It disposes the host in its own finally, and
     // disposing the host disposes WindowsServiceLifetime — a ServiceBase, which reports

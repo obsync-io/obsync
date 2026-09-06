@@ -135,6 +135,26 @@ older version in place (same or different folder — settings, jobs, and credent
 install folder and are untouched). Installing an *older* version over a newer one is blocked with
 "A newer version of Obsync is already installed."
 
+**Before upgrading, close two things:**
+
+- **The Obsync window.** The app, the service and the CLI share one folder of libraries, so a
+  running app keeps files open that the upgrade needs to replace. The installer will offer to close
+  it for you; let it. If you answer *"Do not close applications"* instead, Windows defers those
+  files to the next restart while the new service binary is installed immediately — the service
+  would then be running against the previous version's libraries. It detects this and refuses to
+  start, logging *"This installation is only half upgraded"* to the Application event log; restart
+  the computer to finish. Scheduled runs do not happen until you do.
+- **`services.msc`, Server Manager, and anything else showing the service list.** Each holds an open
+  handle to the `Obsync` service. The upgrade deletes and re-creates the service, and an open handle
+  keeps the delete pending, so re-creating it fails with `ERROR_SERVICE_MARKED_FOR_DELETE` (1072).
+  Windows Installer reports that as **error 1923, "Verify that you have sufficient privileges to
+  install system services"**, which is misleading — it is not a permissions problem. The upgrade
+  rolls back cleanly; close the console and run it again.
+
+A sync that is running when the upgrade starts is cancelled and recorded as such. It is **not**
+re-run automatically afterwards — the schedule moves on to the next occurrence — so upgrade outside
+your maintenance window, or trigger the job manually once the upgrade finishes.
+
 **Service account on upgrade:** the account the service is *currently* configured with is used as
 the default, so an upgrade never silently resets a working service to Local System. It is read from
 the service itself (`HKLM\SYSTEM\CurrentControlSet\Services\Obsync\ObjectName`), falling back to the
@@ -148,13 +168,33 @@ Windows cannot remember the *password*, so:
 - **Interactive upgrade** — the Service Account page opens preselected with the current account;
   re-enter the password. The wizard will not let you continue with a blank one unless the account is
   a kind that logs on without a password (gMSA, `NT SERVICE\...`, `NT AUTHORITY\...`).
-- **Silent upgrade** of a password-logon service — pass `SERVICE_PASSWORD="..."` again (the account
-  is remembered; without the password the service is reconfigured but cannot start, and the app's
-  scheduler warning says so). gMSA and Local System silent upgrades need nothing extra.
-  A silent install that passes `SERVICE_ACCOUNT` **without** `SERVICE_PASSWORD` is now refused
-  outright, rather than installing a service that can never log on and reporting success. Accounts
-  that legitimately log on without a password — gMSA, `NT SERVICE\...`, `NT AUTHORITY\...`, Local
-  System — are exempt.
+- **Silent upgrade** of a password-logon service — you **must** pass `SERVICE_PASSWORD="..."` again:
+
+  ```powershell
+  msiexec /i Obsync-<version>-win-x64.msi /qn `
+      SERVICE_ACCOUNT="DOMAIN\svc_obsync" SERVICE_PASSWORD="..." /l*v upgrade.log
+  ```
+
+  The account is remembered, but the password cannot be, and an upgrade *re-creates* the service
+  rather than reconfiguring it — so without a password it would be installed unable to log on
+  (error 1069). Rather than do that and report success, the upgrade is **refused**: msiexec exits
+  **1603** and the reason is written to the Application event log as MsiInstaller event **10005**,
+  so it is readable without `/l*v`. Nothing is changed; the existing installation keeps running.
+
+  gMSA, `NT SERVICE\...`, `NT AUTHORITY\...` and Local System log on without a password and need
+  nothing extra. Neither does **uninstall** (`/x`) or **repair** (`/fa`), silent or not — a repair
+  reconfigures the existing service, which leaves its stored password alone.
+
+  > **Deploying with SCCM or Intune:** these run as SYSTEM at `/qn`, so the password has to be in
+  > the deployment command line for a password-account fleet. If that is unacceptable, run those
+  > machines on a **gMSA** instead (`SERVICE_ACCOUNT="DOMAIN\name$"`, no password) — it is the
+  > configuration this refusal is designed to push you towards. Note that secrets are stored per
+  > Windows account, so a gMSA's vault must be populated separately with `obsync credential set`.
+
+  > **Upgrading *from* 0.11.0 or 0.11.1 with a password account:** those two builds shipped a guard
+  > that also fires during their own removal, which may block an unattended upgrade regardless of
+  > what you pass. Upgrade those machines interactively, or uninstall interactively first. Every
+  > version from 0.12.0 onwards is unaffected.
 
 ## What the service does
 

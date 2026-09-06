@@ -82,12 +82,45 @@
          installed a service that can never log on, while reporting success. Silent installs are how
          this product reaches fleets, so the failure arrived at scale with nothing to read.
 
-         Gated on UILevel so it only fires where the dialog cannot run (2 = none, 3 = basic;
-         4 = reduced and 5 = full both get the dialog). Same allow-list of passwordless principals as
-         the dialog: a gMSA ends in "$", and the NT AUTHORITY / NT SERVICE built-ins take a null
-         password by design. -->
-    <Launch Condition="UILevel &gt;= 4 OR NOT SERVICE_ACCOUNT OR SERVICE_PASSWORD OR (SERVICE_ACCOUNT &gt;&gt; &quot;$&quot;) OR (SERVICE_ACCOUNT ~= &quot;LocalSystem&quot;) OR (SERVICE_ACCOUNT ~= &quot;LocalService&quot;) OR (SERVICE_ACCOUNT ~= &quot;NetworkService&quot;) OR (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT AUTHORITY\&quot;) OR (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT SERVICE\&quot;)"
-            Message="SERVICE_ACCOUNT was given without SERVICE_PASSWORD. The Obsync service would install but could not log on (error 1069). Pass SERVICE_PASSWORD, or omit SERVICE_ACCOUNT to use LocalSystem and set the account later." />
+         Gated on UILevel so it only fires where the Service Account dialog cannot run. The boundary
+         is 5, not 4: INSTALLUILEVEL_REDUCED (4, `msiexec /qr`) is "authored UI with the WIZARD
+         DIALOGS SUPPRESSED", so /qr never shows the dialog and needs the guard exactly as much as
+         /qn does. Exempting 4 let /qr install a service that could never log on — the precise
+         failure this condition exists to prevent.
+
+         The leading `Installed` term is load-bearing, and its absence made this guard far more
+         destructive than the bug it fixed. Two facts combine:
+
+           * LaunchConditions runs at sequence 100, but AppSearch is at 50 and SetSERVICE_ACCOUNT at
+             52 (verified in the built MSI, not assumed — WiX does not use the SDK's suggested
+             AppSearch-after-LaunchConditions ordering). So by the time this is evaluated,
+             SERVICE_ACCOUNT has ALREADY been filled in from the RegistrySearch chain below. The
+             condition cannot distinguish an account the operator passed from one the installer just
+             read out of the SCM, so `NOT SERVICE_ACCOUNT` does not mean "none was supplied".
+           * LaunchConditions and AppSearch both carry an EMPTY sequence condition, so they run on
+             every transaction — uninstall and repair included, where DeleteServices has not run yet
+             and the search still finds the live account.
+
+         Together those made `msiexec /x ... /qn`, `msiexec /fa ... /qn`, and MSI self-repair (which
+         the advertised Start Menu shortcut triggers at UILevel 3) all fail 1603 on any install using
+         a password account — a product that cannot be uninstalled unattended breaks SCCM
+         supersedence and Intune retirement, and no password is even needed to uninstall.
+
+         `Installed` is true for maintenance and uninstall of THIS product and false for a first
+         install and for a major upgrade (the upgrade runs under a new ProductCode). That is exactly
+         the line we want, because it tracks whether the service is RE-CREATED:
+           * repair/maintenance reconfigures the existing service, and ChangeServiceConfig with a
+             null password leaves the stored password alone, so no password is needed;
+           * a major upgrade deletes and re-creates it (RemoveExistingProducts at 1401), so the
+             password genuinely cannot be recovered and must be re-supplied.
+         The upgrade case therefore still blocks, deliberately: refusing loudly beats installing a
+         service that cannot log on. INSTALL.md documents it as a hard requirement of unattended
+         upgrades.
+
+         Same allow-list of passwordless principals as the dialog: a gMSA ends in "$", and the
+         NT AUTHORITY / NT SERVICE built-ins take a null password by design. -->
+    <Launch Condition="Installed OR UILevel &gt;= 5 OR NOT SERVICE_ACCOUNT OR SERVICE_PASSWORD OR (SERVICE_ACCOUNT &gt;&gt; &quot;$&quot;) OR (SERVICE_ACCOUNT ~= &quot;LocalSystem&quot;) OR (SERVICE_ACCOUNT ~= &quot;LocalService&quot;) OR (SERVICE_ACCOUNT ~= &quot;NetworkService&quot;) OR (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT AUTHORITY\&quot;) OR (SERVICE_ACCOUNT ~&lt;&lt; &quot;NT SERVICE\&quot;)"
+            Message="The Obsync service is set to log on as [SERVICE_ACCOUNT], but SERVICE_PASSWORD was not supplied. Windows cannot hand an existing service's password back to an installer, and an upgrade re-creates the service — so it would be installed unable to log on (error 1069). Re-run with SERVICE_PASSWORD=&quot;...&quot; for that account, or with SERVICE_ACCOUNT=&quot;LocalSystem&quot; to install without scheduled runs and set the account afterwards." />
 
     <Property Id="SERVICE_ACCOUNT" Secure="yes" />
     <Property Id="SERVICE_PASSWORD" Secure="yes" Hidden="yes" />

@@ -21,9 +21,24 @@ public partial class App : Application
     public static IServiceProvider Services => ((App)Current)._host?.Services
         ?? throw new InvalidOperationException("The application host is not initialized.");
 
+    /// <summary>
+    /// True once Windows has told us the session is ending — a logoff or restart, or an installer's
+    /// Restart Manager asking us to close so it can replace the files we have open. Read by
+    /// <see cref="MainWindow.OnClosing"/> to suppress a confirmation nobody is present to answer.
+    /// </summary>
+    public static bool IsSessionEnding { get; private set; }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Never cancels: refusing a session end makes an upgrade fall back to replacing our files
+        // on the next reboot, which is strictly worse than losing an in-flight run we can recover.
+        SessionEnding += (_, args) =>
+        {
+            IsSessionEnding = true;
+            Log.Information("Session ending ({Reason}); closing without prompting.", args.ReasonSessionEnding);
+        };
 
         // Failures on background threads never reach DispatcherUnhandledException; log them so a
         // crash outside the UI thread is diagnosable. No dialogs here — these can fire off the UI

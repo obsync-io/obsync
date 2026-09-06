@@ -25,8 +25,13 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(CancelEventArgs e)
     {
-        // Closing the app kills any in-flight run with it — make that interruption an explicit choice.
-        if (App.Services.GetRequiredService<IJobRunCoordinator>().HasActiveRuns
+        // Closing the app kills any in-flight run with it — make that interruption an explicit
+        // choice, but only when someone is actually there to make it. On a session end (a logoff,
+        // a restart, or an installer's Restart Manager asking us to close so it can replace our
+        // files) this must not block: see AppShutdown.
+        if (AppShutdown.ShouldConfirmClose(
+                App.Services.GetRequiredService<IJobRunCoordinator>().HasActiveRuns,
+                App.IsSessionEnding)
             && !AppDialog.Confirm(this, "Obsync",
                 "A sync is still running. Close anyway? The run will be interrupted and marked failed.",
                 confirmText: "Close anyway", destructive: true))

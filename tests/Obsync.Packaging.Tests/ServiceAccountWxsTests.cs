@@ -248,4 +248,55 @@ public sealed class ServiceAccountWxsTests
         Assert.Contains("LocalSystem", condition);
         Assert.Contains("1069", (string?)launch.Attribute("Message") ?? string.Empty);
     }
+
+    [Fact]
+    public void TheSilentGuard_ExemptsMaintenanceAndUninstall()
+    {
+        // The guard reads SERVICE_ACCOUNT, but it does NOT get to see only what the operator typed:
+        // AppSearch is at sequence 50 and SetSERVICE_ACCOUNT at 52, while LaunchConditions is at
+        // 100, so by evaluation time the property has already been filled in from the SCM by the
+        // RegistrySearch chain. Both AppSearch and LaunchConditions also carry an EMPTY sequence
+        // condition, so they run on every transaction — uninstall and repair included, where the
+        // service still exists and the search still finds its account.
+        //
+        // Without an `Installed` term that turned `msiexec /x ... /qn`, `msiexec /fa ... /qn` and
+        // MSI self-repair (which the advertised shortcut triggers at UILevel 3) into 1603 failures
+        // for every install using a password account. A product that cannot be uninstalled
+        // unattended cannot be retired by SCCM or Intune, and uninstalling needs no password at all.
+        //
+        // `Installed` is false for a first install and for a major upgrade (new ProductCode) and
+        // true for maintenance and uninstall — which is exactly the line between "the service is
+        // re-created, so the password is genuinely needed" and "it is reconfigured, and
+        // ChangeServiceConfig keeps the stored password".
+        var condition = (string?)Assert.Single(Elements("Launch")).Attribute("Condition") ?? string.Empty;
+
+        Assert.StartsWith("Installed OR ", condition, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheSilentGuard_AppliesToReducedUiWhichShowsNoWizard()
+    {
+        // INSTALLUILEVEL_REDUCED (4, `msiexec /qr`) is "authored UI with the WIZARD DIALOGS
+        // SUPPRESSED" — the Service Account dialog never runs there, so /qr needs this guard just
+        // as much as /qn does. Exempting >= 4 let /qr install a service that could never log on:
+        // precisely the failure the condition exists to prevent. Only full UI (5) can be exempt.
+        var condition = (string?)Assert.Single(Elements("Launch")).Attribute("Condition") ?? string.Empty;
+
+        Assert.Contains("UILevel >= 5", condition);
+        Assert.DoesNotContain("UILevel >= 4", condition);
+    }
+
+    [Fact]
+    public void TheSilentGuardsMessage_NamesTheAccountAndTheUpgradeCase()
+    {
+        // The operator sees this string and nothing else — under /qn it reaches them as MsiInstaller
+        // event 10005 with no other context. It has to say which account is affected and why an
+        // upgrade cannot reuse the password it already had.
+        var message = (string?)Assert.Single(Elements("Launch")).Attribute("Message") ?? string.Empty;
+
+        Assert.Contains("[SERVICE_ACCOUNT]", message);
+        Assert.Contains("SERVICE_PASSWORD", message);
+        Assert.Contains("upgrade", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LocalSystem", message);
+    }
 }
