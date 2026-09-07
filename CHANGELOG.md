@@ -2,6 +2,88 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.11.4 - 2026-09-06
+
+**Telling the truth about GitHub.** Every fix here came out of one real deployment, in order, as each
+one uncovered the next. Two are correctness bugs; the rest are the product describing what happened
+instead of guessing.
+
+Test suite: 1,321 → 1,365.
+
+### Fixed — a pull request that existed was reported as failed
+
+The serious one. `client.PullRequest.Create` — a POST — was wrapped in a retry helper that treats a
+transport error as transient. A request reached GitHub and **created the pull request**, the TLS
+connection dropped before its response returned, the helper retried, and the run finished by
+reporting that the pull request could not be opened. It was open on GitHub the whole time.
+
+The cost was not only the wrong message. The engine marks a run's objects as delivered only when
+that call succeeds, so a false failure left the state un-advanced — and the next run would cut a
+fresh timestamped head branch and open a **second** pull request for the same content, once per run,
+until somebody noticed.
+
+A client cannot distinguish "the request never arrived" from "the request was applied and the reply
+was lost", so it no longer tries: on any failure it asks GitHub whether an open pull request now
+exists for this head and base, before retrying and before giving up. Finding one is proof the work
+landed. That also covers GitHub's 422 for a duplicate, which is the same situation from the other
+side. Reconciliation is skipped for outcomes that cannot be ambiguous — a rejected token creates
+nothing — and an empty result from the server-side `head` filter is not taken as proof, because that
+filter is documented only as `user:ref-name` while these head branches contain slashes; it re-asks
+without the filter and matches locally.
+
+### Fixed — a push GitHub refused for policy reasons
+
+- **`GH013` was not handled at all.** The engine understood `GH006` (classic branch protection) and
+  `GH001` (file size), but not the code GitHub emits for **rulesets** — its current branch-policy
+  mechanism, where classic protection is the legacy one. The modern and more common case fell
+  through with no guidance, though the product already knew how to say "switch to Pull request mode"
+  for the legacy one. It is now recognised, and quotes the violated rules: GitHub prints them as
+  bullets under the code, and those bullets are the only part that says what to do.
+- **The arm below it matched the bare word "rejected".** git prints `! [remote rejected]` for every
+  server-side refusal, so any rejection without its own explicit arm was diagnosed as *"the remote
+  branch has commits Obsync does not have — pull/merge the branch"*, sending the user to fix a branch
+  that was perfectly up to date. The match is now limited to phrases that genuinely mean the branch
+  is behind, and an unrecognised refusal says so plainly instead of guessing.
+- **Preflight looked for the wrong mechanism.** The branch check read the branch object's `protected`
+  flag — chosen because the classic protection endpoint needs admin — but that flag was built for the
+  classic system, and a boolean could never name *which* rule applies. A check that exists to prevent
+  exactly this surprise could not see it. It now asks `GET /repos/{owner}/{repo}/rules/branches/{branch}`
+  first, which needs no admin and covers organisation-level rulesets as well as repository ones, and
+  it names the rule. The classic flag remains as a fallback.
+- git's stderr was truncated at 500 characters — enough to lose the bullets that say what to do. Now
+  2,000, still bounded because the text is persisted into run history, reports and support bundles.
+
+### Fixed — "see inner exception", and the code that never did
+
+Every `HttpRequestException` catch in the GitHub client reported `ex.Message` and nothing else. For a
+TLS failure .NET puts the stage in the outer message and the **cause** one level down, so the product
+was reliably printing the half that says nothing — including the sentence whose own last three words
+are an instruction to look further.
+
+The chain is now flattened, deduplicated and capped, and a new explainer covers the .NET-shaped
+causes: an untrusted chain, an expired certificate (which points at the system clock, not at a
+corporate root), a hostname mismatch, a blocked revocation check, a proxy 407, DNS, a refused
+connection. It is deliberately separate from git's explainer, whose advice — *"set the TLS backend,
+or supply your CA bundle, in Settings → Network"* — cannot work here: git reaches `github.com` over
+MinGit with a configurable backend, while the REST client reaches `api.github.com` over .NET, always
+schannel, always the Windows certificate store. The new messages say so.
+
+The engine now also states what only it can state as fact: that the branch reached GitHub. The push
+returned success moments earlier, so "could not reach GitHub" would otherwise read as a total outage.
+It names the pushed branch too, because each attempt cuts a new one and nothing else reported which
+were left without a pull request.
+
+### Internal
+
+- The retry helper carries an explicit warning that it is only safe for idempotent calls — and that
+  invariant is now asserted by a test that parses the source, because the remark asserting it was
+  already false when written: a second POST was still flowing through it.
+- Two review passes over the pull-request fix found three bugs in it, all corrected here: its own
+  lookup had reproduced the cancellation-versus-timeout mistake the fix was written to correct; the
+  policy documented a precondition instead of enforcing it, leaving a throwing lookup able to destroy
+  the original failure; and the test claiming to cover that passed a lookup returning null rather
+  than one that throws, making it a duplicate of its neighbour.
+
 ## 0.11.3 - 2026-09-06
 
 **Uninstall hardening**, from a four-agent review of the removal path — and a correction to 0.11.2.
