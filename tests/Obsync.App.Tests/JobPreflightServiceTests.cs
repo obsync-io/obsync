@@ -71,6 +71,12 @@ public sealed class JobPreflightServiceTests
         // "protected" would turn every healthy-path assertion into a warning.
         _gitHub.IsBranchProtectedAsync("tok", "o", "r", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Result.Success(false));
+
+        // No ruleset by default, for the same reason. This must be stubbed explicitly: NSubstitute
+        // returns null for an unconfigured method whose return type is a concrete class, and a null
+        // Result is not a shape any real implementation can produce.
+        _gitHub.GetBranchRulesAsync("tok", "o", "r", Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Success<IReadOnlyList<string>>([]));
     }
 
     private void NoOtherJobs() =>
@@ -196,6 +202,63 @@ public sealed class JobPreflightServiceTests
         Assert.Equal(DiagnosticStatus.Warning, branch.Status);
         Assert.Contains("PROTECTED", branch.Detail);
         Assert.Contains("signed commits", branch.Detail);
+    }
+
+    [Fact]
+    public async Task ARuleset_IsWarnedAbout_EvenWhenTheClassicProtectionFlagIsFalse()
+    {
+        // The gap that let a job pass preflight and then die on the push. Rulesets are GitHub's
+        // current mechanism and reject with GH013; classic branch protection is the legacy one and
+        // rejects with GH006. This check only ever read the branch object's `protected` flag, which
+        // was built for the legacy system.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitHub.IsBranchProtectedAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Success(false));
+        _gitHub.GetBranchRulesAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Success<IReadOnlyList<string>>(["pull_request"]));
+
+        var branch = Single(await Build().RunAsync(GitRequest()), "Branch 'main'");
+
+        Assert.Equal(DiagnosticStatus.Warning, branch.Status);
+        Assert.Contains("GH013", branch.Detail);
+        // Naming the rule is the point — a boolean could never have done this.
+        Assert.Contains("pull request", branch.Detail);
+    }
+
+    [Fact]
+    public async Task AFailedRulesetLookup_FallsBackToTheClassicCheck()
+    {
+        // One endpoint being unavailable must not silently downgrade the check to nothing.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitHub.GetBranchRulesAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Failure<IReadOnlyList<string>>("GitHub error: 404"));
+        _gitHub.IsBranchProtectedAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Success(true));
+
+        var branch = Single(await Build().RunAsync(GitRequest()), "Branch 'main'");
+
+        Assert.Equal(DiagnosticStatus.Warning, branch.Status);
+        Assert.Contains("PROTECTED", branch.Detail);
+    }
+
+    [Fact]
+    public async Task ARuleset_IsIgnoredInPullRequestMode()
+    {
+        // PR mode pushes to its own head branch and merges through review, which is exactly what a
+        // pull-request rule is asking for.
+        SqlSucceeds();
+        GitHubSucceeds(branches: "main");
+        NoOtherJobs();
+        _gitHub.GetBranchRulesAsync("tok", "o", "r", "main", Arg.Any<CancellationToken>())
+            .Returns(Result.Success<IReadOnlyList<string>>(["pull_request"]));
+
+        var branch = Single(await Build().RunAsync(GitRequest(CommitMode.PullRequest)), "Branch 'main'");
+
+        Assert.Equal(DiagnosticStatus.Pass, branch.Status);
     }
 
     [Fact]

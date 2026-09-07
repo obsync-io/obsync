@@ -2241,7 +2241,7 @@ public sealed class SyncEngine : ISyncEngine
             run.CommitUrl = null;
             // The banner/toast show ErrorMessage — give them the explained, actionable reason;
             // the raw git stderr stays available in the log entry's technical details.
-            var reason = ExplainPushFailure(push.Error);
+            var reason = PushFailureDiagnosis.Explain(push.Error);
             run.ErrorMessage = $"The commit was created locally but the push to GitHub failed. {reason}";
             context.Log(SyncLogLevel.Warning, run.ErrorMessage, push.Error);
         }
@@ -2250,51 +2250,6 @@ public sealed class SyncEngine : ISyncEngine
             run.Status = RunStatus.Succeeded;
             context.Log(SyncLogLevel.Info, "Pushed to GitHub.");
         }
-    }
-
-    // Turns raw git push stderr into a short, actionable reason for the user-facing log line.
-    private static string ExplainPushFailure(string? error)
-    {
-        var text = (error ?? string.Empty).ToLowerInvariant();
-        if (text.Contains("permission") || text.Contains("403") || text.Contains("forbidden"))
-        {
-            return "GitHub denied the push — the access token needs write (Contents) permission on this repository.";
-        }
-
-        if (text.Contains("authentication failed") || text.Contains("could not read username")
-            || text.Contains("401") || text.Contains("invalid username or password"))
-        {
-            return "GitHub rejected the credentials — check the repository's access token is valid and not expired.";
-        }
-
-        if (text.Contains("protected branch") || text.Contains("gh006"))
-        {
-            return "The branch is protected — GitHub blocks direct pushes to it. Switch the job to " +
-                   "Pull request mode, or allow this token's account to push to the branch.";
-        }
-
-        if (text.Contains("gh001") || text.Contains("exceeds github's file size limit"))
-        {
-            return "GitHub rejected a file over its 100 MB limit. Remove the oversized file from the " +
-                   "workspace branch (or reduce the job's reference-data scope), then re-run.";
-        }
-
-        if (text.Contains("non-fast-forward") || text.Contains("fetch first") || text.Contains("rejected"))
-        {
-            return "The remote branch has commits Obsync does not have — pull/merge the branch, then re-run.";
-        }
-
-        // Transport-level causes (TLS trust, blocked revocation, proxy 407, DNS, connectivity) are
-        // shared with the preflight reachability probe, so both surfaces name the same cause the
-        // same way — and they must be consulted BEFORE any catch-all, because git reports all of
-        // them behind one "fatal: unable to access …" line.
-        if (GitTransportDiagnosis.TryExplain(error) is { } transport)
-        {
-            return transport;
-        }
-
-        var firstLine = (error ?? string.Empty).Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        return string.IsNullOrWhiteSpace(firstLine) ? "See technical details for the git error." : firstLine.Trim();
     }
 
     // A successful run that skipped one or more objects is a partial success — surface it as a warning.

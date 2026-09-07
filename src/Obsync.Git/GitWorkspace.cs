@@ -592,9 +592,19 @@ public sealed partial class GitWorkspace : IGitWorkspace
     /// strips URL userinfo before echoing it, but that is git's choice, not a guarantee this code can
     /// make: the scrub is what makes it one. Internal for tests.
     /// </summary>
+    /// <summary>
+    /// How much of git's stderr survives. 500 was too tight for the message that matters most: a
+    /// GitHub rule rejection prints the code first, then the URL, then one bullet per violated rule,
+    /// and the bullets are the only part that says what to do about it. Truncating mid-way left the
+    /// diagnosis dependent on how verbose GitHub happened to be — and dropped the actionable half.
+    /// Still bounded, because this text is persisted (runs.error_message, run logs, reports, support
+    /// bundles) and an unbounded error would be copied into all of them.
+    /// </summary>
+    private const int MaxSummaryLength = 2000;
+
     internal static string Summarize(string error)
     {
         var redacted = SecretRedactor.Scrub(error.Trim()) ?? string.Empty;
-        return redacted.Length <= 500 ? redacted : redacted[..500] + "…";
+        return redacted.Length <= MaxSummaryLength ? redacted : redacted[..MaxSummaryLength] + "…";
     }
 }

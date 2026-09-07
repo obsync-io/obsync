@@ -241,12 +241,33 @@ public sealed class JobPreflightService : IJobPreflightService
             return Result(name, DiagnosticStatus.Pass, exists);
         }
 
+        // Rulesets FIRST. They are GitHub's current mechanism and classic branch protection is the
+        // legacy one; they reject with GH013 and GH006 respectively. This check previously looked
+        // only at the branch object's `protected` flag, which was designed for the classic system —
+        // so a repository governed by a ruleset passed preflight and the run then died on the push.
+        // The rules endpoint also names the rule, which a boolean never could.
+        var rules = await _gitHub.GetBranchRulesAsync(
+            token, request.Repository!.Owner, request.Repository.RepositoryName, request.Branch, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (rules.IsSuccess && rules.Value.Count > 0)
+        {
+            return Result(name, DiagnosticStatus.Warning,
+                $"The branch exists but a repository RULESET applies to it ({DescribeRules(rules.Value)}). Direct "
+                + "commits are rejected with GitHub error GH013 even though the token has write permission — rules "
+                + "are evaluated separately from permissions. Switch the job to Pull request mode, or ask a "
+                + "repository administrator for a bypass. Note that a 'required signatures' rule will always reject "
+                + "Obsync: its commits are deliberately unsigned.");
+        }
+
         var protection = await _gitHub.IsBranchProtectedAsync(
             token, request.Repository!.Owner, request.Repository.RepositoryName, request.Branch, cancellationToken)
             .ConfigureAwait(false);
 
         // A failed lookup is not evidence of protection — say the branch exists and leave it there
-        // rather than inventing a warning from a network blip.
+        // rather than inventing a warning from a network blip. The same applies to the ruleset
+        // lookup above: if it failed, this is still consulted, so one endpoint being unavailable
+        // never silently downgrades the check to nothing.
         if (protection.IsFailure || !protection.Value)
         {
             return Result(name, DiagnosticStatus.Pass, exists);
@@ -258,6 +279,24 @@ public sealed class JobPreflightService : IJobPreflightService
             + "mode, or allow this account to push to the branch. Note that a 'require signed commits' rule will "
             + "always reject Obsync: its commits are deliberately unsigned.");
     }
+
+    /// <summary>
+    /// Renders GitHub's rule type names as something a person reads, keeping the raw name for
+    /// anything this build has not seen — a new rule type must still be reported, not swallowed.
+    /// </summary>
+    internal static string DescribeRules(IReadOnlyList<string> ruleTypes) =>
+        string.Join(", ", ruleTypes.Select(t => t switch
+        {
+            "pull_request" => "changes must go through a pull request",
+            "required_status_checks" => "status checks must pass",
+            "required_signatures" => "commits must be signed",
+            "required_linear_history" => "linear history required",
+            "non_fast_forward" => "force pushes blocked",
+            "update" => "branch updates restricted",
+            "creation" => "branch creation restricted",
+            "deletion" => "branch deletion restricted",
+            _ => t,
+        }));
 
     /// <summary>
     /// Proves that GIT can reach and authenticate to the repository — with the bundled binary, the

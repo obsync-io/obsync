@@ -56,6 +56,25 @@ public interface IGitHubService
         string token, string owner, string name, string branch, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The active repository-ruleset rules that apply to <paramref name="branch"/>, by rule type
+    /// (e.g. <c>pull_request</c>, <c>required_status_checks</c>). Empty when none apply.
+    /// </summary>
+    /// <remarks>
+    /// Rulesets are GitHub's current branch-policy mechanism and are a different system from classic
+    /// branch protection, with a different error code: a ruleset rejection is <c>GH013</c>, classic
+    /// protection is <c>GH006</c>. <see cref="IsBranchProtectedAsync"/> reads the branch object's
+    /// <c>protected</c> flag, which was built for the classic system and in any case cannot say
+    /// WHICH rule applies — so it can neither reliably detect a ruleset nor explain one.
+    /// <para>
+    /// Unlike the classic protection endpoint (which requires admin and 403s for the ordinary write
+    /// token this product is designed around), <c>GET /repos/{owner}/{repo}/rules/branches/{branch}</c>
+    /// returns the rules that apply to a branch for any caller that can read the repository.
+    /// </para>
+    /// </remarks>
+    Task<Result<IReadOnlyList<string>>> GetBranchRulesAsync(
+        string token, string owner, string name, string branch, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Opens a pull request from <paramref name="headBranch"/> into <paramref name="baseBranch"/> and,
     /// if <paramref name="reviewers"/> is non-empty, requests them (best-effort). A failed
     /// <see cref="Result"/> means the PR itself could not be opened (e.g. missing PR permission).
@@ -198,6 +217,61 @@ public sealed class GitHubService : IGitHubService
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             return Result.Failure<bool>("The request to GitHub timed out.");
+        }
+    }
+
+    public async Task<Result<IReadOnlyList<string>>> GetBranchRulesAsync(
+        string token, string owner, string name, string branch, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
+
+            // Octokit 14 has no ruleset client at all, so this goes through the raw connection. It
+            // still travels the configured proxy and credentials, because the Connection is the one
+            // CreateClientAsync built.
+            var uri = new Uri(
+                $"repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/rules/branches/{Uri.EscapeDataString(branch)}",
+                UriKind.Relative);
+
+            var response = await WithRetryAsync(
+                () => client.Connection.Get<IReadOnlyList<BranchRule>>(
+                    uri, parameters: null!, accepts: "application/vnd.github+json", cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+
+            var rules = (response.Body ?? [])
+                .Select(r => r.Type)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return Result.Success<IReadOnlyList<string>>(rules);
+        }
+        catch (NotFoundException)
+        {
+            // Either no such branch, or an account/plan where the endpoint is unavailable. Not
+            // evidence of anything — the caller falls back rather than inventing a warning.
+            return Result.Failure<IReadOnlyList<string>>("The branch rules endpoint returned not found.");
+        }
+        catch (ApiException ex)
+        {
+            return Result.Failure<IReadOnlyList<string>>($"GitHub error: {ex.Message}");
+        }
+        catch (HttpRequestException ex)
+        {
+            return Result.Failure<IReadOnlyList<string>>($"Could not reach GitHub: {ex.Message}");
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Result.Failure<IReadOnlyList<string>>("The request to GitHub timed out.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The response shape is GitHub's, not ours, and this is the one call in this service
+            // deserialized into a hand-written type. A new field or an unexpected body must degrade
+            // to "unknown" so the caller falls back to the classic protection check — not escape and
+            // turn a preflight row into a raw exception message.
+            return Result.Failure<IReadOnlyList<string>>($"Could not read branch rules: {ex.Message}");
         }
     }
 
