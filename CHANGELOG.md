@@ -2,6 +2,111 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.13.0 - 2026-09-07
+
+**One branch, one pull request, and an honest count of what changed.** Found while testing 0.12.2
+against a new 13,300-object database whose pull request was waiting for approvers — the condition
+that turns three separate latent defects into visible ones at the same time.
+
+Test suite: 1,399 → 1,408.
+
+### Changed — pull-request mode reuses one head branch per job
+
+The head branch carried the **run key**, so every run cut a branch nothing would ever delete and
+opened a pull request nothing would ever close. On a repository that requires approval to merge —
+where an unmerged pull request is the normal state rather than an edge case — a daily job
+accumulated a branch and an open pull request **per day, indefinitely**, each one restating the same
+proposal. Nothing in the product had ever deleted a branch or closed a pull request.
+
+The branch is now `obsync/<job-slug>/<job-id>`, stable for the life of the job. The job id is there
+because two jobs whose names slugify identically would otherwise share a branch and overwrite each
+other's proposals — the run key had been hiding that collision by accident.
+
+The branch is still **recut from the base every run**. That invariant is what makes a closed-unmerged
+pull request recoverable and what makes a deletion tombstone retire correctly, and none of it
+changes. What changes is only how the recut branch is reconciled with its own previous push:
+
+- **The remote already carries this exact tree** — push nothing. The open pull request proposes
+  precisely this content already, and restating it would dismiss reviewer approvals on a repository
+  configured to dismiss them, for no change at all. An unchanged run now touches the remote not at
+  all.
+- **Otherwise** — merge the remote head in with `-s ours`, which keeps the recut tree wholesale while
+  making the remote's tip an ancestor, so the push is an ordinary **fast-forward**.
+
+`--force-with-lease` was the obvious choice and it is the wrong one, for two independent reasons.
+A repository whose rulesets block non-fast-forward updates refuses a force push outright, which
+would wedge pull-request mode completely — and rulesets are exactly what this deployment uses. And
+the lease would protect nobody even where force is permitted: `PrepareAsync` fetches at the start of
+every run, which refreshes the very remote-tracking ref the lease is taken against. Both were
+verified against the bundled git before any code was written.
+
+Merging also keeps a reviewer's own commits on the branch in the history rather than deleting them,
+while still letting Obsync's scripted content win.
+
+This makes the adopt-rather-than-duplicate path built in 0.12.0 reachable for the first time: GitHub
+answers the second create for the same head with 422, which is already classified as "could have
+taken effect", so the existing pull request is adopted and **its number stays put across runs**.
+
+**Upgrading:** head branches created by earlier versions keep their old names, so the pull requests
+already open against them are orphaned — Obsync opens one pull request on the new branch and will
+never touch the old ones. Close them and delete their branches once you have decided which proposal
+you want.
+
+### Fixed — every object reported as modified on a run where nothing had changed
+
+A regression introduced in 0.12.1. The unchanged-object self-heal compares the file's **bytes** —
+correctly, because a file edited by hand in the repository must be overwritten. But the bundled
+MinGit ships `core.autocrlf=true`, which the git hardening deliberately does not override, while
+Obsync writes LF. So after any clone or re-clone every file on disk is byte-different from what was
+scripted, even though the blob git stores is identical.
+
+The whole estate was therefore reported as modified and rewritten — and produced **no commit at
+all**, because git's clean filter maps the rewritten files straight back to the same blobs. A length
+pre-check made it worse by short-circuiting on a difference that was never real.
+
+Line endings are not content: the comparison now falls back to a normalized one, and only a CR that
+immediately precedes an LF is collapsed, so a lone CR inside a string literal still counts. The
+divergence probe that decides whether a pull request was closed unmerged had the same blind spot and
+would have blamed a fresh clone on a reviewer.
+
+### Fixed — a proposal could carry only part of the changeset
+
+The divergence probe treated a **missing** file as harmless, reasoning that the existing self-heal
+rewrites those. That is false for an object the incremental planner skipped: a planned skip writes
+nothing at all and never reaches the self-heal.
+
+Pull-request mode recuts its head from the base every run, so while a pull request sits unmerged
+every file it proposed is absent from the working tree — and incremental scripting is **on by
+default**. The filter therefore dropped exactly the objects the recut had deleted, and the run
+committed a fragment. Merging that fragment would have landed part of the estate on the base branch
+with every state row still recording "delivered", and nothing would ever have re-proposed the rest.
+
+Missing-file detection is no longer gated behind script normalization — it needs no hashing, and it
+guards against losing content rather than merely against a degraded experience.
+
+### Fixed — the run tiles counted two different populations
+
+`Scanned` excluded the per-database artifact files (object inventory, database options, permissions,
+security review, documentation) while `Added` / `Modified` / `Deleted` included them, because an
+options-only change must still read as a change. A 13,300-object database therefore displayed
+"13,300 scanned / 13,305 modified" and looked, reasonably, like a bug. Artifacts now count in both.
+
+`Skipped` was bound to the **failure** counter, so a run where twelve objects could not be scripted
+displayed "12 skipped", which reads as benign and is not. That counter covers genuine failures and
+objects that cannot be scripted at all (encrypted modules, CLR), so it is now labelled **Not
+scripted**, on the job page, in history, and in the exported run report.
+
+### Internal
+
+- The head-branch reconciliation is covered by five tests against a real git binary and a throwaway
+  bare repository — identical content, changed content, a commit pushed by somebody else, a base
+  branch that moved, and an object dropped before the proposal merged. Each was confirmed to fail
+  with the reconciliation removed.
+- The deletion-tombstone hazard left open in 0.12.2 — a dropped object whose file was never on base,
+  orphaned if an older pull request later merged — closes with the branch change rather than with new
+  state: there is only ever one open proposal, and every run replaces its content with the current
+  estate. It has its own test rather than an assurance.
+
 ## 0.12.2 - 2026-09-07
 
 **A deletion is remembered until the branch confirms it.** Completes the family of bugs that
