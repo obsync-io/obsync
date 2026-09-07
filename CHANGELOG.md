@@ -2,6 +2,70 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.12.0 - 2026-09-07
+
+**A lost confirmation is not a failed operation.** Four defects of one shape, found by auditing the
+product for the class of bug a customer hit in 0.11.3: GitHub created a pull request, the connection
+dropped before its response arrived, and the run reported that it could not be opened.
+
+A minor rather than a patch release because one fix changes behaviour someone could have been
+relying on — transient push failures now genuinely retry, where before they failed immediately.
+
+Test suite: 1,365 → 1,381.
+
+### Fixed — pushes
+
+- **A push that could not communicate was read as a push that did not happen.** git can send the
+  pack, the server can accept it and update the ref, and the connection can drop before the reply
+  arrives — or Obsync's own command timeout can kill git mid-conversation. Reported as a failure that
+  costs a false alert, and in pull-request mode the next run cuts another head branch and pushes the
+  same content again. After an *ambiguous* failure the push now asks the server: it compares origin's
+  copy of the branch against local HEAD with `ls-remote` and treats a match as the success it was.
+  The comparison is deliberately against the server rather than the local remote-tracking ref, which
+  a push git never saw succeed has not updated — using it would answer "not pushed" for precisely the
+  case this detects. A rejection is not ambiguous, so a protected branch, a ruleset or a
+  non-fast-forward goes straight to failure without a wasted round trip.
+- **The retry count in the job wizard did nothing for pushes.** `failed to push some refs` was
+  classified as a permanent failure, and permanent markers are tested first and short-circuit — but
+  it is git's generic *trailer*, printed under a dropped connection exactly as readily as under a
+  rejection. Its presence made every push failure permanent. It is gone, and each rejection GitHub
+  can actually give (`GH001`, `GH006`, `GH013`, push declined, protected branch) now has its own
+  entry, so the cause decides rather than the trailer.
+
+### Fixed — work marked delivered that was not
+
+Direct-commit mode recorded objects as delivered **before** the push, on the reasoning that a local
+commit is durable because the next run re-pushes a stranded one. The re-push is real; the durability
+is conditional, and the condition is that the clone survives. The corrupt-workspace self-heal
+re-clones from scratch, changing the workspaces root in Settings abandons the old location, and a
+backup restore or antivirus can remove the directory outright.
+
+After any of those, with state already advanced, every affected object's stored hash matched content
+that had never been delivered — so the job reported **NoChanges forever** against a repository that
+never received the work, while the run row asserted a commit SHA that existed on one machine only.
+
+Delivery now means the push landed, exactly as pull-request mode has always meant the pull request
+opened. Nothing is lost by waiting: a stranded commit is still pushed by the next run, and state
+advances then.
+
+### Fixed — duplicate incidents from a duplicate alert
+
+Alert delivery is retried once on any failure, including a timeout — and a timeout cannot distinguish
+"the endpoint never received it" from "the endpoint received it and the acknowledgement was lost". A
+duplicate email is untidy; a duplicate POST to PagerDuty, ServiceNow or Jira opens a second incident
+for one event, and nothing in the payload let a receiver tell a re-send from a new event. Deliveries
+now carry a stable `Idempotency-Key` header, and the run's identity (`runId`, `runKey`,
+`idempotencyKey`) travels in the body for receivers that cannot read headers. The existing payload
+fields are unchanged.
+
+### Internal
+
+- The delivery-gate test that asserted the old direct-mode rule was rewritten rather than deleted,
+  with the reasoning for the reversal recorded in it — and a new test proves the stranded commit is
+  still delivered by the next run, since that was the entire justification for the old design.
+  Reverting the change fails 18 tests.
+- Each fix was reverted individually to confirm its tests fail.
+
 ## 0.11.4 - 2026-09-06
 
 **Telling the truth about GitHub.** Every fix here came out of one real deployment, in order, as each
