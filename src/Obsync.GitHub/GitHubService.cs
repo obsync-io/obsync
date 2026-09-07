@@ -146,7 +146,7 @@ public sealed class GitHubService : IGitHubService
         }
         catch (HttpRequestException ex)
         {
-            return Result.Failure<TokenPermissionReport>($"Could not reach GitHub: {ex.Message}");
+            return Result.Failure<TokenPermissionReport>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -176,7 +176,7 @@ public sealed class GitHubService : IGitHubService
         }
         catch (HttpRequestException ex)
         {
-            return Result.Failure<IReadOnlyList<GitHubRepository>>($"Could not reach GitHub: {ex.Message}");
+            return Result.Failure<IReadOnlyList<GitHubRepository>>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -212,7 +212,7 @@ public sealed class GitHubService : IGitHubService
         }
         catch (HttpRequestException ex)
         {
-            return Result.Failure<bool>($"Could not reach GitHub: {ex.Message}");
+            return Result.Failure<bool>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -259,7 +259,7 @@ public sealed class GitHubService : IGitHubService
         }
         catch (HttpRequestException ex)
         {
-            return Result.Failure<IReadOnlyList<string>>($"Could not reach GitHub: {ex.Message}");
+            return Result.Failure<IReadOnlyList<string>>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -290,7 +290,7 @@ public sealed class GitHubService : IGitHubService
         }
         catch (HttpRequestException ex)
         {
-            return Result.Failure<IReadOnlyList<string>>($"Could not reach GitHub: {ex.Message}");
+            return Result.Failure<IReadOnlyList<string>>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -337,13 +337,13 @@ public sealed class GitHubService : IGitHubService
         }
         catch (ApiException ex)
         {
-            _logger.LogWarning("Opening the pull request failed: {Message}", ex.Message);
+            _logger.LogWarning("Opening the pull request failed: {Message}", GitHubApiDiagnosis.Describe(ex));
             return Result.Failure<PullRequestInfo>(ExplainPullRequestFailure(ex));
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning("Opening the pull request failed: {Message}", ex.Message);
-            return Result.Failure<PullRequestInfo>($"Could not reach GitHub: {ex.Message}");
+            _logger.LogWarning("Opening the pull request failed: {Message}", GitHubApiDiagnosis.Describe(ex));
+            return Result.Failure<PullRequestInfo>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

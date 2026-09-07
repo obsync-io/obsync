@@ -2181,8 +2181,26 @@ public sealed class SyncEngine : ISyncEngine
         {
             // The head branch pushed but the PR did not open — a partial success the user must act on.
             run.Status = RunStatus.Warning;
-            run.ErrorMessage = result.Error;
-            context.Log(SyncLogLevel.Warning, $"The branch pushed, but opening the pull request failed. {result.Error}");
+
+            // Say that the branch got there. This is the only place in the product that can state it
+            // as fact rather than inference — the push returned success moments ago — and it is the
+            // single most useful thing to know here, because git and the REST API reach GitHub over
+            // different stacks, to different hostnames, with different trust stores. Without it, "could
+            // not reach GitHub" reads as a total outage and sends people to re-check a network path
+            // that has just demonstrably worked.
+            run.ErrorMessage =
+                $"The branch '{gitContext.Branch}' pushed to GitHub successfully, but opening the pull request "
+                + $"failed — that step uses GitHub's REST API rather than git. {result.Error}";
+
+            context.Log(SyncLogLevel.Warning, run.ErrorMessage);
+
+            // Name the branch that was left behind. Each attempt cuts a new timestamped head branch,
+            // so a repeating failure quietly accumulates them on the remote and nothing else reports
+            // which ones are orphans.
+            context.Log(
+                SyncLogLevel.Info,
+                $"The pushed branch '{gitContext.Branch}' has no pull request. Open one manually against "
+                + $"'{gitContext.BaseBranch}', or delete the branch — a later run will push a new one.");
             return;
         }
 
