@@ -2,6 +2,84 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.12.1 - 2026-09-07
+
+**Telling the truth about credentials, and about what the repository actually contains.** Two
+findings from a live enterprise deployment, both of which could mislead silently for a month or
+lose work outright.
+
+Test suite: 1,381 → 1,395.
+
+### Fixed — a revoked token displayed as "Valid"
+
+Octokit's `ForbiddenException` is a **sibling** of `AuthorizationException`, not a subclass, so every
+HTTP 403 fell past the 401 arm into the generic one and was reported as a check that could not *run*
+— which by design leaves the stored verdict untouched, because a network blink says nothing about a
+credential.
+
+But 403 is exactly what GitHub returns for **SAML/SSO deauthorization** and for **an organisation
+withdrawing a fine-grained token's repository grant** — the two most common enterprise revocations.
+The badge therefore stayed green for up to the full 30-day decay window while every push failed. A
+403 that is not a rate limit is now a verdict rather than a failed check.
+
+The catch ordering matters and is not obvious from reading it: all three rate-limit types *derive*
+from `ForbiddenException`, so they must be caught first or a rate limit would be recorded as a
+rejected credential. The compiler enforces the order; a test now records why it is what it is.
+
+Also fixed on that screen:
+
+- **A repository with no token saved at all** displayed "Valid". That is the most certain evidence
+  the product ever has, and it was being discarded. It is now recorded as Failed.
+- **A check that genuinely could not run** left the page asserting two contradictory things side by
+  side — a failure message next to a green badge, with nothing to reconcile them. The message now
+  states that the status shown is from the last completed check and has not been changed.
+- **The dashboard and the Repositories page disagreed.** The dashboard judged repositories on the
+  raw stored status while the page rendered the decayed one, so a stale failure appeared as a red
+  "failed its last check" row beside a neutral "Not validated" pill for the same repository — and
+  collected a second row from the staleness loop for the same underlying fact. Both now read the
+  effective status.
+- **A read-only token raised nothing on the dashboard**, though it is the failure this checker was
+  built to catch and every push-based job on it fails. It now raises a warning.
+
+### Fixed — a change proposed in a pull request that was closed unmerged was lost
+
+In pull-request mode "delivered" means **proposed**, not landed. If a reviewer closes the pull
+request without merging, the base branch keeps the old file while Obsync's state records the new
+hash as delivered. Two checks then both passed — the hash matched, and the file existed — so the
+object was never written again. The modification was silently dropped from every later run while the
+job reported success.
+
+On an enterprise GitHub that requires approval to merge, an unmerged pull request is the **normal**
+state rather than an edge case, which is what makes this reachable rather than theoretical.
+
+Two changes were needed, and only the pair works:
+
+- The self-heal for an unchanged object now compares the file's **bytes**, not merely its existence.
+  That also covers a file edited by hand in the repository, which Obsync should overwrite because it
+  is the source of truth.
+- Incremental scripting filters at the *provider*, and a planned skip writes nothing at all — it
+  marks the object seen, counts it scanned, and returns. So a skipped object never reaches that
+  self-heal, and the content check alone would have fixed nothing in the default configuration.
+  Pull-request runs now withhold the incremental filter from any type whose tracked files no longer
+  carry what was recorded as delivered, at the cost of one full scan of that type on the run that
+  notices. Pull-request mode only: it is the only mode where the tree can legitimately disagree with
+  our state.
+
+**Known remaining gap:** a *deletion* proposed in a pull request that is then closed unmerged is
+still not re-proposed — its state row is removed on delivery, so nothing tracks it afterwards. That
+needs a tombstone and is deliberately left to its own change.
+
+### Internal
+
+- The delivery-gate fixture substituted `IModifiedObjectReader` with a no-op, so the modification
+  snapshot came back empty, the incremental planner had nothing to plan, and **every incremental
+  assertion in that file was silently vacuous**. Three separate attempts to demonstrate the skip
+  behaviour passed against code with the fix removed, for that reason rather than because the fix
+  was unnecessary. The snapshot is now modelled properly.
+- The fake script provider now honours the incremental watermark filter; it ignored it entirely,
+  which made every incremental test unable to observe the difference between filtered and not.
+- Each fix was reverted individually to confirm its tests fail.
+
 ## 0.12.0 - 2026-09-07
 
 **A lost confirmation is not a failed operation.** Four defects of one shape, found by auditing the
