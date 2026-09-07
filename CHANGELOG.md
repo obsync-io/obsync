@@ -2,6 +2,52 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.12.2 - 2026-09-07
+
+**A deletion is remembered until the branch confirms it.** Completes the family of bugs that
+appeared when a pull request was closed without being merged. Additions were always recovered;
+modifications were fixed in 0.12.1; deletions were the one left.
+
+Test suite: 1,395 → 1,399.
+
+### Fixed — a deletion proposed in a pull request that was closed unmerged was lost
+
+Additions and modifications recover because the working tree is compared against a state row that
+still exists. A deletion has no such row **by construction** — dropping the row *is* how a delivered
+deletion was recorded.
+
+So in pull-request mode, where delivery means **proposed** rather than landed, a reviewer closing the
+pull request left the object gone from SQL, its file still on the base branch, and nothing connecting
+them. The file was orphaned in the repository permanently, the deletion was never proposed again,
+and every run reported success throughout. On an enterprise GitHub that requires approval to merge,
+an unmerged pull request is the normal state, which is what made this reachable rather than
+theoretical.
+
+The state row is now retained as a tombstone until the tree confirms the file has gone, and retired
+quietly when it has. Retiring matters as much as retaining: without it the tombstone would propose an
+empty deletion on every run, forever.
+
+A deletion whose file is already absent is also no longer reported as a deletion in pull-request
+mode. It inflated the run's counts and produced an empty commit for something that was bookkeeping
+rather than a change.
+
+**Direct-commit mode is deliberately untouched.** Only pull-request mode may treat an absent file as
+proof the deletion landed, and the reason is specific: pull-request mode recuts its head branch from
+the base every run, so its working tree is a faithful mirror of base. Direct-commit mode has no such
+guarantee — a run that deleted the file and then failed to commit leaves it gone locally while the
+remote still has it, and preparing the workspace does not always restore it. Reading that absence as
+"already deleted" would retire the tombstone and orphan the file on the remote: the same bug arrived
+at from the other side. An existing test, written for exactly that scenario, caught the first version
+of this fix making precisely that mistake.
+
+### Known remaining gap
+
+Pull-request mode still opens a new pull request on a new timestamped branch every run, so unmerged
+proposals accumulate rather than updating one pull request, and merged head branches are never
+deleted. That is a design change with real trade-offs — in particular, force-updating a branch under
+an open pull request would let a reviewer's approval transfer to content they never saw — and it is
+deliberately left to its own release.
+
 ## 0.12.1 - 2026-09-07
 
 **Telling the truth about credentials, and about what the repository actually contains.** Two
