@@ -402,4 +402,61 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         Assert.Contains("body v1", await File.ReadAllTextAsync(TrackedFile()));
     }
 
+
+    /// <summary>
+    /// Makes the modification snapshot real, so the incremental planner actually engages.
+    /// </summary>
+    /// <remarks>
+    /// The fixture substitutes IModifiedObjectReader with a no-op, so GetSnapshotAsync returned
+    /// nothing and the planner had nothing to skip — which is why every attempt to observe the
+    /// incremental path here silently tested nothing.
+    /// </remarks>
+    private void SetSnapshot(params (string Name, DateTime ModifyDate)[] objects) =>
+        _provider.GetRequiredService<IModifiedObjectReader>()
+            .GetSnapshotAsync(
+                Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), Arg.Any<string>(),
+                Arg.Any<IReadOnlyCollection<SqlObjectType>>(), Arg.Any<int>(), Arg.Any<int>(),
+                Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<ModifiedObjectSnapshotItem>>(
+                [.. objects.Select(o => new ModifiedObjectSnapshotItem(
+                    SqlObjectType.StoredProcedure, "dbo", o.Name, o.ModifyDate))]));
+
+    [Fact]
+    public async Task PrMode_AnIncrementallySkippedObject_IsStillReproposedWhenTheTreeDiverged()
+    {
+        // The case the whole of Phase 2 turns on, and the one no earlier test could reach.
+        //
+        // A planned skip writes NOTHING — it marks the object seen, counts it scanned, and returns
+        // — so the self-heal that compares file content never runs for it. An object whose pull
+        // request was closed unmerged has both an advanced hash and an advanced watermark, so it is
+        // skipped on every later run and its modification is lost in silence.
+        //
+        // The skip rule needs a modify_date STRICTLY older than the type's watermark, and the
+        // watermark is the snapshot's max — so two objects are required: P2 sets the watermark, and
+        // P1 falls behind it and is therefore the one that gets skipped.
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "other")];
+        SetSnapshot(("P1", older), ("P2", newer));
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+
+        _ = await RunAsync();   // deliver both; watermark for StoredProcedure becomes `newer`
+        _ = await RunAsync();   // P1 is now skippable (older < newer)
+
+        // The reviewer closes P1's pull request unmerged: base still carries the old file.
+        var p1 = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+        await File.WriteAllTextAsync(p1, "body v0 -- still what base carries");
+
+        var recovery = await RunAsync();
+
+        Assert.NotEqual(RunStatus.NoChanges, recovery.Status);
+        Assert.Contains("body v1", await File.ReadAllTextAsync(p1));
+    }
 }

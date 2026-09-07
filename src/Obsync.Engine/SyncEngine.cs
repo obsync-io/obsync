@@ -1051,7 +1051,7 @@ public sealed class SyncEngine : ISyncEngine
         // their prior hashes, and hand the providers per-type watermark filters. Export runs are
         // always full snapshots, and a first run (no prior state) has nothing to skip.
         var incrementalWatermarks = !fullSnapshot && context.Job.Advanced.IncrementalScripting && prior.Count > 0
-            ? await PlanIncrementalAsync(context, database, types, prior, seen, inventory, ignoreRules, cancellationToken)
+            ? await PlanIncrementalAsync(context, database, types, prior, seen, inventory, ignoreRules, localPath, cancellationToken)
                 .ConfigureAwait(false)
             : null;
 
@@ -1321,12 +1321,45 @@ public sealed class SyncEngine : ISyncEngine
         RunContext context, string database, IReadOnlyList<SqlObjectType> types,
         Dictionary<string, TrackedObjectState> prior,
         ConcurrentDictionary<string, byte> seen, ConcurrentBag<ObjectInventoryEntry> inventory,
-        IgnoreRules ignoreRules, CancellationToken cancellationToken)
+        IgnoreRules ignoreRules, string localPath, CancellationToken cancellationToken)
     {
         var capableTypes = types.Where(IncrementalPlanner.CapableTypes.Contains).ToList();
         if (capableTypes.Count == 0)
         {
             return null;
+        }
+
+        // Withhold the incremental filter from any type whose tracked files no longer carry what
+        // Obsync recorded as delivered.
+        //
+        // A planned skip writes nothing at all — it marks the object seen, counts it scanned, and
+        // moves on — so a skipped object never reaches the self-heal that compares file content.
+        // In pull-request mode "delivered" means PROPOSED: if the reviewer closes the pull request
+        // unmerged, base keeps the old file while state and watermark both advanced past it. The
+        // object is then skipped on every later run and its modification is lost silently, with the
+        // job reporting success throughout. Scanning that type in full for one run is the cost of
+        // noticing.
+        //
+        // Pull-request mode only, and deliberately: it is the only mode where delivery means
+        // proposed rather than landed on the branch we track, so the only mode where the tree can
+        // legitimately disagree with our state. Direct-commit mode would pay the read for a
+        // divergence it cannot have.
+        if (context.Job.CommitMode == CommitMode.PullRequest)
+        {
+            var diverged = DivergedTypes(prior, localPath, capableTypes);
+            if (diverged.Count > 0)
+            {
+                context.Log(SyncLogLevel.Warning,
+                    $"The repository no longer carries what Obsync recorded as delivered for "
+                    + $"{string.Join(", ", diverged)} in {database} — this happens when a pull request was "
+                    + "closed without being merged. Re-scanning those types in full so the changes are "
+                    + "proposed again.");
+                capableTypes = capableTypes.Where(t => !diverged.Contains(t)).ToList();
+                if (capableTypes.Count == 0)
+                {
+                    return null;
+                }
+            }
         }
 
         var watermarks = await _watermarks.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false);
@@ -2266,6 +2299,52 @@ public sealed class SyncEngine : ISyncEngine
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// The object types whose tracked files no longer carry the content Obsync recorded as
+    /// delivered.
+    /// </summary>
+    /// <remarks>
+    /// Compares each prior state's recorded hash against the file actually in the working tree. A
+    /// MISSING file is not divergence here — the existing self-heal already rewrites those, and
+    /// treating it as divergence would force a full re-scan on every fresh clone.
+    /// </remarks>
+    private HashSet<SqlObjectType> DivergedTypes(
+        Dictionary<string, TrackedObjectState> prior, string localPath, IReadOnlyList<SqlObjectType> capableTypes)
+    {
+        var capable = capableTypes.ToHashSet();
+        var diverged = new HashSet<SqlObjectType>();
+
+        foreach (var state in prior.Values)
+        {
+            if (!capable.Contains(state.ObjectType) || diverged.Contains(state.ObjectType)
+                || string.IsNullOrEmpty(state.FilePath) || string.IsNullOrEmpty(state.LastHash))
+            {
+                continue;
+            }
+
+            try
+            {
+                var absolute = ResolveOrThrow(localPath, state.FilePath);
+                if (!File.Exists(absolute))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(
+                        _hasher.ComputeHash(File.ReadAllBytes(absolute)), state.LastHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    diverged.Add(state.ObjectType);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // Unreadable is not evidence of divergence; the run proceeds as before.
+            }
+        }
+
+        return diverged;
     }
 
     /// <summary>
