@@ -562,4 +562,102 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         Assert.Equal(0, run.ObjectsDeleted);
         Assert.Empty(await StatesAsync());
     }
+    [Fact]
+    public async Task ACrlfWorkingTree_IsNotMistakenForEveryObjectHavingChanged()
+    {
+        // The regression this reproduces was reported from production as "13,305 modified" on a run
+        // where nothing in SQL had changed.
+        //
+        // Obsync writes LF. The bundled MinGit ships core.autocrlf=true, and the git hardening
+        // deliberately does not override it, so git converts LF to CRLF on checkout. After any clone
+        // or re-clone every file on disk is byte-different from what was scripted even though the
+        // blob git stores is identical -- so a raw byte comparison reported the entire estate as
+        // modified, rewrote all of it, and produced no commit at all.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        _ = await RunAsync();
+
+        var file = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+
+        // Exactly what a checkout leaves behind: identical content, CRLF endings.
+        var asWritten = await File.ReadAllTextAsync(file);
+        Assert.DoesNotContain("\r\n", asWritten);
+        await File.WriteAllTextAsync(file, asWritten.Replace("\n", "\r\n"));
+
+        var second = await RunAsync();
+
+        Assert.Equal(RunStatus.NoChanges, second.Status);
+        Assert.Equal(0, second.ObjectsModified);
+
+        // And the file is left alone rather than needlessly rewritten.
+        Assert.Contains("\r\n", await File.ReadAllTextAsync(file));
+    }
+
+    [Fact]
+    public async Task AGenuineContentChange_IsStillDetectedInACrlfTree()
+    {
+        // The fix must not blind the comparison: normalizing line endings must not normalize away a
+        // real difference that happens to arrive alongside them.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        _ = await RunAsync();
+
+        var file = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+
+        // CRLF endings AND different content -- the scripted body must still win.
+        await File.WriteAllTextAsync(file, "CREATE PROCEDURE dbo.P1 AS\r\nBEGIN /* body v0 */ SELECT 1; END\r\n");
+
+        var second = await RunAsync();
+
+        Assert.Equal(1, second.ObjectsModified);
+        Assert.Contains("body v1", await File.ReadAllTextAsync(file));
+    }
+
+    [Fact]
+    public async Task PrMode_AnUnmergedPullRequest_ReproposesEveryObject_NotSomeOfThem()
+    {
+        // The recut is the whole point: pull-request mode does `checkout -B <head> origin/<base>`
+        // every run, so while the pull request sits unmerged, base does not carry the proposal and
+        // every file it proposed is ABSENT from the working tree.
+        //
+        // DivergedTypes used to treat absence as harmless, reasoning that "the self-heal already
+        // rewrites those". That is false for a planner-skipped object: a planned skip writes
+        // nothing at all and never reaches the self-heal. So the incremental filter dropped exactly
+        // the objects the recut had deleted, and the run committed a PARTIAL tree. Merging that
+        // partial proposal would land a fragment on base with every state row still saying
+        // "delivered", and nothing would ever re-propose the rest.
+        //
+        // Two objects for the same reason as the divergence test above: P2 sets the watermark and
+        // P1 falls behind it, so P1 is the one the planner can skip.
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "other")];
+        SetSnapshot(("P1", older), ("P2", newer));
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+
+        _ = await RunAsync();   // deliver both; watermark for StoredProcedure becomes `newer`
+        _ = await RunAsync();   // P1 is now skippable (older < newer)
+
+        var p1 = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+
+        // The recut, exactly: base has no such file, so the checkout removes it.
+        File.Delete(p1);
+
+        var recovery = await RunAsync();
+
+        Assert.True(File.Exists(p1), "the recut-deleted object was skipped and never re-proposed");
+        Assert.Contains("body v1", await File.ReadAllTextAsync(p1));
+        Assert.NotEqual(RunStatus.NoChanges, recovery.Status);
+    }
 }

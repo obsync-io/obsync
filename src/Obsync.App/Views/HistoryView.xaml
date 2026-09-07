@@ -212,7 +212,7 @@
                                     <ContentControl Content="{Binding Converter={StaticResource RunToChangeSplit}}"
                                                     ContentTemplate="{StaticResource ChangeSplitTokens}" />
                                     <!-- Only rendered when objects could not be scripted -->
-                                    <TextBlock Text="{Binding ObjectsFailed, StringFormat={}{0:N0} skipped}"
+                                    <TextBlock Text="{Binding ObjectsFailed, StringFormat={}{0:N0} not scripted}"
                                                Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold"
                                                TextWrapping="Wrap" Margin="0,1,0,0"
                                                ToolTip="Objects that could not be scripted — open the job's Logs tab for the list">

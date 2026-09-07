@@ -590,9 +590,9 @@ public sealed class SyncEngine : ISyncEngine
 
         var baseBranch = string.IsNullOrWhiteSpace(context.Job.Branch) ? context.Repository!.DefaultBranch : context.Job.Branch!;
         var isPullRequest = context.Job.CommitMode == CommitMode.PullRequest;
-        // Pull request mode commits to a fresh per-run head branch cut from the base; direct mode
-        // commits straight to the base branch.
-        var headBranch = isPullRequest ? HeadBranchName(context.Job.Name, run.RunKey) : baseBranch;
+        // Pull request mode commits to the job's head branch, which is recut from the base every
+        // run; direct mode commits straight to the base branch.
+        var headBranch = isPullRequest ? HeadBranchName(context.Job.Name, context.Job.Id) : baseBranch;
         var localPath = Path.Combine(
             await ResolveWorkspacesRootAsync(cancellationToken).ConfigureAwait(false),
             context.Repository!.Id.ToString("N"));
@@ -877,9 +877,10 @@ public sealed class SyncEngine : ISyncEngine
         // Runs concurrently across workers for objects, then sequentially for the trailing artifacts.
         async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath, CancellationToken ct)
         {
-            // Synthetic items (manifest artifacts, reference data) skip the object inventory, the
-            // scanned counter, and the ignore rules — they are engine-generated from explicit
-            // configuration, not discovered schema objects.
+            // Synthetic items (manifest artifacts, reference data) skip the object inventory and
+            // the ignore rules — they are engine-generated from explicit configuration, not
+            // discovered schema objects. They are NOT skipped by the scanned counter: they are
+            // counted as changes, so counting them here is what makes the run's tiles agree.
             var isArtifact = identity.Type is SqlObjectType.DatabaseArtifact or SqlObjectType.ReferenceData;
             var key = StateKey(identity);
             seen.TryAdd(key, 0);
@@ -899,17 +900,19 @@ public sealed class SyncEngine : ISyncEngine
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
 
-            if (!isArtifact)
-            {
-                context.IncrementScanned();
+            // Artifacts count here too, and that is a deliberate correction. The change counters
+            // below have always included them — an options- or permissions-only change must still
+            // read as a change — while this one excluded them, so the run tiles reported two
+            // different populations under labels that implied one. A 13,300-object database showed
+            // "13,300 scanned / 13,305 modified" and looked, reasonably, like a bug.
+            context.IncrementScanned();
 
-                // A live count during the longest phase — throttled so a VLDB run posts a few
-                // updates per second, not one per object.
-                var scanned = context.Scanned;
-                if (scanned % 500 == 0)
-                {
-                    context.Report(SyncPhase.Scripting, $"Scripting {database}… {scanned:N0} objects processed", scanned);
-                }
+            // A live count during the longest phase — throttled so a VLDB run posts a few
+            // updates per second, not one per object.
+            var scanned = context.Scanned;
+            if (scanned % 500 == 0)
+            {
+                context.Report(SyncPhase.Scripting, $"Scripting {database}… {scanned:N0} objects processed", scanned);
             }
 
             if (script.Length > MaxScriptChars)
@@ -1344,16 +1347,23 @@ public sealed class SyncEngine : ISyncEngine
         // proposed rather than landed on the branch we track, so the only mode where the tree can
         // legitimately disagree with our state. Direct-commit mode would pay the read for a
         // divergence it cannot have.
+        // Content comparison requires NormalizeScripts, because it normalizes the file's line
+        // endings before hashing and the stored hash must have been taken over normalized bytes
+        // too. With normalization off a provider's mixed CRLF/LF output would hash differently from
+        // the normalized file every time, so every type would look diverged on every run. The
+        // MISSING-file half needs no hashing and is never gated — it is the half that protects
+        // against a partial proposal, which is a data-fidelity failure rather than a degradation.
         if (context.Job.CommitMode == CommitMode.PullRequest)
         {
-            var diverged = DivergedTypes(prior, localPath, capableTypes);
+            var diverged = DivergedTypes(
+                prior, localPath, capableTypes, compareContent: context.Job.Selection.NormalizeScripts);
             if (diverged.Count > 0)
             {
                 context.Log(SyncLogLevel.Warning,
-                    $"The repository no longer carries what Obsync recorded as delivered for "
-                    + $"{string.Join(", ", diverged)} in {database} — this happens when a pull request was "
-                    + "closed without being merged. Re-scanning those types in full so the changes are "
-                    + "proposed again.");
+                    $"The repository does not carry what Obsync recorded as delivered for "
+                    + $"{string.Join(", ", diverged)} in {database} — this happens while a pull request is "
+                    + "open and unmerged, or after one was closed without being merged. Re-scanning "
+                    + "those types in full so the changes are proposed again.");
                 capableTypes = capableTypes.Where(t => !diverged.Contains(t)).ToList();
                 if (capableTypes.Count == 0)
                 {
@@ -1481,10 +1491,8 @@ public sealed class SyncEngine : ISyncEngine
             var repoRelativePath = RepositoryLayout.Combine(serverRoot, relativePath);
             var absolutePath = ResolveOrThrow(localPath, repoRelativePath);
 
-            if (!isArtifact)
-            {
-                context.IncrementScanned();
-            }
+            // Artifacts included, matching the database pass and the change counters below.
+            context.IncrementScanned();
 
             var hasPrior = prior.TryGetValue(key, out var priorState);
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
@@ -2348,13 +2356,28 @@ public sealed class SyncEngine : ISyncEngine
     {
         try
         {
-            var info = new FileInfo(absolutePath);
-            if (!info.Exists || info.Length != expected.LongLength)
+            if (!File.Exists(absolutePath))
             {
                 return false;
             }
 
-            return File.ReadAllBytes(absolutePath).AsSpan().SequenceEqual(expected);
+            var actual = File.ReadAllBytes(absolutePath);
+            if (actual.AsSpan().SequenceEqual(expected))
+            {
+                return true;
+            }
+
+            // Line endings are not content. git converts LF to CRLF on checkout whenever
+            // core.autocrlf is true — which the bundled MinGit sets, and which the hardening
+            // deliberately does not override — while Obsync writes LF. So after any clone or
+            // re-clone every file on disk is byte-DIFFERENT from what was scripted, though the blob
+            // git stores is identical.
+            //
+            // Comparing raw bytes therefore declared all 13,000-odd objects Modified on the first
+            // run after a fresh workspace, rewrote every one of them, and produced no commit at all
+            // because git's clean filter maps them straight back to the same blobs. The length
+            // pre-check made it worse by short-circuiting on a difference that was never real.
+            return NormalizeLineEndings(actual).AsSpan().SequenceEqual(NormalizeLineEndings(expected));
         }
         catch (IOException)
         {
@@ -2367,16 +2390,54 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     /// <summary>
+    /// The bytes with CRLF collapsed to LF, or the same array when there is nothing to collapse.
+    /// </summary>
+    /// <remarks>
+    /// Only a CR that immediately precedes an LF is removed — that is exactly what git's autocrlf
+    /// conversion produces, and a lone CR inside a string literal is content that must survive.
+    /// </remarks>
+    private static byte[] NormalizeLineEndings(byte[] bytes)
+    {
+        if (Array.IndexOf(bytes, (byte)'\r') < 0)
+        {
+            return bytes;
+        }
+
+        var output = new byte[bytes.Length];
+        var length = 0;
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'\r' && i + 1 < bytes.Length && bytes[i + 1] == (byte)'\n')
+            {
+                continue;
+            }
+
+            output[length++] = bytes[i];
+        }
+
+        return output[..length];
+    }
+
+    /// <summary>
     /// The object types whose tracked files no longer carry the content Obsync recorded as
     /// delivered.
     /// </summary>
     /// <remarks>
-    /// Compares each prior state's recorded hash against the file actually in the working tree. A
-    /// MISSING file is not divergence here — the existing self-heal already rewrites those, and
-    /// treating it as divergence would force a full re-scan on every fresh clone.
+    /// Compares each prior state against the file actually in the working tree. A MISSING file
+    /// counts, and that is the point: this once treated absence as harmless on the grounds that
+    /// "the self-heal already rewrites those", which is FALSE for a planner-skipped object — a
+    /// planned skip writes nothing at all and never reaches the self-heal. Pull-request mode recuts
+    /// its head branch from the base every run, so while a pull request sits unmerged every file it
+    /// proposed is absent; skipping those objects would commit a PARTIAL tree, and if that partial
+    /// proposal were then merged the remainder would never be re-proposed.
+    /// <para><paramref name="compareContent"/> additionally treats a file whose bytes no longer
+    /// hash to the recorded value as divergence. It is off when the job does not normalize scripts,
+    /// because the stored hash is then not taken over normalized bytes and every type would look
+    /// diverged on every run.</para>
     /// </remarks>
     private HashSet<SqlObjectType> DivergedTypes(
-        Dictionary<string, TrackedObjectState> prior, string localPath, IReadOnlyList<SqlObjectType> capableTypes)
+        Dictionary<string, TrackedObjectState> prior, string localPath, IReadOnlyList<SqlObjectType> capableTypes,
+        bool compareContent)
     {
         var capable = capableTypes.ToHashSet();
         var diverged = new HashSet<SqlObjectType>();
@@ -2394,11 +2455,21 @@ public sealed class SyncEngine : ISyncEngine
                 var absolute = ResolveOrThrow(localPath, state.FilePath);
                 if (!File.Exists(absolute))
                 {
+                    diverged.Add(state.ObjectType);
                     continue;
                 }
 
-                if (!string.Equals(
-                        _hasher.ComputeHash(File.ReadAllBytes(absolute)), state.LastHash, StringComparison.OrdinalIgnoreCase))
+                if (!compareContent)
+                {
+                    continue;
+                }
+
+                // Normalized for the same reason as FileHasContent: a checked-out CRLF file hashes
+                // differently from the LF bytes the stored hash was taken over, so every type would
+                // "diverge" after a fresh clone — and the user would be told the cause was a pull
+                // request that had not merged, which would be simply untrue.
+                var onDisk = NormalizeLineEndings(File.ReadAllBytes(absolute));
+                if (!string.Equals(_hasher.ComputeHash(onDisk), state.LastHash, StringComparison.OrdinalIgnoreCase))
                 {
                     diverged.Add(state.ObjectType);
                 }
@@ -2413,13 +2484,32 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     /// <summary>
-    /// The per-run head branch name for pull-request mode, e.g. <c>obsync/salesdb-sync/20260702-230000</c>.
-    /// Deterministic given the job name and run key.
+    /// The head branch name for pull-request mode, e.g. <c>obsync/salesdb-sync/3f2a1b9c</c>.
+    /// Stable for the lifetime of the job.
     /// </summary>
-    public static string HeadBranchName(string jobName, string runKey)
+    /// <remarks>
+    /// This carried the RUN KEY, so every run cut a branch nothing would ever delete and opened a
+    /// pull request nothing would ever close. A daily job on a repository that requires approval —
+    /// where an unmerged pull request is the normal state, not an edge case — accumulated a branch
+    /// and an open pull request per day indefinitely, each one restating the same proposal.
+    /// <para>
+    /// Reusing one branch also makes the adopt-rather-than-duplicate path in
+    /// <c>CreateOrAdoptPullRequestAsync</c> reachable at last: GitHub answers the second create for
+    /// the same head with 422, which is already classified as "could have taken effect", so the
+    /// existing open pull request is adopted and its number stays put across runs.
+    /// </para>
+    /// <para>
+    /// The job id discriminates, because two jobs whose names slugify identically — "Sales DB" and
+    /// "sales-db" — would otherwise share one branch and overwrite each other's proposals. The run
+    /// key used to hide that collision by accident.
+    /// </para>
+    /// </remarks>
+    public static string HeadBranchName(string jobName, Guid jobId)
     {
         var slug = Slugify(jobName);
-        return $"obsync/{(slug.Length == 0 ? "job" : slug)}/{runKey}";
+        // Eight hex characters: enough that a collision needs a deliberate effort, short enough
+        // that the branch name stays readable in the GitHub UI.
+        return $"obsync/{(slug.Length == 0 ? "job" : slug)}/{jobId.ToString("N")[..8]}";
     }
 
     // Lowercase, collapse non-alphanumeric runs to single dashes, trim dashes — a ref-safe slug.

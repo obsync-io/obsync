@@ -496,7 +496,7 @@ public sealed class GitHubService : IGitHubService
             }
 
             // The head filter is documented only as "user:ref-name", and this product's head branches
-            // contain slashes (obsync/<job>/<timestamp>) while the owner is whatever the user typed,
+            // contain slashes (obsync/<job>/<job-id>) while the owner is whatever the user typed,
             // in whatever case. If either makes the server-side filter miss, the whole reconciliation
             // silently does nothing — which is the one failure mode that would leave this fix looking
             // like it works. So an empty filtered result is not taken as proof: re-ask without the

@@ -196,7 +196,7 @@ public sealed class RunReportWriter : IRunReportWriter
         Row(writer, "Objects scanned", run.ObjectsScanned.ToString(CultureInfo.CurrentCulture));
         Row(writer, "Added / Modified / Deleted",
             $"{run.ObjectsAdded.ToString(CultureInfo.CurrentCulture)} / {run.ObjectsModified.ToString(CultureInfo.CurrentCulture)} / {run.ObjectsDeleted.ToString(CultureInfo.CurrentCulture)}");
-        Row(writer, "Skipped", run.ObjectsFailed.ToString(CultureInfo.CurrentCulture));
+        Row(writer, "Not scripted", run.ObjectsFailed.ToString(CultureInfo.CurrentCulture));
         RowRaw(writer, "Commit", CommitCell(run));
         if (run.PullRequestUrl is { Length: > 0 } prUrl)
         {

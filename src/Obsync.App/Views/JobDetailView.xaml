@@ -256,7 +256,7 @@
                                     </StackPanel>
                                     <StackPanel>
                                         <TextBlock Text="{Binding LatestRun.ObjectsFailed}" Style="{StaticResource MetricValue}" FontSize="24" />
-                                        <TextBlock Text="Skipped" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                        <TextBlock Text="Not scripted" Style="{StaticResource Caption}" Margin="0,2,0,0" />
                                     </StackPanel>
                                 </UniformGrid>
                             </StackPanel>
@@ -516,7 +516,7 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <!-- Only rendered when objects could not be scripted -->
-                                        <TextBlock Text="{Binding ObjectsFailed, StringFormat={}{0:N0} skipped}"
+                                        <TextBlock Text="{Binding ObjectsFailed, StringFormat={}{0:N0} not scripted}"
                                                    Foreground="{StaticResource WarningBrush}" FontWeight="SemiBold" VerticalAlignment="Center"
                                                    ToolTip="Objects that could not be scripted — see the Logs tab for the list">
                                             <TextBlock.Style>

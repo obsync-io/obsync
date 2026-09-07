@@ -10,12 +10,13 @@ public sealed class GitWorkspaceContext
     public required string RemoteUrl { get; init; }
 
     /// <summary>The branch that is checked out, committed to, and pushed. In pull-request mode this is
-    /// the per-run head branch; in direct-commit mode it is the target branch.</summary>
+    /// the job's head branch, recut from <see cref="BaseBranch"/> every run and reconciled with the
+    /// remote's copy at push time; in direct-commit mode it is the target branch.</summary>
     public required string Branch { get; init; }
 
     /// <summary>
-    /// When set, pull-request mode: <see cref="Branch"/> is created fresh off this base branch each
-    /// run (the base is the PR target and must already exist on the remote). Null = direct-commit mode.
+    /// When set, pull-request mode: <see cref="Branch"/> is recut off this base branch each run
+    /// (the base is the PR target and must already exist on the remote). Null = direct-commit mode.
     /// </summary>
     public string? BaseBranch { get; init; }
 
@@ -178,9 +179,12 @@ public sealed partial class GitWorkspace : IGitWorkspace
             }
         }
 
-        // Pull request mode: create a fresh per-run head branch at the base branch's tip. The base
-        // must already exist on the remote (it's what the PR targets); the per-run head does not, so
-        // the direct-mode stranded-commit preservation below does not apply.
+        // Pull request mode: recut the head branch at the base branch's tip, so the working tree is
+        // a faithful mirror of the base — the invariant the closed-unmerged recovery and the
+        // deletion tombstones both rest on. The base must already exist on the remote (it's what the
+        // PR targets). The direct-mode stranded-commit preservation below does not apply: a head
+        // commit that failed to push is superseded by the next run's recut, and PushAsync reconciles
+        // with whatever the remote already holds.
         if (context.BaseBranch is not null)
         {
             var baseExists = (await _git.RunAsync(
@@ -543,6 +547,23 @@ public sealed partial class GitWorkspace : IGitWorkspace
 
     public async Task<Result> PushAsync(GitWorkspaceContext context, CancellationToken cancellationToken = default)
     {
+        // Pull-request mode reuses ONE head branch per job, so a job keeps ONE pull request instead
+        // of opening a new one — with a new branch behind it — on every single run. Reconciling the
+        // reused branch with what the remote already holds happens first; direct mode falls
+        // straight through.
+        if (context.BaseBranch is not null)
+        {
+            var reconciled = await ReconcileHeadBranchAsync(context, cancellationToken).ConfigureAwait(false);
+            if (reconciled != HeadBranchAction.Push)
+            {
+                return reconciled == HeadBranchAction.AlreadyProposed
+                    ? Result.Success()
+                    : Result.Failure(
+                        "The head branch could not be reconciled with the copy already on the remote. "
+                        + "See the log for the git error.");
+            }
+        }
+
         var push = await RunNetworkAsync(
             context.LocalPath, context, ["push", "-u", "origin", context.Branch], cancellationToken).ConfigureAwait(false);
         if (push.Success)
@@ -573,6 +594,97 @@ public sealed partial class GitWorkspace : IGitWorkspace
         }
 
         return Result.Failure($"git push failed: {Summarize(push.StandardError)}");
+    }
+
+    /// <summary>What the head branch needs before it can be pushed.</summary>
+    private enum HeadBranchAction
+    {
+        /// <summary>Push it.</summary>
+        Push,
+
+        /// <summary>The remote branch already carries this exact tree — pushing would change nothing.</summary>
+        AlreadyProposed,
+
+        /// <summary>Reconciliation failed; the run must not push.</summary>
+        Failed,
+    }
+
+    /// <summary>
+    /// Reconciles the freshly recut head branch with the copy the remote already holds.
+    /// </summary>
+    /// <remarks>
+    /// The head branch is still recut from the base every run — that invariant is what makes a
+    /// closed-unmerged pull request recoverable and what makes a deletion tombstone retire
+    /// correctly, and nothing here weakens it. What changes is only how the recut branch is
+    /// reconciled with its own previous push:
+    /// <list type="bullet">
+    /// <item>The remote does not have the branch yet: nothing to reconcile, push it.</item>
+    /// <item>The remote branch already carries this exact tree: push NOTHING. The open pull request
+    /// already proposes precisely this content, and pushing an identical-but-differently-parented
+    /// commit would restate it — dismissing reviewer approvals on a repository configured to
+    /// dismiss them, for no change at all.</item>
+    /// <item>Otherwise merge the remote head in with <c>-s ours</c>: the merge keeps OUR tree
+    /// wholesale (the recut one) while making the remote's tip an ancestor, so the push is an
+    /// ordinary fast-forward.</item>
+    /// </list>
+    /// <para>
+    /// <c>-s ours</c> rather than a force push, deliberately. A force push is refused outright by a
+    /// repository whose rulesets block non-fast-forward updates — common in the enterprise, and it
+    /// would wedge pull-request mode completely — and <c>--force-with-lease</c> would not protect
+    /// anyone here even where force is allowed: <c>PrepareAsync</c> fetches at the start of every
+    /// run, which refreshes the very remote-tracking ref the lease is taken against. Merging keeps
+    /// a human's commits on the branch in the history rather than deleting them, and still lets
+    /// Obsync's scripted content win, which is the whole point of the tool.
+    /// </para>
+    /// </remarks>
+    private async Task<HeadBranchAction> ReconcileHeadBranchAsync(
+        GitWorkspaceContext context, CancellationToken cancellationToken)
+    {
+        var remoteRef = $"refs/remotes/origin/{context.Branch}";
+        var exists = (await _git.RunAsync(
+            context.LocalPath, ["rev-parse", "--verify", "--quiet", remoteRef], cancellationToken)
+            .ConfigureAwait(false)).Success;
+        if (!exists)
+        {
+            return HeadBranchAction.Push;
+        }
+
+        var ours = await RevParseAsync(context.LocalPath, "HEAD^{tree}", cancellationToken).ConfigureAwait(false);
+        var theirs = await RevParseAsync(context.LocalPath, $"{remoteRef}^{{tree}}", cancellationToken).ConfigureAwait(false);
+        if (ours is not null && ours == theirs)
+        {
+            _logger.LogInformation(
+                "The open proposal on {Branch} already carries this exact tree — leaving it untouched.",
+                context.Branch);
+            return HeadBranchAction.AlreadyProposed;
+        }
+
+        var merge = await _git.RunAsync(
+            context.LocalPath,
+            [
+                "-c", $"user.name={context.CommitterName}",
+                "-c", $"user.email={context.CommitterEmail}",
+                "merge", "-q", "-s", "ours", "--no-edit",
+                "-m", "Supersede the previous proposal on this branch.",
+                remoteRef,
+            ],
+            cancellationToken).ConfigureAwait(false);
+        if (!merge.Success)
+        {
+            _logger.LogError(
+                "Could not reconcile {Branch} with the copy on the remote: {Error}",
+                context.Branch, Summarize(merge.StandardError));
+            return HeadBranchAction.Failed;
+        }
+
+        return HeadBranchAction.Push;
+    }
+
+    /// <summary>The object id a revision resolves to, or null when it does not resolve.</summary>
+    private async Task<string?> RevParseAsync(string localPath, string revision, CancellationToken cancellationToken)
+    {
+        var result = await _git.RunAsync(localPath, ["rev-parse", revision], cancellationToken).ConfigureAwait(false);
+        return result.Success ? result.StandardOutput.Trim() : null;
     }
 
     /// <summary>
