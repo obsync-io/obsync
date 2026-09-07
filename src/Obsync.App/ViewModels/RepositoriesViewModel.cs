@@ -76,7 +76,16 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
             var token = _credentialStore.Retrieve(CredentialKeys.GitHubToken(repository.Id));
             if (string.IsNullOrEmpty(token))
             {
-                StatusMessage = $"{repository.Name}: no token saved — edit the repository to add one.";
+                // Recorded, not just reported. A repository with no credential at all cannot be
+                // valid, and this is the most certain evidence the product ever has — more certain
+                // than any answer GitHub could give. It previously returned without touching the
+                // stored verdict, so a repository whose token had been removed from Windows
+                // Credential Manager went on displaying a green "Valid" badge.
+                const string missing = "No token is saved for this repository — edit it to add one.";
+                await _repository.UpdateValidationStatusAsync(
+                    repository.Id, RepositoryValidationStatus.Failed, _clock.UtcNow, missing);
+                StatusMessage = $"{repository.Name}: {missing}";
+                await LoadAsync();
                 return;
             }
 
@@ -84,7 +93,14 @@ public sealed partial class RepositoriesViewModel : ObservableObject, IAsyncView
                 _gitHub, token, repository.Owner, repository.RepositoryName, repository.DefaultBranch);
             if (result.IsFailure)
             {
-                StatusMessage = $"{repository.Name}: {result.Error}";
+                // Deliberately does NOT touch the stored verdict: a check that could not run says
+                // nothing about the repository, and overwriting a good result because the network
+                // blinked would be its own kind of lie. But the row still shows the previous
+                // verdict, so the message has to say so — otherwise the page asserts "the check
+                // failed" and "this repository is Valid" side by side with nothing to reconcile them.
+                StatusMessage =
+                    $"{repository.Name}: {result.Error} The status shown is from the last completed check "
+                    + "and has not been changed.";
                 return;
             }
 

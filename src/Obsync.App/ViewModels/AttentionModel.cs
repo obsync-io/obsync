@@ -105,10 +105,27 @@ internal static class AttentionModel
         // Repositories had no equivalent loop at all, which is an odd asymmetry: a server that
         // failed its last test raised a row, while a repository whose stored status was Failed —
         // an expired token, a repository that no longer resolves — raised nothing anywhere.
-        foreach (var repository in repositories.Where(r => r.LastValidationStatus == RepositoryValidationStatus.Failed))
+        // Judged on the EFFECTIVE status, the same value the Repositories page renders. Reading the
+        // raw stored status made the two screens disagree: a Failed result older than the decay
+        // window showed a red "failed its last check" row here while the page showed a neutral
+        // "Not validated" pill, and the repository also collected a second row from the staleness
+        // loop below for the same underlying fact.
+        foreach (var repository in repositories.Where(
+            r => r.EffectiveValidationStatus(now) == RepositoryValidationStatus.Failed))
         {
             items.Add(new(AttentionSeverity.Error,
                 $"Repository “{repository.Name}” failed its last check — {FirstLine(repository.LastValidationDetail ?? "check it in Repositories")}",
+                "Open Repositories", null, "Repositories"));
+        }
+
+        // A read-only token raised nothing, which is the wrong way round: it is the failure this
+        // checker was built to catch. Every push-based job on it fails, and the page shows it as
+        // Attention while the dashboard said nothing at all.
+        foreach (var repository in repositories.Where(
+            r => r.EffectiveValidationStatus(now) == RepositoryValidationStatus.Attention))
+        {
+            items.Add(new(AttentionSeverity.Warning,
+                $"Repository “{repository.Name}” needs attention — {FirstLine(repository.LastValidationDetail ?? "check it in Repositories")}",
                 "Open Repositories", null, "Repositories"));
         }
 

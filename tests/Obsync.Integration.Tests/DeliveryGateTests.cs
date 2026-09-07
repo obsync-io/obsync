@@ -285,6 +285,20 @@ public sealed class DeliveryGateTests : IAsyncLifetime
             await Task.Yield();
             foreach (var item in Items.Where(i => request.Types.Contains(i.Identity.Type)))
             {
+                // Honour the incremental floor, as a real provider does. This fake used to ignore it
+                // entirely, which quietly made every incremental test meaningless: objects reached
+                // the engine whether or not the planner had filtered them out, so nothing could
+                // observe the difference between "filtered" and "not filtered".
+                //
+                // A filtered type yields NOTHING here, which is the true production shape for this
+                // scenario — the object was delivered, its watermark advanced past it, and SQL has
+                // not changed since. That is exactly how a skipped object never reaches the engine's
+                // self-heal.
+                if (request.IncrementalWatermarks?.ContainsKey(item.Identity.Type) == true)
+                {
+                    continue;
+                }
+
                 yield return item;
             }
         }
@@ -297,4 +311,95 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         public void Delete(string key) { }
         public bool Exists(string key) => true;
     }
+
+    /// <summary>The single scripted object's file, wherever the layout put it.</summary>
+    private string TrackedFile() =>
+        Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+
+    [Fact]
+    public async Task PrMode_AClosedUnmergedPullRequest_ReproposesTheModification()
+    {
+        // In PR mode "delivered" means PROPOSED, not landed. If the reviewer closes the pull request
+        // without merging, base keeps the OLD file while state records the NEW hash as delivered.
+        // Both self-heal tests then passed — the hash matched, and the file existed — so the object
+        // was never written again and the modification was silently dropped from every later run.
+        //
+        // An enterprise GitHub that requires approval to merge makes this the NORMAL state.
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+
+        var first = await RunAsync();
+        Assert.NotEqual(RunStatus.Failed, first.Status);
+        Assert.Single(await StatesAsync());
+
+        // The pull request is closed unmerged: the tree reverts to what base still holds.
+        await File.WriteAllTextAsync(TrackedFile(), "body v0 -- still what base carries");
+
+        var second = await RunAsync();
+
+        Assert.NotEqual(RunStatus.NoChanges, second.Status);
+        Assert.Contains("body v1", await File.ReadAllTextAsync(TrackedFile()));
+    }
+
+    [Fact]
+    public async Task PrMode_AMatchingTree_IsStillNoChanges()
+    {
+        // The other half, and the one that stops this becoming a rewrite-everything-every-run
+        // regression: when the tree already carries exactly what state says was delivered, there is
+        // nothing to do.
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+        _ = await RunAsync();
+
+        Assert.Equal(RunStatus.NoChanges, (await RunAsync()).Status);
+    }
+
+    [Fact]
+    public async Task DirectMode_AMatchingTree_IsStillNoChanges()
+    {
+        // Direct mode pushes to the branch it tracks, so delivery means landed and the tree cannot
+        // legitimately disagree. It must not pay for a divergence it cannot have.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        _ = await RunAsync();
+
+        Assert.Equal(RunStatus.NoChanges, (await RunAsync()).Status);
+    }
+
+    [Fact]
+    public async Task PrMode_AClosedUnmergedPullRequest_ReproposesTheModification_WithIncrementalScriptingOn()
+    {
+        // The configuration that actually ships: IncrementalScripting defaults to TRUE, and it
+        // filters at the PROVIDER — so a skipped object never reaches the self-heal at all. The
+        // content check alone would therefore have fixed nothing for a real job. This asserts the
+        // outcome in the default configuration rather than the one the fixture happens to use.
+        _job.Advanced.IncrementalScripting = true;
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+
+        var first = await RunAsync();
+        Assert.NotEqual(RunStatus.Failed, first.Status);
+
+        await File.WriteAllTextAsync(TrackedFile(), "body v0 -- still what base carries");
+
+        var second = await RunAsync();
+
+        Assert.NotEqual(RunStatus.NoChanges, second.Status);
+        Assert.Contains("body v1", await File.ReadAllTextAsync(TrackedFile()));
+    }
+
 }

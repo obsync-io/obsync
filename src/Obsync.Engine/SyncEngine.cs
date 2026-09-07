@@ -959,10 +959,18 @@ public sealed class SyncEngine : ISyncEngine
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
             if (changeType == ChangeType.Unchanged)
             {
-                // Self-heal drift: our recorded hash matches, but if the file is missing from the
-                // working tree (manual delete, fresh clone with stale state, a prior reset) rewrite it
-                // so the repository reflects the true source. If it is present, there is nothing to do.
-                if (existingFiles.Value.Contains(absolutePath))
+                // Self-heal drift: our recorded hash matches, but the working tree may not actually
+                // carry that content. Rewrite when it does not.
+                //
+                // Existence alone was not enough, and the gap was reachable by an ordinary human
+                // action. In pull-request mode a delivered changeset is only PROPOSED — if the
+                // reviewer closes the pull request without merging, the base branch keeps the OLD
+                // file while our state records the NEW hash as delivered. Both tests then passed
+                // (hash matches, file present) and the object was never written again: the
+                // modification was silently dropped from every later run while the job reported
+                // success. Comparing the bytes closes that, and also covers a file edited by hand in
+                // the repository, which Obsync should overwrite because it is the source of truth.
+                if (existingFiles.Value.Contains(absolutePath) && FileHasContent(absolutePath, scriptBytes))
                 {
                     return;
                 }
@@ -2226,6 +2234,37 @@ public sealed class SyncEngine : ISyncEngine
         if (pr.ReviewerWarning is not null)
         {
             context.Log(SyncLogLevel.Warning, pr.ReviewerWarning);
+        }
+    }
+
+    /// <summary>
+    /// True when the file on disk already holds exactly <paramref name="expected"/>.
+    /// </summary>
+    /// <remarks>
+    /// A byte comparison rather than a hash so it cannot disagree with whatever algorithm the
+    /// hasher uses. Length is checked first, which settles almost every mismatch without a read.
+    /// Any I/O failure answers "no": rewriting a file we could not read is harmless and idempotent,
+    /// whereas skipping one we could not verify is the loss this exists to prevent.
+    /// </remarks>
+    private static bool FileHasContent(string absolutePath, byte[] expected)
+    {
+        try
+        {
+            var info = new FileInfo(absolutePath);
+            if (!info.Exists || info.Length != expected.LongLength)
+            {
+                return false;
+            }
+
+            return File.ReadAllBytes(absolutePath).AsSpan().SequenceEqual(expected);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 

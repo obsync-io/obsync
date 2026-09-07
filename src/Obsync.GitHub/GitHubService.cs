@@ -139,6 +139,47 @@ public sealed class GitHubService : IGitHubService
                 TokenValid: false, Login: null, RepositoryFound: false, CanRead: false, CanWrite: false,
                 Detail: "The token was rejected by GitHub. Check that it is valid and not expired."));
         }
+        // The three rate-limit types MUST be caught before ForbiddenException: every one of them
+        // derives from it. They arrive as 403 but say nothing whatever about the credential, so they
+        // are a check that could not run — a Result.Failure, which leaves the stored verdict alone.
+        catch (RateLimitExceededException ex)
+        {
+            return Result.Failure<TokenPermissionReport>(
+                $"GitHub's request limit for this token is exhausted; it resets at {ex.Reset.ToLocalTime():t}.");
+        }
+        catch (SecondaryRateLimitExceededException)
+        {
+            return Result.Failure<TokenPermissionReport>(
+                "GitHub applied a secondary rate limit to this token. Wait a moment and check again.");
+        }
+        catch (AbuseException)
+        {
+            return Result.Failure<TokenPermissionReport>(
+                "GitHub applied a secondary rate limit to this token. Wait a moment and check again.");
+        }
+        catch (ForbiddenException ex)
+        {
+            // A 403 that is NOT a rate limit is GitHub refusing this credential for this repository,
+            // and that is evidence about the token — so it is reported as a verdict, not as a check
+            // that could not run.
+            //
+            // This used to fall through to the generic ApiException arm below and become a
+            // Result.Failure, which by design leaves the stored validation status untouched. The
+            // effect was that the two most common enterprise revocations — SAML/SSO
+            // deauthorization, and an organisation withdrawing a fine-grained token's repository
+            // grant — both left the repository showing a green "Valid" badge for up to the full
+            // 30-day decay window, while every push failed. ForbiddenException is a SIBLING of
+            // AuthorizationException in Octokit, not a subclass, so the 401 arm above never covered
+            // it.
+            _logger.LogWarning("GitHub refused the token for {Owner}/{Name}: {Message}", owner, name, ex.Message);
+            return Result.Success(new TokenPermissionReport(
+                TokenValid: true, Login: null, RepositoryFound: false, CanRead: false, CanWrite: false,
+                Detail: $"GitHub refused this token for {owner}/{name} (HTTP 403). The token itself authenticated, "
+                    + "so this is an authorization policy rather than an expired token. Usually one of: the token "
+                    + "has not been authorized for the organization's SAML/SSO; the organization revoked a "
+                    + "fine-grained token's access to this repository; an IP allow-list excludes this machine; or "
+                    + "the account has been suspended."));
+        }
         catch (ApiException ex)
         {
             _logger.LogWarning("GitHub permission check failed: {Message}", ex.Message);
