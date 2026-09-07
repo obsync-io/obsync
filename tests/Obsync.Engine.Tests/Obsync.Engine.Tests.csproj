@@ -24,4 +24,13 @@
     <ProjectReference Include="..\..\src\Obsync.Shared\Obsync.Shared.csproj" />
   </ItemGroup>
 
+  <!--
+    The GitHub service source is the subject of RetryHelperInvariantTests: the rule that only
+    idempotent calls may be retried cannot be expressed in the type system, and a comment asserting
+    it protects nothing. Copied next to the test assembly so the test reads a deterministic path.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\src\Obsync.GitHub\GitHubService.cs" Link="GitHubService.cs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

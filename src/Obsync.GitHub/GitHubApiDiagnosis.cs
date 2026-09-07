@@ -93,9 +93,19 @@ public static class GitHubApiDiagnosis
     /// An actionable cause for a REST failure, or null when the chain does not describe one this
     /// build recognises — letting the caller fall back to <see cref="Describe"/>.
     /// </summary>
-    public static string? TryExplain(Exception exception)
+    public static string? TryExplain(Exception exception) => Classify(Describe(exception));
+
+    /// <summary>
+    /// The arms themselves, over an already-flattened chain.
+    /// </summary>
+    /// <remarks>
+    /// Every arm matches English substrings, and the lowest layer of these chains is a Win32 message
+    /// that Windows localizes. On a non-English Windows the arms return null and the caller falls back
+    /// to reporting the chain verbatim — degraded, but never wrong, which is the right way round.
+    /// </remarks>
+    private static string? Classify(string detail)
     {
-        var text = Describe(exception).ToLowerInvariant();
+        var text = detail.ToLowerInvariant();
 
         // Revocation first: it is a certificate failure too, but with its own remedy, so a broader
         // certificate arm above it would swallow the specific advice.
@@ -107,9 +117,25 @@ public static class GitHubApiDiagnosis
                  + "the fix has to come from the network, not from Obsync.";
         }
 
-        if (text.Contains("not trusted") || text.Contains("remote certificate is invalid")
-            || text.Contains("untrusted") || text.Contains("partial chain")
-            || text.Contains("certificate chain"))
+        // Expiry and hostname mismatch are certificate failures with completely different remedies,
+        // and they arrive carrying the words "certificate chain" too. Matching that phrase broadly
+        // told people to install a corporate root, which fixes neither.
+        if (text.Contains("nottimevalid") || text.Contains("has expired") || text.Contains("not yet valid"))
+        {
+            return "api.github.com's certificate was rejected as outside its validity period. Check this "
+                 + "machine's system clock and time zone first — a clock that is wrong by enough will reject "
+                 + "every certificate on the internet.";
+        }
+
+        if (text.Contains("namemismatch") || text.Contains("name mismatch"))
+        {
+            return "The certificate presented for api.github.com was issued for a different host. On a "
+                 + "corporate network this usually means a TLS-inspecting proxy is substituting its own "
+                 + "certificate; the connection is being intercepted rather than merely filtered.";
+        }
+
+        if (text.Contains("not trusted") || text.Contains("untrusted") || text.Contains("partial chain")
+            || text.Contains("unable to get local issuer") || text.Contains("remote certificate is invalid"))
         {
             return "Windows did not trust api.github.com's certificate. If this network inspects TLS, its private "
                  + "root has to be installed in the Windows certificate store (Local Machine → Trusted Root "
@@ -126,7 +152,8 @@ public static class GitHubApiDiagnosis
                  + "firewall or proxy, and whether this machine restricts TLS protocols or ciphers.";
         }
 
-        if (text.Contains("407") || text.Contains("proxy authentication"))
+        if (text.Contains("proxy authentication") || text.Contains("http 407")
+            || text.Contains("status code 407") || text.Contains("(407)"))
         {
             return "The HTTP proxy rejected Obsync's credentials. Proxy passwords are stored per Windows account, "
                  + "so a scheduled run fails here when the service's account cannot read the one the app saved — "
@@ -158,7 +185,7 @@ public static class GitHubApiDiagnosis
     public static string Explain(Exception exception)
     {
         var detail = Describe(exception);
-        return TryExplain(exception) is { } cause
+        return Classify(detail) is { } cause
             ? $"{cause} (Reported by Windows as: {detail})"
             : detail;
     }

@@ -306,19 +306,23 @@ public sealed class GitHubService : IGitHubService
         try
         {
             var client = await CreateClientAsync(token, cancellationToken).ConfigureAwait(false);
-            var pr = await WithRetryAsync(
-                () => client.PullRequest.Create(
-                    owner, name, new NewPullRequest(ClampTitle(title), headBranch, baseBranch) { Body = body }),
-                cancellationToken).ConfigureAwait(false);
+            var pr = await CreateOrAdoptPullRequestAsync(
+                client, owner, name, title, headBranch, baseBranch, body, cancellationToken).ConfigureAwait(false);
 
             string? reviewerWarning = null;
             if (reviewers.Count > 0)
             {
                 try
                 {
-                    await WithRetryAsync(
-                        () => client.PullRequest.ReviewRequest.Create(owner, name, pr.Number, new PullRequestReviewRequest(reviewers, [])),
-                        cancellationToken).ConfigureAwait(false);
+                    // Deliberately NOT through WithRetryAsync: this is a POST, and that helper
+                    // treats a transport error as transient — the same combination that made a
+                    // created pull request look like a failed one. Requesting reviewers is already
+                    // best-effort (the catch below downgrades any failure to a warning on an
+                    // already-open PR), so a single attempt is the honest thing to do rather than
+                    // re-POSTing on an outcome we cannot observe.
+                    await client.PullRequest.ReviewRequest
+                        .Create(owner, name, pr.Number, new PullRequestReviewRequest(reviewers, []))
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is ApiException or HttpRequestException
                     || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
@@ -343,14 +347,171 @@ public sealed class GitHubService : IGitHubService
         catch (HttpRequestException ex)
         {
             _logger.LogWarning("Opening the pull request failed: {Message}", GitHubApiDiagnosis.Describe(ex));
-            return Result.Failure<PullRequestInfo>($"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)}");
+
+            // Reaching here means the create failed AND the reconciliation lookup could not confirm
+            // one way or the other — most likely because the same transport problem broke it too. The
+            // pull request may nonetheless exist: the request can have been applied with its response
+            // lost. Saying so is the difference between the user checking and the user opening a
+            // duplicate by hand.
+            return Result.Failure<PullRequestInfo>(
+                $"Could not reach GitHub: {GitHubApiDiagnosis.Explain(ex)} "
+                + "Check the repository before retrying — if the request reached GitHub, the pull request "
+                + "may have been created even though the reply never arrived.");
         }
         catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // An HttpClient timeout, not user cancellation (which must propagate).
-            return Result.Failure<PullRequestInfo>("The request to GitHub timed out.");
+            return Result.Failure<PullRequestInfo>(
+                "The request to GitHub timed out. Check the repository before retrying — the pull request "
+                + "may have been created even though the reply never arrived.");
         }
     }
+
+    /// <summary>
+    /// Opens the pull request, reconciling with the server before giving up or retrying.
+    /// </summary>
+    /// <remarks>
+    /// Creating a pull request is a POST, and POSTs are not idempotent. This used to go through the
+    /// generic retry helper, which treats <see cref="HttpRequestException"/> as transient — so a
+    /// request that REACHED GitHub and created the pull request, but whose response was lost to a
+    /// dropped TLS connection, was retried and ultimately reported as a failure. The pull request
+    /// existed; the product said it did not.
+    ///
+    /// <para>
+    /// That is not merely a wrong message. The engine only marks the run's objects as delivered when
+    /// this returns success, so a false failure leaves the state un-advanced and the NEXT run cuts a
+    /// fresh head branch and opens a SECOND pull request for the same content — once per run, until
+    /// somebody notices.
+    /// </para>
+    ///
+    /// <para>
+    /// "No response" and "no effect" are different things and cannot be told apart from the client
+    /// side, so the server is asked instead: on any failure, look for an open pull request for this
+    /// head and base. Finding one is proof the work landed, whatever the transport did afterwards.
+    /// That also covers GitHub's 422 for a duplicate, which is the same situation seen from the
+    /// other side.
+    /// </para>
+    /// </remarks>
+    private Task<PullRequest> CreateOrAdoptPullRequestAsync(
+        GitHubClient client, string owner, string name, string title, string headBranch, string baseBranch,
+        string body, CancellationToken cancellationToken) =>
+        CreateOrAdopt.ExecuteAsync(
+            create: () => client.PullRequest.Create(
+                owner, name, new NewPullRequest(ClampTitle(title), headBranch, baseBranch) { Body = body }),
+            findExisting: async failure =>
+            {
+                // Only an ambiguous outcome is worth a lookup. A rejected token, a missing repository
+                // or an exhausted rate limit created nothing, so asking spends a request — against an
+                // already-exhausted quota, in the rate-limit case — and logs a warning that reads as a
+                // second, unrelated problem.
+                if (!CouldHaveTakenEffect(failure))
+                {
+                    return null;
+                }
+
+                var existing = await FindOpenPullRequestAsync(
+                    client, owner, name, headBranch, baseBranch, cancellationToken).ConfigureAwait(false);
+                if (existing is not null)
+                {
+                    _logger.LogInformation(
+                        "The pull request for {Head} already exists as #{Number} — adopting it rather than "
+                        + "creating a second one.", headBranch, existing.Number);
+                }
+
+                return existing;
+            },
+            isTransient: IsRetryableCreateFailure,
+            delayBeforeRetry: attempt => Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken),
+            cancellationToken: cancellationToken);
+
+    /// <summary>
+    /// The open pull request for this head and base, or null — including when the lookup itself
+    /// fails, which must never turn into a second failure on top of the first.
+    /// </summary>
+    private async Task<PullRequest?> FindOpenPullRequestAsync(
+        GitHubClient client, string owner, string name, string headBranch, string baseBranch,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // GitHub qualifies the head with the owner of the branch, which for this product is
+            // always the repository owner: Obsync pushes its head branch to the repository itself,
+            // never to a fork.
+            var request = new PullRequestRequest
+            {
+                State = ItemStateFilter.Open,
+                Head = $"{owner}:{headBranch}",
+                Base = baseBranch,
+            };
+
+            // Safe to retry: these are GETs.
+            var filtered = await WithRetryAsync(
+                () => client.PullRequest.GetAllForRepository(owner, name, request),
+                cancellationToken).ConfigureAwait(false);
+
+            if (Match(filtered) is { } found)
+            {
+                return found;
+            }
+
+            // The head filter is documented only as "user:ref-name", and this product's head branches
+            // contain slashes (obsync/<job>/<timestamp>) while the owner is whatever the user typed,
+            // in whatever case. If either makes the server-side filter miss, the whole reconciliation
+            // silently does nothing — which is the one failure mode that would leave this fix looking
+            // like it works. So an empty filtered result is not taken as proof: re-ask without the
+            // head filter and match on the ref locally, where the semantics are ours.
+            var byBase = await WithRetryAsync(
+                () => client.PullRequest.GetAllForRepository(
+                    owner, name, new PullRequestRequest { State = ItemStateFilter.Open, Base = baseBranch }),
+                cancellationToken).ConfigureAwait(false);
+
+            return Match(byBase);
+
+            PullRequest? Match(IReadOnlyList<PullRequest> candidates) =>
+                candidates.FirstOrDefault(p =>
+                    string.Equals(p.Head?.Ref, headBranch, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The same token test as CreateOrAdopt, for the same reason: HttpClient reports its own
+            // timeout as TaskCanceledException. Testing the TYPE here let a timed-out lookup escape
+            // and replace the create's real failure with "the request to GitHub timed out".
+            _logger.LogWarning(
+                "Could not check whether the pull request for {Head} already exists: {Message}",
+                headBranch, GitHubApiDiagnosis.Describe(ex));
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a failed create might nonetheless have been applied on the server.
+    /// </summary>
+    /// <remarks>
+    /// The distinction is between "GitHub answered, and the answer was no" and "we never learned what
+    /// happened". Only the second is worth reconciling. A 422 IS worth it: the usual reason a create
+    /// is refused as a duplicate is that an earlier attempt succeeded.
+    /// </remarks>
+    internal static bool CouldHaveTakenEffect(Exception failure) => failure switch
+    {
+        AuthorizationException => false,
+        RateLimitExceededException => false,
+        NotFoundException => false,
+        ApiException api => (int)api.StatusCode is not (401 or 403 or 404),
+        _ => true,
+    };
+
+    /// <summary>
+    /// Whether a failed create is worth another attempt, once reconciliation has found nothing.
+    /// </summary>
+    /// <remarks>
+    /// Wider than <see cref="IsTransient"/> by one case: an HttpClient timeout arrives as
+    /// <see cref="TaskCanceledException"/>, which IsTransient does not cover — and must not, because
+    /// it also guards a retry helper that has no cancellation token, where retrying a cancelled call
+    /// would be wrong. By the time this is consulted, CreateOrAdopt has already established that the
+    /// caller did not ask to stop, so a cancellation-shaped exception here is a timeout.
+    /// </remarks>
+    internal static bool IsRetryableCreateFailure(Exception failure) =>
+        IsTransient(failure) || failure is TaskCanceledException or TimeoutException;
 
     /// <summary>Turns a PR-create API failure into a short, actionable message.</summary>
     private static string ExplainPullRequestFailure(ApiException ex) => (int)ex.StatusCode switch
@@ -380,6 +541,16 @@ public sealed class GitHubService : IGitHubService
     /// secondary rate limits, transport blips). Permanent failures — bad credentials, 4xx, the
     /// primary rate limit — are not retried and surface to the caller's catch immediately.
     /// </summary>
+    /// <remarks>
+    /// ONLY for idempotent calls. It treats <see cref="HttpRequestException"/> as transient, and a
+    /// transport error cannot distinguish "the request never arrived" from "the request was applied
+    /// and the response was lost" — so retrying a POST here duplicates whatever it creates. Pull
+    /// request creation was wrapped in this and produced exactly that class of bug; it now goes
+    /// through <see cref="CreateOrAdopt"/>, which reconciles with the server instead of guessing.
+    /// Every remaining caller is a GET — asserted by <c>WithRetryAsyncTests</c>, because this remark
+    /// is the only thing standing between a future POST and a repeat of that bug, and a remark that
+    /// is merely believed protects nothing.
+    /// </remarks>
     private static async Task<T> WithRetryAsync<T>(Func<Task<T>> action, CancellationToken cancellationToken, int maxAttempts = 3)
     {
         var attempt = 0;
