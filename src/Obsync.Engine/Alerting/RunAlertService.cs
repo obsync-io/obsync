@@ -55,7 +55,9 @@ public class RunAlertService : IRunAlertService
         if (settings.WebhookEnabled)
         {
             webhookFailure = await SendWithOneRetryAsync(
-                "Webhook", ct => PostWebhookAsync(settings, RunAlertPayload.BuildWebhookJson(run), ct),
+                "Webhook",
+                ct => PostWebhookAsync(
+                    settings, RunAlertPayload.BuildWebhookJson(run), RunAlertPayload.IdempotencyKey(run), ct),
                 run, cancellationToken).ConfigureAwait(false);
         }
 
@@ -172,7 +174,8 @@ public class RunAlertService : IRunAlertService
             try
             {
                 await PostWebhookAsync(
-                    settings, """{"event":"test","message":"This is a test alert from Obsync."}""", cancellationToken)
+                    settings, """{"event":"test","message":"This is a test alert from Obsync."}""",
+                    idempotencyKey: null, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -223,7 +226,13 @@ public class RunAlertService : IRunAlertService
     }
 
     /// <summary>One webhook delivery attempt; virtual so tests can fake the transport.</summary>
-    protected virtual async Task PostWebhookAsync(AlertSettings settings, string json, CancellationToken cancellationToken)
+    /// <param name="idempotencyKey">
+    /// Stable across the retry of a given alert, so a receiver that honours <c>Idempotency-Key</c>
+    /// collapses a re-send into the original event instead of raising a second incident. Null for
+    /// the Settings test button, which is a deliberate one-off and has nothing to collapse onto.
+    /// </param>
+    protected virtual async Task PostWebhookAsync(
+        AlertSettings settings, string json, string? idempotencyKey, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(settings.WebhookUrl, UriKind.Absolute, out var url)
             || (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
@@ -236,6 +245,11 @@ public class RunAlertService : IRunAlertService
         using var handler = new HttpClientHandler { Proxy = resolution?.WebProxy, UseProxy = resolution is not null };
         using var http = new HttpClient(handler) { Timeout = SendTimeout };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Obsync");
+
+        if (!string.IsNullOrEmpty(idempotencyKey))
+        {
+            http.DefaultRequestHeaders.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
+        }
 
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
         using var response = await http.PostAsync(url, content, cancellationToken).ConfigureAwait(false);

@@ -2152,19 +2152,33 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
-        // Direct mode: the local commit is durable delivery — even if the push below fails, the
-        // stranded commit is preserved and re-pushed by the next run. PR mode is different: its
-        // head branch is recut from the base every run, so delivery is only the opened PR.
-        if (gitContext.BaseBranch is null)
-        {
-            context.ChangesDelivered = true;
-        }
-
         await PushAsync(run, context, gitContext, cancellationToken).ConfigureAwait(false);
 
-        // Pull request mode: the head branch is now pushed — open the PR against the base branch.
-        if (gitContext.BaseBranch is not null && run.Status == RunStatus.Succeeded)
+        if (gitContext.BaseBranch is null)
         {
+            // Direct mode: delivery is the push landing, and nothing weaker.
+            //
+            // This used to be set BEFORE the push, on the reasoning that a local commit is durable
+            // because the next run re-pushes a stranded one. That holds only while the clone
+            // survives, and three ordinary events destroy it: the corrupt-workspace self-heal
+            // re-clones from scratch, changing the workspaces root in Settings leaves the old
+            // location behind, and a backup restore or antivirus can remove the directory outright.
+            // Any of them, after state had already been advanced, left every affected object's hash
+            // matching what was never delivered — so the job reported NoChanges forever against a
+            // repository that never received the work, and the run row asserted a commit SHA that
+            // only ever existed on one machine.
+            //
+            // Waiting costs nothing: when a stranded commit does survive, the next run finds the
+            // branch ahead of origin and pushes it, and only then advances state.
+            if (run.Status == RunStatus.Succeeded)
+            {
+                context.ChangesDelivered = true;
+            }
+        }
+        else if (run.Status == RunStatus.Succeeded)
+        {
+            // Pull request mode: the head branch is now pushed — open the PR against the base branch.
+            // Its head branch is recut from the base every run, so delivery is only the opened PR.
             await OpenPullRequestAsync(run, context, gitContext, subject, body, cancellationToken).ConfigureAwait(false);
         }
     }

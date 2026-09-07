@@ -8,6 +8,9 @@ public sealed class RunAlertPayloadTests
 {
     private static SyncRun FailedRun() => new()
     {
+        // Pinned: the payload now carries the run's identity so a receiver can dedupe a re-sent
+        // alert, and an exact-payload test cannot assert a value that changes every construction.
+        Id = Guid.Parse("11111111-2222-3333-4444-555555555555"),
         JobId = Guid.Parse("6f9619ff-8b86-d011-b42d-00c04fc964ff"),
         JobName = "SalesDB Production Sync",
         RunKey = "20260628-230000",
@@ -108,7 +111,9 @@ public sealed class RunAlertPayloadTests
     public void BuildWebhookJson_FailedRun_IsExact()
     {
         var expected =
-            @"{""event"":""run.failed"",""job"":""SalesDB Production Sync"",""jobId"":""6f9619ff-8b86-d011-b42d-00c04fc964ff""," +
+            @"{""event"":""run.failed"",""idempotencyKey"":""obsync-run-11111111222233334444555555555555""," +
+            @"""job"":""SalesDB Production Sync"",""jobId"":""6f9619ff-8b86-d011-b42d-00c04fc964ff""," +
+            @"""runId"":""11111111-2222-3333-4444-555555555555"",""runKey"":""20260628-230000""," +
             @"""status"":""Failed"",""server"":""PROD-SQL01"",""databases"":""SalesDB"",""started"":""2026-06-28T23:00:00+00:00""," +
             @"""completed"":""2026-06-28T23:02:31+00:00"",""durationMs"":151000," +
             @"""counts"":{""scanned"":42120,""added"":1,""modified"":2,""deleted"":1,""failed"":3},""changeCount"":4," +
@@ -123,7 +128,10 @@ public sealed class RunAlertPayloadTests
     {
         var json = RunAlertPayload.BuildWebhookJson(ChangesRun());
 
-        Assert.StartsWith(@"{""event"":""run.changes"",""job"":""SalesDB Production Sync"",", json, StringComparison.Ordinal);
+        Assert.StartsWith(
+            @"{""event"":""run.changes"",""idempotencyKey"":""obsync-run-11111111222233334444555555555555""," +
+            @"""job"":""SalesDB Production Sync"",",
+            json, StringComparison.Ordinal);
         Assert.Contains(@"""commitUrl"":""https://github.com/corp/sql-objects/commit/abc1234def""", json, StringComparison.Ordinal);
         Assert.Contains(@"""pullRequestUrl"":""https://github.com/corp/sql-objects/pull/7""", json, StringComparison.Ordinal);
         Assert.Contains(@"""error"":null", json, StringComparison.Ordinal);

@@ -58,7 +58,8 @@ public sealed class RunAlertServiceRetryTests
                 : Task.CompletedTask;
         }
 
-        protected override Task PostWebhookAsync(AlertSettings settings, string json, CancellationToken cancellationToken)
+        protected override Task PostWebhookAsync(
+            AlertSettings settings, string json, string? idempotencyKey, CancellationToken cancellationToken)
         {
             WebhookAttempts++;
             cancellationToken.ThrowIfCancellationRequested();

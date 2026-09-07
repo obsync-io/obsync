@@ -139,8 +139,21 @@ public sealed class DeliveryGateTests : IAsyncLifetime
                 : Result.Failure<PullRequestInfo>("GitHub rejected the pull request: token lacks pull-request scope."));
 
     [Fact]
-    public async Task DirectMode_PushFailure_StillAdvancesState_TheCommitIsDurable()
+    public async Task DirectMode_PushFailure_DoesNotAdvanceState()
     {
+        // This test previously asserted the opposite, on the reasoning that a local commit is
+        // durable delivery because the next run re-pushes a stranded one. The re-push is real — but
+        // the durability is conditional, and the condition is that the clone survives. Three
+        // ordinary events destroy it: the corrupt-workspace self-heal re-clones from scratch,
+        // changing the workspaces root in Settings abandons the old location, and a backup restore
+        // or antivirus can remove the directory outright.
+        //
+        // After any of those, with state already advanced, every affected object's stored hash
+        // matches content that was never delivered — so the job reports NoChanges forever against a
+        // repository that never received the work, and the run row asserts a commit SHA that only
+        // ever existed on one machine. Direct mode now waits for the push, exactly as PR mode below
+        // waits for the pull request. Nothing is lost by waiting: the stranded commit is still
+        // re-pushed on the next run, and state advances then.
         _scripts.Items = [Proc("P1", "body v1")];
         SetCommit(succeeds: true);
         SetPush(succeeds: false);
@@ -149,8 +162,27 @@ public sealed class DeliveryGateTests : IAsyncLifetime
 
         Assert.Equal(RunStatus.Warning, run.Status);
         Assert.Contains("push", run.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-        var states = await StatesAsync();
-        Assert.Single(states); // the local commit is preserved and re-pushed next run
+        Assert.Empty(await StatesAsync());
+    }
+
+    [Fact]
+    public async Task DirectMode_AStrandedCommit_IsDeliveredByTheNextRun()
+    {
+        // The other half of the rule above: not advancing state must not lose the work. The second
+        // run re-scripts the same content, git stages nothing because the tree already matches, and
+        // the branch is still ahead of origin — so it pushes the stranded commit and only then
+        // records delivery.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: false);
+        Assert.Empty(await StatesAsync());
+        _ = await RunAsync();
+
+        SetPush(succeeds: true);
+        var second = await RunAsync();
+
+        Assert.NotEqual(RunStatus.Failed, second.Status);
+        Assert.Single(await StatesAsync());
     }
 
     [Fact]

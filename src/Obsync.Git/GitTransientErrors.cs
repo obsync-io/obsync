@@ -35,10 +35,25 @@ public static class GitTransientErrors
     ];
 
     // Substrings that mark a PERMANENT failure even if a transient marker also appears.
+    //
+    // "failed to push some refs" used to be here and must not be: it is git's generic TRAILER, not a
+    // cause. It is printed for a policy rejection, for a non-fast-forward, AND for a dropped
+    // connection — and because permanent markers are tested first and short-circuit, its presence
+    // made every push failure permanent. The retry count offered in the job wizard therefore did
+    // nothing for the operation users most expect it to cover. The real causes below are what should
+    // decide, and each rejection GitHub can give now has its own entry.
     private static readonly string[] PermanentMarkers =
     [
         "non-fast-forward",
-        "failed to push some refs",
+        "fetch first",
+        // GitHub's push-policy rejections. Retrying any of these cannot help: the server answered,
+        // and the answer will be the same next time.
+        "gh001",                        // file over the size limit
+        "gh006",                        // classic branch protection
+        "gh013",                        // repository ruleset
+        "repository rule violations",
+        "protected branch",
+        "push declined",
         "authentication failed",
         "permission denied",
         "repository not found",

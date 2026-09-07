@@ -56,11 +56,27 @@ public static class RunAlertPayload
     /// <summary>
     /// The webhook JSON (camelCase, stable property order, nulls included so the shape is constant).
     /// </summary>
+    /// <summary>
+    /// A value that is the same for every delivery attempt of this alert and different for every
+    /// other alert. Sent as the <c>Idempotency-Key</c> header and carried in the payload.
+    /// </summary>
+    /// <remarks>
+    /// Alert delivery is retried once on any failure, including a timeout — and a timeout cannot
+    /// distinguish "the endpoint never received it" from "the endpoint received it and the ack was
+    /// lost". A duplicate email is untidy; a duplicate POST to PagerDuty, ServiceNow or Jira opens a
+    /// second incident for one event. Nothing in the payload previously let a receiver tell the two
+    /// apart, so nothing could dedupe.
+    /// </remarks>
+    public static string IdempotencyKey(SyncRun run) => $"obsync-run-{run.Id:N}";
+
     public static string BuildWebhookJson(SyncRun run) => JsonSerializer.Serialize(new
     {
         @event = Event(run),
+        idempotencyKey = IdempotencyKey(run),
         job = run.JobName,
         jobId = run.JobId,
+        runId = run.Id,
+        runKey = run.RunKey,
         status = run.Status.ToString(),
         server = run.ServerName,
         databases = run.Databases,

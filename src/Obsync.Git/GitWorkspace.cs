@@ -545,9 +545,84 @@ public sealed partial class GitWorkspace : IGitWorkspace
     {
         var push = await RunNetworkAsync(
             context.LocalPath, context, ["push", "-u", "origin", context.Branch], cancellationToken).ConfigureAwait(false);
-        return push.Success
-            ? Result.Success()
-            : Result.Failure($"git push failed: {Summarize(push.StandardError)}");
+        if (push.Success)
+        {
+            return Result.Success();
+        }
+
+        // A push that could not COMMUNICATE is not a push that did not happen. git can send the pack,
+        // the server can accept it and update the ref, and the connection can drop before the reply
+        // arrives — or our own timeout can kill git mid-conversation. From here those are
+        // indistinguishable from "nothing was sent", and reading them as failure has a cost: the run
+        // reports a failure for work that landed, and in pull-request mode the next run cuts another
+        // head branch and pushes the same content again.
+        //
+        // Only genuinely ambiguous outcomes are worth the question. A rejection is not ambiguous —
+        // the server answered — so a protected branch, a ruleset or a non-fast-forward goes straight
+        // to failure without a wasted round trip.
+        if (push.ExitCode == GitCommandRunner.TimedOutExitCode
+            || GitTransientErrors.IsTransient(push.StandardError))
+        {
+            if (await RemoteMatchesLocalHeadAsync(context, cancellationToken).ConfigureAwait(false) == true)
+            {
+                _logger.LogInformation(
+                    "git push reported a failure on {Branch}, but the remote already carries this commit — "
+                    + "the push landed and its reply was lost.", context.Branch);
+                return Result.Success();
+            }
+        }
+
+        return Result.Failure($"git push failed: {Summarize(push.StandardError)}");
+    }
+
+    /// <summary>
+    /// Whether origin's copy of the branch is already at our HEAD: true, false, or null when it
+    /// could not be established.
+    /// </summary>
+    /// <remarks>
+    /// Asks the SERVER, not the local remote-tracking ref. <c>refs/remotes/origin/&lt;branch&gt;</c> is
+    /// updated by a push that git saw succeed, so on the path that matters here it is precisely the
+    /// thing that is stale — using it would answer "not pushed" for the case this exists to detect.
+    /// <para>
+    /// Null is returned for anything inconclusive, and the caller must treat null as "not confirmed".
+    /// Reporting a failure that actually succeeded costs a duplicate branch; reporting a success that
+    /// did not costs delivered-marked work that never arrived, which is the worse trade by a distance.
+    /// </para>
+    /// </remarks>
+    private async Task<bool?> RemoteMatchesLocalHeadAsync(
+        GitWorkspaceContext context, CancellationToken cancellationToken)
+    {
+        var head = await _git.RunAsync(context.LocalPath, ["rev-parse", "HEAD"], cancellationToken).ConfigureAwait(false);
+        if (!head.Success)
+        {
+            return null;
+        }
+
+        var local = head.StandardOutput.Trim();
+        if (local.Length == 0)
+        {
+            return null;
+        }
+
+        var remote = await RunNetworkAsync(
+            context.LocalPath, context, ["ls-remote", "origin", $"refs/heads/{context.Branch}"], cancellationToken)
+            .ConfigureAwait(false);
+        if (!remote.Success)
+        {
+            return null;
+        }
+
+        // "<sha>\trefs/heads/<branch>", or empty when the branch does not exist on the remote.
+        var line = remote.StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+        if (line is null)
+        {
+            return false;
+        }
+
+        var sha = line.Split('\t', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+        return sha is { Length: > 0 } && string.Equals(sha, local, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <param name="beforeAttempt">
