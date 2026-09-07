@@ -245,6 +245,9 @@
                         <RadioButton Style="{StaticResource FilterChip}" Content="{Binding DeletedChipLabel}"
                                      AutomationProperties.Name="Show only deleted objects"
                                      IsChecked="{Binding TypeFilter, Converter={StaticResource ChangeTypeFilter}, ConverterParameter=Deleted}" />
+                        <RadioButton Style="{StaticResource FilterChip}" Content="{Binding RestoredChipLabel}"
+                                     AutomationProperties.Name="Show only restored files"
+                                     IsChecked="{Binding TypeFilter, Converter={StaticResource ChangeTypeFilter}, ConverterParameter=Restored}" />
                     </WrapPanel>
 
                     <ListBox ItemsSource="{Binding ChangesView}" SelectedItem="{Binding SelectedChange}"

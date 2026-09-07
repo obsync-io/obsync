@@ -12,7 +12,7 @@ namespace Obsync.Integration.Tests;
 /// </summary>
 /// <remarks>
 /// Every other test in this repository initializes against a brand-new temp file, so the whole
-/// V001..V013 chain was only ever exercised as "create everything in order on an empty database".
+/// V001..V014 chain was only ever exercised as "create everything in order on an empty database".
 /// That is the one shape an upgrade never has. The two migrations that rebuild rather than append —
 /// <c>V005</c>, which rebuilds the jobs table, and <c>V011</c>, which de-duplicates
 /// <c>object_states</c> and swaps a BINARY unique index for a NOCASE one — had therefore never run

@@ -33,6 +33,7 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
     private int _addedCount;
     private int _modifiedCount;
     private int _deletedCount;
+    private int _restoredCount;
     private int _copyStatusVersion;
     private IReadOnlyList<int> _findMatches = [];
     private int _findPosition = -1;
@@ -140,10 +141,12 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
         _addedCount = changes.Count(c => c.ChangeType == ChangeType.Added);
         _modifiedCount = changes.Count(c => c.ChangeType == ChangeType.Modified);
         _deletedCount = changes.Count(c => c.ChangeType == ChangeType.Deleted);
+        _restoredCount = changes.Count(c => c.ChangeType == ChangeType.Restored);
         OnPropertyChanged(nameof(AllChipLabel));
         OnPropertyChanged(nameof(AddedChipLabel));
         OnPropertyChanged(nameof(ModifiedChipLabel));
         OnPropertyChanged(nameof(DeletedChipLabel));
+        OnPropertyChanged(nameof(RestoredChipLabel));
 
         ChangesView = CreateChangesView([.. changes]);
 
@@ -153,10 +156,17 @@ public sealed partial class ScriptDiffViewModel : ObservableObject
 
     // Chip captions carry the run's per-type totals (not the filtered view's) so the counts stay
     // stable while the user filters.
-    public string AllChipLabel => $"All {_addedCount + _modifiedCount + _deletedCount:N0}";
+    public string AllChipLabel => $"All {_addedCount + _modifiedCount + _deletedCount + _restoredCount:N0}";
     public string AddedChipLabel => $"Added {_addedCount:N0}";
     public string ModifiedChipLabel => $"Modified {_modifiedCount:N0}";
     public string DeletedChipLabel => $"Deleted {_deletedCount:N0}";
+
+    /// <summary>
+    /// Files rewritten although the object itself did not change — a recut head branch produces
+    /// these on every run until its pull request merges, and folding them into "Modified" was
+    /// what made an unchanged estate read as though all of it had changed.
+    /// </summary>
+    public string RestoredChipLabel => $"Restored {_restoredCount:N0}";
 
     partial void OnTypeFilterChanged(ChangeType? value) => ChangesView.Refresh();
 

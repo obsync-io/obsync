@@ -104,6 +104,10 @@ public sealed class ChangeTypeToBrushConverter : IValueConverter
             ChangeType.Added => "SuccessBrush",
             ChangeType.Modified => "WarningBrush",
             ChangeType.Deleted => "ErrorBrush",
+            // Restored is not an alarm and not a success: nothing in SQL changed, only the
+            // repository was caught up. The muted accent says "informational" without competing
+            // with the three that report real object changes.
+            ChangeType.Restored => "AccentBrush",
             _ => "TextMutedBrush",
         };
 
@@ -124,6 +128,7 @@ public sealed class ChangeTypeToBadgeBackgroundConverter : IValueConverter
             ChangeType.Added => "SuccessSoftBrush",
             ChangeType.Modified => "WarningSoftBrush",
             ChangeType.Deleted => "ErrorSoftBrush",
+            ChangeType.Restored => "AccentSoftBrush",
             _ => "NeutralSoftBrush",
         };
 

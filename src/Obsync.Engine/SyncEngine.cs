@@ -428,6 +428,7 @@ public sealed class SyncEngine : ISyncEngine
             run.ObjectsAdded = context.Added;
             run.ObjectsModified = context.Modified;
             run.ObjectsDeleted = context.Deleted;
+            run.ObjectsRestored = context.Restored;
             run.ObjectsScanned = context.Scanned;
             run.ObjectsFailed = context.Failed;
 
@@ -978,19 +979,27 @@ public sealed class SyncEngine : ISyncEngine
                     return;
                 }
 
-                changeType = ChangeType.Modified;
+                // Restored, not Modified. The hash comparison above is the authority on whether the
+                // OBJECT changed, and it just said no. Calling this a modification made a run where
+                // nothing in SQL had changed report the whole estate as modified — which is exactly
+                // what a recut branch produces on every run until its pull request merges.
+                changeType = ChangeType.Restored;
             }
 
             await WriteFileAsync(context, localPath, repoRelativePath, scriptBytes, context.Job.LocalExportPath, dbFolder, relativePath, ct)
                 .ConfigureAwait(false);
 
-            if (changeType == ChangeType.Added)
+            switch (changeType)
             {
-                context.IncrementAdded();
-            }
-            else
-            {
-                context.IncrementModified();
+                case ChangeType.Added:
+                    context.IncrementAdded();
+                    break;
+                case ChangeType.Restored:
+                    context.IncrementRestored();
+                    break;
+                default:
+                    context.IncrementModified();
+                    break;
             }
 
             context.AddChange(new ObjectChange
@@ -1152,15 +1161,26 @@ public sealed class SyncEngine : ISyncEngine
                     DeleteRecordedFile(context, localPath, priorState.FilePath);
                 }
 
+                // Counted here rather than in ApplyItemAsync, which this artifact does not go
+                // through — it was the one item missing from the scanned total, so the run tiles
+                // read one lower than the change counters and looked, correctly, like a bug.
+                context.IncrementScanned();
+
                 var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
                 if (changeType == ChangeType.Unchanged)
                 {
+                    // Existence only, deliberately, unlike the script paths: the manifest is
+                    // streamed precisely so it is never held whole, and re-reading it to compare
+                    // content would undo that at VLDB scale where it runs to hundreds of megabytes.
+                    // The gap this leaves is a manifest that exists but is stale, which the recut
+                    // cannot produce — the recut removes the file outright — so it needs a file
+                    // edited by hand in the repository to reach.
                     if (existingFiles.Value.Contains(absolutePath))
                     {
                         return;
                     }
 
-                    changeType = ChangeType.Modified;
+                    changeType = ChangeType.Restored;
                 }
 
                 // Pass 2 (changed inventories only): stream straight into the atomic temp file.
@@ -1197,13 +1217,17 @@ public sealed class SyncEngine : ISyncEngine
                     File.Copy(absolutePath, exportPath, overwrite: true);
                 }
 
-                if (changeType == ChangeType.Added)
+                switch (changeType)
                 {
-                    context.IncrementAdded();
-                }
-                else
-                {
-                    context.IncrementModified();
+                    case ChangeType.Added:
+                        context.IncrementAdded();
+                        break;
+                    case ChangeType.Restored:
+                        context.IncrementRestored();
+                        break;
+                    default:
+                        context.IncrementModified();
+                        break;
                 }
 
                 context.AddChange(new ObjectChange
@@ -1498,25 +1522,33 @@ public sealed class SyncEngine : ISyncEngine
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
             if (changeType == ChangeType.Unchanged)
             {
-                // Self-heal drift exactly like the database pass: rewrite a missing file.
-                if (File.Exists(absolutePath))
+                // Self-heal drift exactly like the database pass: rewrite a file the branch does
+                // not carry, or carries with different content. Existence alone was not enough
+                // there and is not enough here — a file left stale by a pull request that closed
+                // unmerged, or edited by hand in the repository, must be overwritten from the
+                // server, which is the source of truth.
+                if (File.Exists(absolutePath) && FileHasContent(absolutePath, scriptBytes))
                 {
                     return;
                 }
 
-                changeType = ChangeType.Modified;
+                changeType = ChangeType.Restored;
             }
 
             await WriteFileAsync(context, localPath, repoRelativePath, scriptBytes, context.Job.LocalExportPath, serverRoot, relativePath, ct)
                 .ConfigureAwait(false);
 
-            if (changeType == ChangeType.Added)
+            switch (changeType)
             {
-                context.IncrementAdded();
-            }
-            else
-            {
-                context.IncrementModified();
+                case ChangeType.Added:
+                    context.IncrementAdded();
+                    break;
+                case ChangeType.Restored:
+                    context.IncrementRestored();
+                    break;
+                default:
+                    context.IncrementModified();
+                    break;
             }
 
             context.AddChange(new ObjectChange
@@ -2133,6 +2165,7 @@ public sealed class SyncEngine : ISyncEngine
         run.ObjectsAdded = context.Added;
         run.ObjectsModified = context.Modified;
         run.ObjectsDeleted = context.Deleted;
+        run.ObjectsRestored = context.Restored;
         run.ObjectsScanned = context.Scanned;
         run.ObjectsFailed = context.Failed;
 
@@ -3027,6 +3060,7 @@ public sealed class SyncEngine : ISyncEngine
         private int _added;
         private int _modified;
         private int _deleted;
+        private int _restored;
         private int _failed;
 
         // Counters are bumped from many worker threads, so reads/writes go through Interlocked.
@@ -3034,12 +3068,14 @@ public sealed class SyncEngine : ISyncEngine
         public int Added => Volatile.Read(ref _added);
         public int Modified => Volatile.Read(ref _modified);
         public int Deleted => Volatile.Read(ref _deleted);
+        public int Restored => Volatile.Read(ref _restored);
         public int Failed => Volatile.Read(ref _failed);
 
         public void IncrementScanned() => Interlocked.Increment(ref _scanned);
         public void IncrementAdded() => Interlocked.Increment(ref _added);
         public void IncrementModified() => Interlocked.Increment(ref _modified);
         public void IncrementDeleted() => Interlocked.Increment(ref _deleted);
+        public void IncrementRestored() => Interlocked.Increment(ref _restored);
         public void IncrementFailed() => Interlocked.Increment(ref _failed);
 
         // Changes are added concurrently by workers; PendingStates only from single-threaded stages.

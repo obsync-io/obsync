@@ -28,7 +28,7 @@ public sealed class RunTriggerToTextConverter : IValueConverter
 public sealed class RunToChangeSplitConverter : IValueConverter
 {
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        value is SyncRun run ? new ChangeSplit(run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted) : null;
+        value is SyncRun run ? new ChangeSplit(run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted, run.ObjectsRestored) : null;
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

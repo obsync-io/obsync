@@ -104,7 +104,8 @@ public sealed class RunReportWriter : IRunReportWriter
                 run.RunKey, run.JobName, run.Trigger, run.TriggeredBy, run.Status,
                 run.ServerName, run.Databases,
                 run.StartedAt, run.CompletedAt, run.DurationMs,
-                run.ObjectsScanned, run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted, run.ObjectsFailed,
+                run.ObjectsScanned, run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted,
+                run.ObjectsRestored, run.ObjectsFailed,
                 run.CommitSha, run.CommitUrl, run.PullRequestNumber, run.PullRequestUrl, run.ErrorMessage),
             changes.Select(c => new RunReportChange(
                 c.ChangeType, c.ObjectType.ToString(), c.QualifiedName, c.RelativePath, c.PreviousHash, c.NewHash)),
@@ -196,6 +197,7 @@ public sealed class RunReportWriter : IRunReportWriter
         Row(writer, "Objects scanned", run.ObjectsScanned.ToString(CultureInfo.CurrentCulture));
         Row(writer, "Added / Modified / Deleted",
             $"{run.ObjectsAdded.ToString(CultureInfo.CurrentCulture)} / {run.ObjectsModified.ToString(CultureInfo.CurrentCulture)} / {run.ObjectsDeleted.ToString(CultureInfo.CurrentCulture)}");
+        Row(writer, "Restored", run.ObjectsRestored.ToString(CultureInfo.CurrentCulture));
         Row(writer, "Not scripted", run.ObjectsFailed.ToString(CultureInfo.CurrentCulture));
         RowRaw(writer, "Commit", CommitCell(run));
         if (run.PullRequestUrl is { Length: > 0 } prUrl)
@@ -402,6 +404,7 @@ internal sealed record RunReportSummary(
     int ObjectsAdded,
     int ObjectsModified,
     int ObjectsDeleted,
+    int ObjectsRestored,
     int ObjectsFailed,
     string? CommitSha,
     string? CommitUrl,

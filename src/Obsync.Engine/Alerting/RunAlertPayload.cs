@@ -89,6 +89,7 @@ public static class RunAlertPayload
             added = run.ObjectsAdded,
             modified = run.ObjectsModified,
             deleted = run.ObjectsDeleted,
+            restored = run.ObjectsRestored,
             failed = run.ObjectsFailed,
         },
         changeCount = run.ChangeCount,

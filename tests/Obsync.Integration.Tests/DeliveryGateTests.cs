@@ -600,6 +600,10 @@ public sealed class DeliveryGateTests : IAsyncLifetime
     {
         // The fix must not blind the comparison: normalizing line endings must not normalize away a
         // real difference that happens to arrive alongside them.
+        //
+        // Counted as RESTORED rather than Modified, and that is the right word: the scripted
+        // definition never changed, so nothing about the object was modified. What differed was the
+        // file in the repository, which Obsync overwrites because SQL Server is the source of truth.
         _scripts.Items = [Proc("P1", "body v1")];
         SetCommit(succeeds: true);
         SetPush(succeeds: true);
@@ -613,7 +617,8 @@ public sealed class DeliveryGateTests : IAsyncLifetime
 
         var second = await RunAsync();
 
-        Assert.Equal(1, second.ObjectsModified);
+        Assert.Equal(0, second.ObjectsModified);
+        Assert.Equal(1, second.ObjectsRestored);
         Assert.Contains("body v1", await File.ReadAllTextAsync(file));
     }
 
@@ -659,5 +664,74 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         Assert.True(File.Exists(p1), "the recut-deleted object was skipped and never re-proposed");
         Assert.Contains("body v1", await File.ReadAllTextAsync(p1));
         Assert.NotEqual(RunStatus.NoChanges, recovery.Status);
+    }
+    [Fact]
+    public async Task AnUnchangedObjectWhoseFileIsMissing_CountsAsRestored_NotModified()
+    {
+        // The complaint that produced this: a run where nothing in SQL had changed reported the
+        // entire estate — 13,305 objects — as Modified.
+        //
+        // The hash comparison is the authority on whether an OBJECT changed, and for every one of
+        // them it said Unchanged. The engine then relabelled each as Modified purely so its file
+        // would be rewritten after the recut deleted it. Two unrelated facts under one word:
+        // the definition changed, and the repository needed catching up.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        var first = await RunAsync();
+        Assert.Equal(1, first.ObjectsAdded);
+
+        // Exactly what the recut leaves behind while a pull request sits unmerged: base does not
+        // carry the file, so the checkout removes it.
+        File.Delete(TrackedFile());
+
+        var second = await RunAsync();
+
+        Assert.Equal(0, second.ObjectsModified);
+        Assert.Equal(1, second.ObjectsRestored);
+        Assert.Equal(0, second.ObjectsAdded);
+        Assert.Equal(0, second.ObjectsDeleted);
+
+        // Still delivered, and still counted as something the commit contains — the run must not
+        // decide it has nothing to do and skip the commit entirely.
+        Assert.Equal(1, second.ChangeCount);
+        Assert.Contains("body v1", await File.ReadAllTextAsync(TrackedFile()));
+    }
+
+    [Fact]
+    public async Task AnObjectWhoseDefinitionChanged_StillCountsAsModified()
+    {
+        // The other half: separating restoration from modification must not stop a real
+        // modification being reported as one.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        _ = await RunAsync();
+
+        _scripts.Items = [Proc("P1", "body v2")];
+
+        var second = await RunAsync();
+
+        Assert.Equal(1, second.ObjectsModified);
+        Assert.Equal(0, second.ObjectsRestored);
+    }
+
+    [Fact]
+    public async Task TheObjectInventoryArtifact_IsCountedAsScanned()
+    {
+        // The inventory is written by its own code path rather than through ApplyItemAsync, and it
+        // was the one item counted as a change but never as scanned — so the tiles read one lower
+        // on the left than on the right, which is what "13,304 scanned / 13,305 modified" was.
+        _job.Selection.IncludeObjectInventory = true;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+
+        var run = await RunAsync();
+
+        // One stored procedure plus the inventory artifact, on both sides of the tiles.
+        Assert.Equal(2, run.ObjectsScanned);
+        Assert.Equal(2, run.ObjectsAdded + run.ObjectsModified + run.ObjectsRestored);
     }
 }

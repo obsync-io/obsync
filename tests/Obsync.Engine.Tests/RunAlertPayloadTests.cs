@@ -116,7 +116,7 @@ public sealed class RunAlertPayloadTests
             @"""runId"":""11111111-2222-3333-4444-555555555555"",""runKey"":""20260628-230000""," +
             @"""status"":""Failed"",""server"":""PROD-SQL01"",""databases"":""SalesDB"",""started"":""2026-06-28T23:00:00+00:00""," +
             @"""completed"":""2026-06-28T23:02:31+00:00"",""durationMs"":151000," +
-            @"""counts"":{""scanned"":42120,""added"":1,""modified"":2,""deleted"":1,""failed"":3},""changeCount"":4," +
+            @"""counts"":{""scanned"":42120,""added"":1,""modified"":2,""deleted"":1,""restored"":0,""failed"":3},""changeCount"":4," +
             @"""commitUrl"":null,""pullRequestUrl"":null,""error"":""Could not reach GitHub.\nSecond line detail.""," +
             @"""tags"":[""prod"",""sales""]}";
 

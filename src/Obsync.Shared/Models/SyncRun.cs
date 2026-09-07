@@ -35,6 +35,10 @@ public sealed class SyncRun
     public int ObjectsAdded { get; set; }
     public int ObjectsModified { get; set; }
     public int ObjectsDeleted { get; set; }
+
+    /// <summary>Files rewritten because the branch lacked them, though the object itself was unchanged.</summary>
+    public int ObjectsRestored { get; set; }
+
     public int ObjectsFailed { get; set; }
 
     public string? CommitSha { get; set; }
@@ -55,7 +59,12 @@ public sealed class SyncRun
     public List<string> Tags { get; set; } = [];
 
     /// <summary>Total changed objects (added + modified + deleted).</summary>
-    public int ChangeCount => ObjectsAdded + ObjectsModified + ObjectsDeleted;
+    /// <summary>
+    /// Everything this run wrote to the repository, restorations included — it is compared against
+    /// the number of persisted change rows to decide whether the displayed list was truncated, and
+    /// it is what the commit actually contains.
+    /// </summary>
+    public int ChangeCount => ObjectsAdded + ObjectsModified + ObjectsDeleted + ObjectsRestored;
 
     /// <summary>The run's tags classified against the current production markers, for chip rendering. Not persisted.</summary>
     public IReadOnlyList<TagChip> TagChips { get; set; } = [];

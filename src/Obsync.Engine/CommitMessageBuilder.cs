@@ -57,6 +57,11 @@ internal static class CommitMessageBuilder
         body.Append("Added: ").Append(run.ObjectsAdded).Append('\n');
         body.Append("Modified: ").Append(run.ObjectsModified).Append('\n');
         body.Append("Deleted: ").Append(run.ObjectsDeleted).Append('\n');
+        if (run.ObjectsRestored > 0)
+        {
+            body.Append("Restored: ").Append(run.ObjectsRestored).Append('\n');
+        }
+
         body.Append("Duration: ").Append(TimeSpan.FromMilliseconds(run.DurationMs).ToString(@"hh\:mm\:ss")).Append('\n');
 
         // One pass over the changes (a VLDB run can carry 500k) bucketing per category; each bucket

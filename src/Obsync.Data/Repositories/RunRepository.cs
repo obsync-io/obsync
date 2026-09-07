@@ -60,7 +60,8 @@ public sealed class RunRepository : IRunRepository
                status AS Status, server_name AS ServerName, databases AS Databases, started_at AS StartedAt,
                completed_at AS CompletedAt, duration_ms AS DurationMs, objects_scanned AS ObjectsScanned,
                objects_added AS ObjectsAdded, objects_modified AS ObjectsModified, objects_deleted AS ObjectsDeleted,
-               objects_failed AS ObjectsFailed, commit_sha AS CommitSha, commit_url AS CommitUrl,
+               objects_failed AS ObjectsFailed, objects_restored AS ObjectsRestored,
+               commit_sha AS CommitSha, commit_url AS CommitUrl,
                pr_url AS PullRequestUrl, pr_number AS PullRequestNumber,
                error_message AS ErrorMessage, tags_json AS TagsJson
         FROM runs
@@ -74,10 +75,10 @@ public sealed class RunRepository : IRunRepository
             INSERT INTO runs
                 (id, run_key, job_id, job_name, trigger, triggered_by, status, server_name, databases, started_at, completed_at,
                  duration_ms, objects_scanned, objects_added, objects_modified, objects_deleted, objects_failed,
-                 commit_sha, commit_url, pr_url, pr_number, error_message, tags_json)
+                 objects_restored, commit_sha, commit_url, pr_url, pr_number, error_message, tags_json)
             VALUES
                 ($id, $key, $job, $jobName, $trigger, $triggeredBy, $status, $server, $dbs, $started, $completed, $duration,
-                 $scanned, $added, $modified, $deleted, $failed, $sha, $url, $prUrl, $prNumber, $error, $tags);
+                 $scanned, $added, $modified, $deleted, $failed, $restored, $sha, $url, $prUrl, $prNumber, $error, $tags);
             """,
             ToParameters(run), cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
@@ -90,7 +91,8 @@ public sealed class RunRepository : IRunRepository
             UPDATE runs SET
                 status = $status, databases = $dbs, completed_at = $completed, duration_ms = $duration,
                 objects_scanned = $scanned, objects_added = $added, objects_modified = $modified,
-                objects_deleted = $deleted, objects_failed = $failed, commit_sha = $sha, commit_url = $url,
+                objects_deleted = $deleted, objects_failed = $failed, objects_restored = $restored,
+                commit_sha = $sha, commit_url = $url,
                 pr_url = $prUrl, pr_number = $prNumber, error_message = $error
             WHERE id = $id;
             """,
@@ -343,6 +345,7 @@ public sealed class RunRepository : IRunRepository
         added = run.ObjectsAdded,
         modified = run.ObjectsModified,
         deleted = run.ObjectsDeleted,
+        restored = run.ObjectsRestored,
         failed = run.ObjectsFailed,
         sha = run.CommitSha,
         url = run.CommitUrl,
@@ -370,6 +373,7 @@ public sealed class RunRepository : IRunRepository
         ObjectsAdded = row.ObjectsAdded,
         ObjectsModified = row.ObjectsModified,
         ObjectsDeleted = row.ObjectsDeleted,
+        ObjectsRestored = row.ObjectsRestored,
         ObjectsFailed = row.ObjectsFailed,
         CommitSha = row.CommitSha,
         CommitUrl = row.CommitUrl,
@@ -397,6 +401,7 @@ public sealed class RunRepository : IRunRepository
         public int ObjectsAdded { get; set; }
         public int ObjectsModified { get; set; }
         public int ObjectsDeleted { get; set; }
+        public int ObjectsRestored { get; set; }
         public int ObjectsFailed { get; set; }
         public string? CommitSha { get; set; }
         public string? CommitUrl { get; set; }

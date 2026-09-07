@@ -8,10 +8,10 @@ namespace Obsync.App.ViewModels;
 /// The +added / ~modified / −deleted summary of a run or a day, rendered everywhere as the same
 /// coloured tokens (History grid, timeline entries, timeline day totals) via one shared template.
 /// </summary>
-public sealed record ChangeSplit(int Added, int Modified, int Deleted)
+public sealed record ChangeSplit(int Added, int Modified, int Deleted, int Restored = 0)
 {
     /// <summary>True when nothing changed — the token template shows a muted dash instead.</summary>
-    public bool HasNoChanges => Added == 0 && Modified == 0 && Deleted == 0;
+    public bool HasNoChanges => Added == 0 && Modified == 0 && Deleted == 0 && Restored == 0;
 }
 
 /// <summary>One run inside the History timeline, with its lazily loaded object changes.</summary>
@@ -20,7 +20,7 @@ public sealed partial class TimelineEntry : ObservableObject
     public TimelineEntry(SyncRun run)
     {
         Run = run;
-        Split = new ChangeSplit(run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted);
+        Split = new ChangeSplit(run.ObjectsAdded, run.ObjectsModified, run.ObjectsDeleted, run.ObjectsRestored);
     }
 
     public SyncRun Run { get; }
@@ -68,7 +68,8 @@ public sealed class TimelineDay
         Split = new ChangeSplit(
             entries.Sum(e => e.Run.ObjectsAdded),
             entries.Sum(e => e.Run.ObjectsModified),
-            entries.Sum(e => e.Run.ObjectsDeleted));
+            entries.Sum(e => e.Run.ObjectsDeleted),
+            entries.Sum(e => e.Run.ObjectsRestored));
     }
 
     public DateTime Date { get; }

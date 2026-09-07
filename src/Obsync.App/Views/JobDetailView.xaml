@@ -236,7 +236,7 @@
                                 </Border>
 
                                 <!-- Latest run counts -->
-                                <UniformGrid Rows="1" Columns="5" Margin="0,18,0,0"
+                                <UniformGrid Rows="1" Columns="6" Margin="0,18,0,0"
                                              Visibility="{Binding HasLatestRun, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel>
                                         <TextBlock Text="{Binding LatestRun.ObjectsScanned}" Style="{StaticResource MetricValue}" FontSize="24" />
@@ -253,6 +253,14 @@
                                     <StackPanel>
                                         <TextBlock Text="{Binding LatestRun.ObjectsDeleted}" Style="{StaticResource MetricValue}" FontSize="24" />
                                         <TextBlock Text="Deleted" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                                    </StackPanel>
+                                    <!-- Restored is NOT a modification: the object's definition was unchanged and
+                                         only the repository needed catching up, which is what a recut head branch
+                                         produces on every run until its pull request merges. -->
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding LatestRun.ObjectsRestored}" Style="{StaticResource MetricValue}" FontSize="24" />
+                                        <TextBlock Text="Restored" Style="{StaticResource Caption}" Margin="0,2,0,0"
+                                                   ToolTip="Files rewritten because the branch did not carry them. The objects themselves were unchanged." />
                                     </StackPanel>
                                     <StackPanel>
                                         <TextBlock Text="{Binding LatestRun.ObjectsFailed}" Style="{StaticResource MetricValue}" FontSize="24" />

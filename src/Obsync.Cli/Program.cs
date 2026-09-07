@@ -149,7 +149,8 @@ static async Task<int> RunJobAsync(IServiceProvider provider, string? jobReferen
     Console.WriteLine();
     Console.WriteLine($"Status:   {run.Status}");
     Console.WriteLine($"Scanned:  {run.ObjectsScanned:N0}");
-    Console.WriteLine($"Changes:  +{run.ObjectsAdded} ~{run.ObjectsModified} -{run.ObjectsDeleted}");
+    Console.WriteLine($"Changes:  +{run.ObjectsAdded} ~{run.ObjectsModified} -{run.ObjectsDeleted}"
+        + (run.ObjectsRestored > 0 ? $" ({run.ObjectsRestored} restored)" : string.Empty));
     Console.WriteLine($"Duration: {TimeSpan.FromMilliseconds(run.DurationMs):hh\\:mm\\:ss}");
     if (run.CommitUrl is not null)
     {

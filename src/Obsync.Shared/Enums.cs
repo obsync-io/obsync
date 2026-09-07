@@ -251,6 +251,19 @@ public enum ChangeType
     Added = 1,
     Modified = 2,
     Deleted = 3,
+
+    /// <summary>
+    /// The object's definition did not change, but its file had to be written to the repository
+    /// again because the branch did not carry it.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="Modified"/> on purpose. Pull-request mode recuts its head branch
+    /// from the base every run, so while a pull request sits unmerged every file it proposed is
+    /// absent from the working tree — and these were all counted as modifications, so a run where
+    /// nothing in SQL had changed reported the entire estate as modified. Nothing changed in SQL;
+    /// only the repository needed catching up, and the two deserve different words.
+    /// </remarks>
+    Restored = 4,
 }
 
 /// <summary>Severity for user-facing run log entries.</summary>

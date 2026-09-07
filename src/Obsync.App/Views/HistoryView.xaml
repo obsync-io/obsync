@@ -48,6 +48,22 @@
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
+                <!-- Restored: the object was unchanged and only its file was rewritten, which a recut
+                     head branch produces on every run until its pull request merges. Shown apart from
+                     ~modified so a run where nothing changed in SQL does not read as if everything did. -->
+                <TextBlock Text="{Binding Restored, StringFormat=&#x21BB;{0:N0}}" Foreground="{StaticResource AccentBrush}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0"
+                           ToolTip="Files rewritten because the branch did not carry them">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Restored}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
                 <TextBlock Text="&#x2014;" Style="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,6,0"
                            ToolTip="No objects changed"
                            Visibility="{Binding HasNoChanges, Converter={StaticResource BoolToVisibility}}" />
