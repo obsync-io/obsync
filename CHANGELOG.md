@@ -2,6 +2,71 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.13.1 - 2026-09-07
+
+**A run says what changed in the database, not what it wrote to disk.** Reported from the 0.13.0
+deployment: a run where nothing in SQL had changed displayed **13,305 Modified**.
+
+Test suite: 1,408 → 1,411.
+
+### Fixed — an unchanged object was reported as modified
+
+The count was not an approximation or a rounding artefact. Obsync compares each object's stored hash
+against the freshly scripted one, and for all 13,305 it returned **`Unchanged`** — every definition
+was identical. The engine then relabelled each one `Modified`, purely so its file would be written
+back after the recut had removed it.
+
+Two unrelated facts were sharing one word: *the object's definition changed*, and *the repository
+needed catching up*. Pull-request mode recuts its head branch from the base every run, so while a
+pull request waits for approval **every file it proposed is absent from the working tree** — which
+made the second fact true for the entire estate, on every run, and reported it as the first.
+
+There is now a `Restored` change type and a count of its own, so the tiles mean what they say:
+
+| | |
+|---|---|
+| **Added** | no prior state — a genuinely new object |
+| **Modified** | stored hash ≠ new hash — the definition actually changed |
+| **Deleted** | a tracked object no longer in the database |
+| **Restored** | the definition was unchanged; only the file had to be rewritten |
+| **Not scripted** | encrypted, CLR, or failed to script |
+
+A run on an unmerged proposal now reads `Added 0 · Modified 0 · Deleted 0 · Restored 13,305`, which
+is the truth: nothing changed in SQL, and the branch needed the files.
+
+Restorations still count toward the run's total change count, and still produce the commit — they
+are real repository content, and treating them as "no changes" would have been the opposite mistake.
+They carry through the history timeline (a `↻` token beside `+ ~ −`), the diff viewer's filter
+chips, the exported report, the commit message body, and the alert webhook payload, which gains a
+`counts.restored` field. The field is additive; existing consumers are unaffected.
+
+### Fixed — the scanned total was one lower than the change total
+
+`13,304 scanned / 13,305 modified` had a second cause behind it. The **object-inventory** artifact is
+written by its own streaming code path rather than through the shared one, and that path counted the
+artifact as a change but never as scanned — so 0.13.0's counter fix reached four of the five
+per-database artifacts and missed the one with bespoke handling. Both sides now agree.
+
+### Fixed — server-level objects were self-healed on existence alone
+
+The database pass compares file **content** before deciding an unchanged object needs no rewrite
+(0.12.1). The server-level pass still only checked that the file existed, so a server object left
+stale by a pull request closed without merging, or edited by hand in the repository, was never
+overwritten. It now compares content, exactly as the database pass does.
+
+The object-inventory artifact deliberately keeps the existence-only check: it is streamed precisely
+so it is never held whole, and re-reading it to compare content would undo that at VLDB scale, where
+it runs to hundreds of megabytes. The gap that leaves — a manifest that exists but is stale — cannot
+be produced by a recut, which removes the file outright; it needs a file edited by hand. The reason
+is recorded beside the code rather than left to be rediscovered.
+
+### Internal
+
+- Schema migration **V014** adds `runs.objects_restored`.
+- Two existing tests failed on the new semantics and were corrected rather than adjusted around: a
+  file edited by hand is a restoration, not a modification, and the webhook contract test now pins
+  the added field. Both were the tests doing their job.
+
 ## 0.13.0 - 2026-09-07
 
 **One branch, one pull request, and an honest count of what changed.** Found while testing 0.12.2
