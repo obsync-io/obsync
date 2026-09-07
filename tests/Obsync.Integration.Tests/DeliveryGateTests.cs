@@ -459,4 +459,107 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         Assert.NotEqual(RunStatus.NoChanges, recovery.Status);
         Assert.Contains("body v1", await File.ReadAllTextAsync(p1));
     }
+
+    [Fact]
+    public async Task PrMode_ADeletionInAClosedUnmergedPullRequest_IsReproposed()
+    {
+        // A deletion has no state row left by construction — dropping the row IS how a delivered
+        // deletion was recorded. So if the reviewer closes the pull request unmerged, the object is
+        // gone from SQL, the file is still on base, and nothing connects them: the file is orphaned
+        // in the customer's repository permanently and the deletion is never proposed again.
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+        _ = await RunAsync();
+        var file = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+
+        // The object is dropped in SQL. Run 2 proposes the deletion in a pull request.
+        _scripts.Items = [];
+        var proposing = await RunAsync();
+        Assert.Equal(1, proposing.ObjectsDeleted);
+        Assert.False(File.Exists(file));
+
+        // The reviewer closes it unmerged: base still carries the file, so the recut tree has it back.
+        await File.WriteAllTextAsync(file, "CREATE PROCEDURE dbo.P1 AS BEGIN /* body v1 */ SELECT 1; END");
+
+        var recovery = await RunAsync();
+
+        // It must be proposed again rather than forgotten.
+        Assert.Equal(1, recovery.ObjectsDeleted);
+        Assert.False(File.Exists(file));
+    }
+
+    [Fact]
+    public async Task PrMode_ADeletionThatMerged_RetiresQuietly()
+    {
+        // The other half, and the one that stops the tombstone becoming an every-run empty commit:
+        // once the deletion lands, the recut tree no longer carries the file, so the row retires
+        // with nothing reported.
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+        _ = await RunAsync();
+
+        _scripts.Items = [];
+        _ = await RunAsync();          // propose the deletion
+
+        // The pull request merges: the file is gone from base and stays gone.
+        var settled = await RunAsync();
+
+        Assert.Equal(0, settled.ObjectsDeleted);
+        Assert.Equal(RunStatus.NoChanges, settled.Status);
+        Assert.Empty(await StatesAsync());   // the tombstone retired
+    }
+
+    [Fact]
+    public async Task DirectMode_ADeletion_StillDropsItsStateImmediately()
+    {
+        // Direct mode's delivery is real: the push lands on the branch it tracks, so there is
+        // nothing to keep a tombstone for.
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        _ = await RunAsync();
+
+        _scripts.Items = [];
+        var deleting = await RunAsync();
+
+        Assert.Equal(1, deleting.ObjectsDeleted);
+        Assert.Empty(await StatesAsync());
+    }
+
+    [Fact]
+    public async Task PrMode_ADeletionWhoseFileIsAlreadyGone_IsNotReportedAsADeletion()
+    {
+        // Pull-request mode only. Its tree is recut from base every run, so an absent file really
+        // does mean base no longer has it — reporting a deletion then would inflate the counts and
+        // produce an empty commit. Direct mode must NOT do this: there, an absent file can simply
+        // mean an earlier run deleted it locally and failed to commit, and retiring on that would
+        // orphan the file on the remote.
+        _job.CommitMode = CommitMode.PullRequest;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1")];
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+        _ = await RunAsync();
+        var file = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("P1", StringComparison.OrdinalIgnoreCase));
+
+        // Someone removes both the object and the file by hand.
+        _scripts.Items = [];
+        File.Delete(file);
+
+        var run = await RunAsync();
+
+        Assert.Equal(0, run.ObjectsDeleted);
+        Assert.Empty(await StatesAsync());
+    }
 }

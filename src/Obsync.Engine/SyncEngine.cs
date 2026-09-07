@@ -1947,9 +1947,42 @@ public sealed class SyncEngine : ISyncEngine
             return;
         }
 
+        // In pull-request mode a delivered deletion is only PROPOSED. Its row is what remembers the
+        // object ever existed, so dropping it when the pull request opens means that if a reviewer
+        // then closes the pull request unmerged, nothing on either side knows: the object is gone
+        // from SQL, the file is still on the base branch, and no state row connects them. The file
+        // is orphaned in the repository permanently and the deletion is never proposed again.
+        //
+        // Additions and modifications recover on their own — the tree is compared against a state
+        // row that still exists. A deletion has no such row by construction, so it needs the row to
+        // be RETAINED as a tombstone until the tree confirms the file has actually gone.
+        var isProposalOnly = context.Job.CommitMode == CommitMode.PullRequest;
+
         var deletedIds = new List<long>();
+        var retiredIds = new List<long>();
+
         foreach (var state in candidates)
         {
+            // An absent file retires the tombstone — but ONLY in pull-request mode, and the
+            // distinction is the whole correctness of this loop.
+            //
+            // Pull-request mode recuts its head branch from the base every run, so the working tree
+            // is a faithful mirror of the base branch: a file that is not there is not on base, which
+            // means the deletion merged. Retiring is right, and it is what makes the tombstone
+            // converge instead of proposing an empty deletion forever.
+            //
+            // Direct-commit mode has no such guarantee. A run that deleted the file and then failed
+            // to commit leaves the file gone LOCALLY while the remote still has it, and the
+            // prepare step does not always restore it. Reading that absence as "already deleted"
+            // would retire the tombstone and orphan the file on the remote permanently — the exact
+            // bug this change exists to prevent, arrived at from the other side. So direct mode
+            // keeps its original behaviour: propose the deletion regardless, and let delivery decide.
+            if (isProposalOnly && !RecordedFileExists(localPath, state.FilePath))
+            {
+                retiredIds.Add(state.Id);
+                continue;
+            }
+
             DeleteRecordedFile(context, localPath, state.FilePath);
 
             context.IncrementDeleted();
@@ -1963,12 +1996,44 @@ public sealed class SyncEngine : ISyncEngine
                 PreviousHash = state.LastHash,
             });
 
-            deletedIds.Add(state.Id);
+            if (!isProposalOnly)
+            {
+                deletedIds.Add(state.Id);
+            }
         }
 
         // The state rows are removed by PersistStatesAsync only after the changeset is delivered —
         // deleting them here would forget the deletion forever if the commit/push later failed.
+        // Retired rows go through the same gate: on an undelivered run PersistStatesAsync returns
+        // without touching anything and the next run simply retires them again.
         context.PendingDeletedStateIds.AddRange(deletedIds);
+        context.PendingDeletedStateIds.AddRange(retiredIds);
+    }
+
+    /// <summary>
+    /// Whether the repository still carries the file a tracked object was recorded at.
+    /// </summary>
+    /// <remarks>
+    /// Resolution failures answer "yes", so a path that cannot be resolved is treated as still
+    /// present and its tombstone is kept. Keeping a row that is no longer needed costs one wasted
+    /// comparison per run; dropping one that IS needed orphans a file in the customer's repository
+    /// with nothing left to notice it.
+    /// </remarks>
+    private static bool RecordedFileExists(string localPath, string relativePath)
+    {
+        if (string.IsNullOrEmpty(relativePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            return File.Exists(ResolveOrThrow(localPath, relativePath));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return true;
+        }
     }
 
     /// <summary>Any single loss at or above this count is treated as suspicious whatever the ratio.</summary>
