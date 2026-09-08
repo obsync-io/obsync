@@ -273,9 +273,20 @@ public sealed class DeliveryGateTests : IAsyncLifetime
             new ScriptedObjectIdentity(SqlObjectType.StoredProcedure, "dbo", name),
             $"CREATE PROCEDURE dbo.{name} AS BEGIN /* {body} */ SELECT 1; END");
 
+    private static RawScriptedObject View(string name, string body) =>
+        RawScriptedObject.Scripted(
+            new ScriptedObjectIdentity(SqlObjectType.View, "dbo", name),
+            $"CREATE VIEW dbo.{name} AS SELECT 1 AS c; /* {body} */");
+
     private sealed class FakeScriptProvider : IObjectScriptProvider
     {
         public IReadOnlyList<RawScriptedObject> Items { get; set; } = [];
+
+        /// <summary>
+        /// Each item's <c>modify_date</c>, keyed by "type|schema|name", so the incremental floor can
+        /// be applied the way a real provider applies it.
+        /// </summary>
+        public Dictionary<string, DateTime> ModifyDates { get; } = [];
 
         public ScriptingStrategy Strategy => ScriptingStrategy.Metadata;
 
@@ -290,11 +301,16 @@ public sealed class DeliveryGateTests : IAsyncLifetime
                 // the engine whether or not the planner had filtered them out, so nothing could
                 // observe the difference between "filtered" and "not filtered".
                 //
-                // A filtered type yields NOTHING here, which is the true production shape for this
-                // scenario — the object was delivered, its watermark advanced past it, and SQL has
-                // not changed since. That is exactly how a skipped object never reaches the engine's
-                // self-heal.
-                if (request.IncrementalWatermarks?.ContainsKey(item.Identity.Type) == true)
+                // It then went too far the other way and dropped the WHOLE type, which no real
+                // provider does — every one of them filters on `modify_date >= watermark`
+                // (MetadataScriptProvider.AppendWatermarkFilter), so an object at or above the
+                // floor is still yielded. Dropping the type wholesale invented deletions for those
+                // boundary objects and made a genuine bug look worse than it is. An item with no
+                // recorded date is yielded, matching a provider that has nothing to filter on.
+                if (request.IncrementalWatermarks?.TryGetValue(item.Identity.Type, out var floor) == true
+                    && ModifyDates.TryGetValue(
+                        $"{(int)item.Identity.Type}|{item.Identity.Schema}|{item.Identity.Name}", out var modifiedAt)
+                    && modifiedAt < floor)
                 {
                     continue;
                 }
@@ -412,6 +428,19 @@ public sealed class DeliveryGateTests : IAsyncLifetime
     /// incremental path here silently tested nothing.
     /// </remarks>
     private void SetSnapshot(params (string Name, DateTime ModifyDate)[] objects) =>
+        SetSnapshotOf([.. objects.Select(o => (SqlObjectType.StoredProcedure, o.Name, o.ModifyDate))]);
+
+    /// <summary>A modification snapshot spanning more than one object type.</summary>
+    private void SetSnapshotOf(params (SqlObjectType Type, string Name, DateTime ModifyDate)[] objects)
+    {
+        // The provider filters on the same dates the snapshot reports, exactly as SQL Server does —
+        // they are two reads of one `modify_date`, so a fixture where they disagree tests nothing
+        // that can happen.
+        foreach (var o in objects)
+        {
+            _scripts.ModifyDates[$"{(int)o.Type}|dbo|{o.Name}"] = o.ModifyDate;
+        }
+
         _provider.GetRequiredService<IModifiedObjectReader>()
             .GetSnapshotAsync(
                 Arg.Any<SqlConnectionProfile>(), Arg.Any<string?>(), Arg.Any<string>(),
@@ -419,7 +448,8 @@ public sealed class DeliveryGateTests : IAsyncLifetime
                 Arg.Any<IReadOnlyCollection<string>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<ModifiedObjectSnapshotItem>>(
                 [.. objects.Select(o => new ModifiedObjectSnapshotItem(
-                    SqlObjectType.StoredProcedure, "dbo", o.Name, o.ModifyDate))]));
+                    o.Type, "dbo", o.Name, o.ModifyDate))]));
+    }
 
     [Fact]
     public async Task PrMode_AnIncrementallySkippedObject_IsStillReproposedWhenTheTreeDiverged()
@@ -733,5 +763,55 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         // One stored procedure plus the inventory artifact, on both sides of the tiles.
         Assert.Equal(2, run.ObjectsScanned);
         Assert.Equal(2, run.ObjectsAdded + run.ObjectsModified + run.ObjectsRestored);
+    }
+
+    [Fact]
+    public async Task WhenOneTypeDiverges_TheOtherTypesFilterIsNotAppliedToIt()
+    {
+        // A type withheld for divergence must be scanned in FULL — that is the entire purpose of
+        // withholding it. Instead its watermark leaked back out and was handed to the provider as a
+        // filter, so the type the engine had just decided to re-scan was filtered HARDER than
+        // normal, and the objects it filtered away were never marked seen. The deletion pass then
+        // read every one of them as dropped.
+        //
+        // The leak: FilterableTypes is derived from the STORED watermark keys, and a diverged type
+        // still has its row — watermark writes are upserts and never delete. The returned dictionary
+        // was intersected with FilterableTypes but not with the types actually being scanned.
+        //
+        // Partial divergence is the reachable shape: after a merge, base carries everything, then
+        // one type gets a change proposed and left unmerged. Its files on base hold the old content
+        // and it alone diverges. Two objects per type because the skip rule needs a modify_date
+        // strictly below the type's watermark, and the watermark is the snapshot's max.
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        _job.CommitMode = CommitMode.PullRequest;
+        _job.Selection.CustomTypes = [SqlObjectType.StoredProcedure, SqlObjectType.View];
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+
+        _scripts.Items = [Proc("P1", "p one"), Proc("P2", "p two"), View("V1", "v one"), View("V2", "v two")];
+        SetSnapshotOf(
+            (SqlObjectType.StoredProcedure, "P1", older), (SqlObjectType.StoredProcedure, "P2", newer),
+            (SqlObjectType.View, "V1", older), (SqlObjectType.View, "V2", newer));
+        SetCommit(succeeds: true);
+        SetPush(succeeds: true);
+        SetPullRequest(succeeds: true);
+
+        _ = await RunAsync();   // deliver all four; both types get a watermark of `newer`
+        _ = await RunAsync();   // steady state
+
+        // Only the VIEW type diverges: its file on base still holds what the reviewer has not
+        // merged. The procedures are untouched, so they stay filterable.
+        var v1 = Directory.EnumerateFiles(_root, "*.sql", SearchOption.AllDirectories)
+            .Single(f => Path.GetFileName(f).Contains("V1", StringComparison.OrdinalIgnoreCase));
+        await File.WriteAllTextAsync(v1, "-- still what base carries");
+
+        var recovery = await RunAsync();
+
+        // The views must be re-scanned, not deleted.
+        Assert.Equal(0, recovery.ObjectsDeleted);
+        Assert.Equal(4, (await StatesAsync()).Count);
+        Assert.Contains("v one", await File.ReadAllTextAsync(v1));
     }
 }

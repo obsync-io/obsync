@@ -1454,8 +1454,20 @@ public sealed class SyncEngine : ISyncEngine
             return null;
         }
 
+        // Intersected with the types actually being scanned, not only with FilterableTypes.
+        //
+        // FilterableTypes is derived from the STORED watermark keys, and a type withheld above for
+        // divergence still has its watermark row — those writes are upserts and never delete one.
+        // So the dictionary handed to the providers contained a filter for the very type this
+        // method had just decided to re-scan in full, which inverted the intent completely: the
+        // diverged type was filtered HARDER than normal, its unchanged objects never reached the
+        // engine, and because the snapshot had excluded them they were never marked seen either —
+        // so the deletion pass read every one of them as dropped. On a scheduled run the
+        // mass-deletion breaker turns that into a spurious warning; on Run Now, which bypasses the
+        // breaker by design, the deletions are applied.
+        var scannedInFull = capableTypes.ToHashSet();
         return watermarks
-            .Where(pair => plan.FilterableTypes.Contains(pair.Key))
+            .Where(pair => plan.FilterableTypes.Contains(pair.Key) && scannedInFull.Contains(pair.Key))
             .ToDictionary(pair => pair.Key, pair => pair.Value);
     }
 
