@@ -159,10 +159,18 @@ and leaves state untouched — the next run re-detects everything the cancelled 
 - Permission- and extended-property-only changes do not bump `modify_date`; with incremental
   scripting they are captured by the every-run `permissions.sql`/security-review artifacts rather
   than the object's own file until it next changes.
-- A permanently unscriptable object (e.g. an encrypted procedure) forces a **full scan of its
-  object type every run** — the incremental safety rule cannot tell it apart from a never-scripted
-  object. Add it to `.obsyncignore` to acknowledge it once and restore incremental speed for the
-  type.
+- An object that Obsync scripted successfully in the past and can no longer script — a procedure
+  later altered `WITH ENCRYPTION`, a table SMO cannot handle — **holds its object type's incremental
+  watermark at the last run that scripted it**. Every object of that type modified since is then
+  re-scripted on every run, and the run reports Warning. `.obsyncignore` does not release it: ignore
+  rules are consulted when planning and when writing, not when recording a skip. Drop the object,
+  remove the encryption, or accept the reduced incremental benefit for that type.
+  (An object that was *never* scriptable costs nothing — it is recognised and excluded.)
+- Objects of one type share a single folder per database (`procedures/`, `tables/`, …). Past roughly
+  100,000 files in one folder, GitHub stops rendering the directory listing and both NTFS
+  enumeration and git's untracked scan slow noticeably. This layout is deliberate and stable —
+  Obsync will not reorganise a repository it has already written — so split an estate that large
+  across repositories or destination folders.
 - git itself degrades past roughly a million files in one repository; split very large estates
   across repositories or destination folders.
 

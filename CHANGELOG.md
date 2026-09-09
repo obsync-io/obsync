@@ -2,6 +2,103 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.13.2 - 2026-09-09
+
+**Three ways a large estate could not be delivered, and one way it was told it had failed.** Found
+by auditing the incremental-scripting and delivery paths against a stated target of a million
+objects, rather than by a report from the field. Every fix here is reachable on an ordinary first
+run against a large database.
+
+Test suite: 1,412 → 1,419.
+
+### Fixed — a first run against a large estate reported Failed however well it had gone
+
+A run recording more than 50,000 changes appended a warning saying the change list had been capped.
+That warning was appended *after* the loop that stamped each log entry with its run id, so it
+carried the default empty id. `run_logs.run_id` is a foreign key, enforced on every connection — so
+the row failed to insert, the single batch transaction holding **every** log for the run rolled
+back, and the failure was caught by the handler that rewrites a run as **Failed** with "its final
+state could not be saved".
+
+The trigger was only exceeding the cap, which a first run against a large estate does by
+definition. The product's headline case — scripting a large database into a fresh repository —
+therefore reported Failed on run 1, with no logs, no matter how completely it had succeeded.
+
+Writing the logs now takes the run id and applies it to every row, exactly as the sibling that
+writes the change list already did. There is no longer a window in which an entry can be appended
+after stamping.
+
+### Fixed — network commands were killed by the clock rather than by going quiet
+
+Every git command that touched the network was given **ten minutes**, while local commands that
+scale with the working tree were given **two hours**. The two-hour budget had been raised
+deliberately, reasoning about a million-file first run; the network budget was never revisited. The
+same run permitted two hours to *build* a commit was permitted ten minutes to *deliver* it.
+
+A total-duration budget answers "has this taken too long?" The question worth asking is "has this
+stopped making progress?" — and the two coincide only when the payload is roughly constant, which
+is exactly what is not true here. So the budget was wrong in both directions at once: a genuinely
+dead connection was tolerated for the full ten minutes, and a healthy transfer with a great deal to
+send was killed while it was still working.
+
+Two details made that unrecoverable rather than merely slow. The termination message matched none of
+the transient markers, so the retry loop returned immediately and the configured retry count did
+nothing. And the same budget governs `clone` and `fetch`, so an estate whose *clone* exceeded ten
+minutes never reached the commit stage at all.
+
+Network commands are now governed by progress:
+
+- Abandoned after **three minutes without output**, which is generous for a healthy transfer and far
+  tighter than before for a dead one.
+- An absolute ceiling of two hours behind it as a backstop, matching the budget for building the
+  commit.
+- `--progress` is forced on clone, fetch and push, because git emits no progress when its error
+  stream is not a terminal. Progress redraws are collapsed to their final state, so they do not
+  travel into `runs.error_message`, the run log, or exported reports.
+- A stall is classified **transient**, so it retries. A ceiling kill deliberately is not — retrying
+  it would burn the same ceiling again on the same doomed transfer.
+
+### Fixed — a workspace whose clone was interrupted could never repair itself
+
+The self-heal deletes a corrupt clone and starts again. It decided "corrupt" by asking whether
+`rev-parse --git-dir` succeeded — but git initialises the destination repository *before* it
+fetches, so a clone killed mid-transfer leaves a perfectly valid `.git` with an unborn `HEAD`. The
+probe answered success, the workspace was declared healthy, and the reclone never ran. Combined
+with the budget above, a repository too large to clone in ten minutes wedged permanently with no
+automatic way back.
+
+The probe now also verifies that `HEAD` resolves, which is what distinguishes a half-transferred
+clone from a merely unreachable remote. The existing test only ever simulated an empty `.git`
+directory, which is not the state a killed clone leaves.
+
+### Fixed — a type withheld for divergence was filtered as though it were not
+
+A type withheld because the branch diverged is withheld precisely so it gets scanned in **full**.
+The filter handed to the providers was intersected with the set of filterable types but not with the
+set actually being scanned — and filterable types are derived from stored watermark keys, which are
+written as upserts and never deleted. So the type the engine had just decided to re-scan was
+filtered harder than usual: its unchanged objects never reached the engine, and because they had
+been excluded they were never marked seen either, so the deletion pass read every one of them as
+dropped. A scheduled run turns that into a mass-deletion warning; Run Now applies the deletions.
+
+Reachable whenever divergence is partial — after a merge, one type has a change proposed and left
+unmerged while the rest stay clean.
+
+(Committed to `main` before this release and previously unreleased.)
+
+### Documentation
+
+- The known limit describing a permanently unscriptable object was **wrong in both halves**. An
+  object that was never scriptable no longer forces a full scan of its type — that was fixed
+  earlier and the note was never updated — and `.obsyncignore` cannot release the case that does
+  still cost, because ignore rules are consulted when planning and when writing, not when recording
+  a skip. Corrected to describe the real behaviour: an object that *was* scriptable and no longer is
+  holds its type's watermark until it is dropped, fixed, or accepted.
+- The per-folder file limit is now stated. Objects of one type share a single folder per database,
+  and past roughly 100,000 files in one folder GitHub stops rendering the listing and filesystem
+  enumeration slows. The layout is deliberate and will not be reorganised, so this is a supported
+  limit rather than a defect to be designed around.
+
 ## 0.13.1 - 2026-09-07
 
 **A run says what changed in the database, not what it wrote to disk.** Reported from the 0.13.0
