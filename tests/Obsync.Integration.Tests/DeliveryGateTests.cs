@@ -268,6 +268,11 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         Assert.Empty(await StatesAsync());
     }
 
+    /// <summary>A procedure the provider cannot script — encrypted, or CLR.</summary>
+    private static RawScriptedObject Unscriptable(string name, string reason) =>
+        RawScriptedObject.Skipped(
+            new ScriptedObjectIdentity(SqlObjectType.StoredProcedure, "dbo", name), reason);
+
     private static RawScriptedObject Proc(string name, string body) =>
         RawScriptedObject.Scripted(
             new ScriptedObjectIdentity(SqlObjectType.StoredProcedure, "dbo", name),
@@ -551,6 +556,101 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         _scripts.RequestedWatermarks.Clear();
         _ = await RunAsync();
         Assert.Single(_scripts.RequestedWatermarks);
+    }
+
+    /// <summary>
+    /// A skip of an object with prior state holds its type's watermark, which is right for a
+    /// transient failure and a trap for a permanent one. A procedure later altered WITH ENCRYPTION
+    /// has a modify_date above the frozen watermark, so it is re-streamed, re-skipped and re-freezes
+    /// every run — forever. Every object of that type modified since the freeze is then re-scripted
+    /// on every run, and that set only grows.
+    ///
+    /// At the moment of the skip the two cases are indistinguishable. The difference is only visible
+    /// over time: skipped AGAIN, same reason, same modify_date. That second observation is what
+    /// releases the watermark.
+    /// </summary>
+    [Fact]
+    public async Task AnObjectThatCanNeverBeScripted_StopsHoldingItsTypeBack()
+    {
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+
+        // Run 1: both script cleanly, so both acquire prior state and the watermark reaches `newer`.
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "other")];
+        SetSnapshot(("P1", older), ("P2", newer));
+        SetCommit(true);
+        SetPush(true);
+        _ = await RunAsync();
+
+        // P2 is then altered WITH ENCRYPTION: its modify_date moves above the watermark, so it is
+        // streamed again, and it can no longer be scripted.
+        var encryptedAt = newer.AddHours(1);
+        _scripts.Items = [Proc("P1", "body v1"), Unscriptable("P2", "The definition is encrypted.")];
+        SetSnapshot(("P1", older), ("P2", encryptedAt));
+
+        // Run 2 — the first observation. Assumed transient, so the watermark is held back.
+        var first = await RunAsync();
+        Assert.Equal(RunStatus.Warning, first.Status);
+        var afterFirst = await _provider.GetRequiredService<IScriptingWatermarkRepository>()
+            .GetForJobDatabaseAsync(_job.Id, "Db1");
+        Assert.Equal(newer, afterFirst[SqlObjectType.StoredProcedure].Value);
+
+        // Run 3 — the same failure, same reason, same modify_date. Now it is known-unscriptable: the
+        // watermark advances past it and the run stops reporting a failure it can do nothing about.
+        var second = await RunAsync();
+        Assert.NotEqual(RunStatus.Warning, second.Status);
+
+        var afterSecond = await _provider.GetRequiredService<IScriptingWatermarkRepository>()
+            .GetForJobDatabaseAsync(_job.Id, "Db1");
+        Assert.Equal(encryptedAt, afterSecond[SqlObjectType.StoredProcedure].Value);
+
+        Assert.Contains(
+            await _provider.GetRequiredService<IRunRepository>().GetLogsAsync(second.Id),
+            log => log.Message.Contains("known to be unscriptable", StringComparison.Ordinal));
+
+        // The object is NOT deleted: it is still marked seen, and its last good file is retained.
+        Assert.Contains(await StatesAsync(), state => state.ObjectName == "P2");
+    }
+
+    /// <summary>
+    /// Quarantine ends when the evidence changes. A changed modify_date is the only signal that
+    /// anything about the object is different, so it is attempted again — and if it now scripts, the
+    /// quarantine row goes with it rather than outliving the condition it recorded.
+    /// </summary>
+    [Fact]
+    public async Task AQuarantinedObject_IsAttemptedAgainWhenItChanges()
+    {
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+        var encryptedAt = newer.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "other")];
+        SetSnapshot(("P1", older), ("P2", newer));
+        SetCommit(true);
+        SetPush(true);
+        _ = await RunAsync();
+
+        _scripts.Items = [Proc("P1", "body v1"), Unscriptable("P2", "The definition is encrypted.")];
+        SetSnapshot(("P1", older), ("P2", encryptedAt));
+        _ = await RunAsync();   // first observation
+        _ = await RunAsync();   // quarantined
+
+        // The encryption is removed. The new modify_date is fresh evidence, so it is scripted again.
+        var decryptedAt = encryptedAt.AddHours(1);
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "decrypted body")];
+        SetSnapshot(("P1", older), ("P2", decryptedAt));
+
+        var recovered = await RunAsync();
+        Assert.Equal(RunStatus.Succeeded, recovered.Status);
+
+        var quarantine = await _provider.GetRequiredService<IScriptingQuarantineRepository>()
+            .GetForJobDatabaseAsync(_job.Id, "Db1");
+        Assert.Empty(quarantine);
     }
 
     [Fact]

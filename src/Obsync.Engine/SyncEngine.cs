@@ -52,6 +52,7 @@ public sealed class SyncEngine : ISyncEngine
     private readonly IRunRepository _runs;
     private readonly IObjectStateRepository _objectStates;
     private readonly IScriptingWatermarkRepository _watermarks;
+    private readonly IScriptingQuarantineRepository _quarantine;
     private readonly IAppSettingsRepository _appSettings;
     private readonly IReadOnlyList<IObjectScriptProvider> _scriptProviders;
     private readonly IServerObjectScriptProvider _serverProvider;
@@ -82,6 +83,7 @@ public sealed class SyncEngine : ISyncEngine
         IRunRepository runs,
         IObjectStateRepository objectStates,
         IScriptingWatermarkRepository watermarks,
+        IScriptingQuarantineRepository quarantine,
         IAppSettingsRepository appSettings,
         IEnumerable<IObjectScriptProvider> scriptProviders,
         IServerObjectScriptProvider serverProvider,
@@ -111,6 +113,7 @@ public sealed class SyncEngine : ISyncEngine
         _runs = runs;
         _objectStates = objectStates;
         _watermarks = watermarks;
+        _quarantine = quarantine;
         _appSettings = appSettings;
         _scriptProviders = [.. scriptProviders];
         _serverProvider = serverProvider;
@@ -880,12 +883,35 @@ public sealed class SyncEngine : ISyncEngine
         // incremental run. Declared before the apply/skip closures that record into it.
         var skippedTypes = new ConcurrentDictionary<SqlObjectType, byte>();
 
+        // Objects already observed to be unscriptable under evidence that has not changed. Read-only
+        // during scripting; the two bags below collect this run's observations from worker threads.
+        var quarantined = context.Job.Advanced.IncrementalScripting
+            ? await _quarantine.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken)
+                .ConfigureAwait(false)
+            : new Dictionary<string, QuarantinedObject>();
+        var quarantineObserved = new ConcurrentBag<QuarantinedObject>();
+        var quarantineHeld = new ConcurrentBag<QuarantinedObject>();
+        var quarantineReleased = new ConcurrentBag<ScriptedObjectIdentity>();
+
+        // Each snapshot object's modify_date, filled by the incremental pass below and read by the
+        // skip path. A failure at the SAME date as a previous failure is the evidence that the
+        // failure is permanent; without a snapshot (incremental scripting off) there is no such
+        // evidence and nothing is quarantined.
+        var snapshotDates = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
         // Diff + write + record + track for a single scripted item (a SQL object or a synthetic
         // database artifact). Artifacts ride the same change-detection path so an options- or
         // permissions-only change still produces a commit, while an unchanged run still produces none.
         // Runs concurrently across workers for objects, then sequentially for the trailing artifacts.
         async Task ApplyItemAsync(ScriptedObjectIdentity identity, string rawScript, string relativePath, CancellationToken ct)
         {
+            // Scripting succeeded, so whatever stopped it before has gone. Release the quarantine
+            // rather than leaving a row that outlives the condition it recorded.
+            if (quarantined.Count > 0 && quarantined.ContainsKey(StateKey(identity)))
+            {
+                quarantineReleased.Add(identity);
+            }
+
             // Synthetic items (manifest artifacts, reference data) skip the object inventory and
             // the ignore rules — they are engine-generated from explicit configuration, not
             // discovered schema objects. They are NOT skipped by the scanned counter: they are
@@ -1052,7 +1078,36 @@ public sealed class SyncEngine : ISyncEngine
             seen.TryAdd(key, 0);
             if (prior.ContainsKey(key))
             {
+                var reason = raw.SkipReason ?? string.Empty;
+                var observedAt = snapshotDates.TryGetValue(key, out var modifyDate) ? modifyDate : (DateTime?)null;
+
+                // Already observed failing in exactly this way, at exactly this modify_date? Then it
+                // is not going to succeed next time either, and freezing its type's watermark for it
+                // costs more on every run forever while protecting nothing. Let the watermark move.
+                //
+                // Nothing is lost by doing so: the watermark advances past the object, the provider
+                // stops streaming it, and the incremental planner then treats it as an ordinary
+                // unchanged object — marked seen, so the deletion pass leaves it alone, with its last
+                // good file retained. It leaves quarantine the moment its modify_date changes, which
+                // is the only evidence that anything about it is different.
+                if (observedAt is { } now
+                    && quarantined.TryGetValue(key, out var entry)
+                    && entry.ModifyDate == now
+                    && string.Equals(entry.Reason, reason, StringComparison.Ordinal))
+                {
+                    context.IncrementScanned();
+                    quarantineHeld.Add(new QuarantinedObject(raw.Identity, now, reason, entry.FirstSeenAt, _clock.UtcNow));
+                    return Task.CompletedTask;
+                }
+
+                // First observation (or the evidence changed): assume transient, which means holding
+                // the type's watermark so a change predating it is still re-examined next run.
                 skippedTypes.TryAdd(raw.Identity.Type, 0);
+                if (observedAt is { } seenAt)
+                {
+                    quarantineObserved.Add(
+                        new QuarantinedObject(raw.Identity, seenAt, reason, _clock.UtcNow, _clock.UtcNow));
+                }
             }
 
             context.IncrementScanned();
@@ -1078,7 +1133,9 @@ public sealed class SyncEngine : ISyncEngine
         // wasted scrape. The cost of closing it is one catalog query on a run that is already
         // scripting everything.
         var incrementalWatermarks = !fullSnapshot && context.Job.Advanced.IncrementalScripting
-            ? await PlanIncrementalAsync(context, database, types, prior, seen, inventory, ignoreRules, localPath, cancellationToken)
+            ? await PlanIncrementalAsync(
+                    context, database, types, prior, seen, inventory, ignoreRules, localPath, snapshotDates,
+                    cancellationToken)
                 .ConfigureAwait(false)
             : null;
 
@@ -1341,6 +1398,32 @@ public sealed class SyncEngine : ISyncEngine
         // A type that had skips must not advance its watermark: the skipped object's change may
         // predate the new watermark, and advancing past it would hide the change from every later
         // incremental run.
+        // Staged, not written: quarantine rides the same delivery gate as watermarks and object
+        // state. A run that never delivered has not proved anything about the estate.
+        if (!quarantineObserved.IsEmpty || !quarantineHeld.IsEmpty)
+        {
+            context.PendingQuarantine[database] = [.. quarantineObserved, .. quarantineHeld];
+        }
+
+        if (!quarantineReleased.IsEmpty)
+        {
+            context.ReleasedQuarantine[database] = [.. quarantineReleased];
+        }
+
+        if (!quarantineHeld.IsEmpty)
+        {
+            // Said once, as a known condition rather than a recurring failure. These objects no
+            // longer escalate the run to Warning: a permanent Warning that can never be cleared
+            // trains people to ignore the colour, which costs more than it protects.
+            var held = quarantineHeld.ToList();
+            context.Log(SyncLogLevel.Info,
+                $"{held.Count:N0} object(s) in {database} are known to be unscriptable and were left as they "
+                + "are, so incremental scripting is not held back for them. They are attempted again as soon "
+                + "as they change.",
+                string.Join("\n", held.Take(100).Select(q =>
+                    $"{q.Identity.Type} {DescribeIdentity(q.Identity)} — {q.Reason} (first seen {q.FirstSeenAt:u})")));
+        }
+
         if (!skippedTypes.IsEmpty && context.PendingWatermarks.TryGetValue(database, out var staged))
         {
             context.PendingWatermarks[database] = staged
@@ -1363,7 +1446,8 @@ public sealed class SyncEngine : ISyncEngine
         RunContext context, string database, IReadOnlyList<SqlObjectType> types,
         Dictionary<string, TrackedObjectState> prior,
         ConcurrentDictionary<string, byte> seen, ConcurrentBag<ObjectInventoryEntry> inventory,
-        IgnoreRules ignoreRules, string localPath, CancellationToken cancellationToken)
+        IgnoreRules ignoreRules, string localPath, Dictionary<string, DateTime> snapshotDates,
+        CancellationToken cancellationToken)
     {
         var capableTypes = types.Where(IncrementalPlanner.CapableTypes.Contains).ToList();
         if (capableTypes.Count == 0)
@@ -1417,6 +1501,13 @@ public sealed class SyncEngine : ISyncEngine
             context.Connection, context.SqlPassword, database, capableTypes,
             context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
             context.Job.Selection.SchemaFilter, cancellationToken).ConfigureAwait(false);
+
+        // Handed back for the skip path: a failure at the SAME modify_date as a previous failure is
+        // what distinguishes a permanently unscriptable object from a transient one.
+        foreach (var item in snapshot)
+        {
+            snapshotDates[IncrementalPlanner.StateKey(item)] = item.ModifyDate;
+        }
 
         // "Ignored" for planning purposes means either an ignore-rule match or an out-of-filter
         // schema — the providers never yield those, so they must neither be skipped as unchanged
@@ -2738,6 +2829,18 @@ public sealed class SyncEngine : ISyncEngine
             {
                 await _watermarks.UpsertManyAsync(context.Job.Id, database, watermarks, cancellationToken).ConfigureAwait(false);
             }
+
+            foreach (var (database, entries) in context.PendingQuarantine)
+            {
+                await _quarantine.UpsertManyAsync(context.Job.Id, database, entries, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            foreach (var (database, identities) in context.ReleasedQuarantine)
+            {
+                await _quarantine.DeleteManyAsync(context.Job.Id, database, identities, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
     }
 
@@ -3187,6 +3290,15 @@ public sealed class SyncEngine : ISyncEngine
         /// <summary>Per-database incremental watermarks staged during scripting; persisted with the
         /// final states only when the run ends healthy. Written from single-threaded stages.</summary>
         public Dictionary<string, IReadOnlyDictionary<SqlObjectType, ScriptingWatermark>> PendingWatermarks { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Per-database quarantine observations staged during scripting; written with the
+        /// final states only when the run ends healthy. Written from single-threaded stages.</summary>
+        public Dictionary<string, IReadOnlyCollection<QuarantinedObject>> PendingQuarantine { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Objects that scripted successfully again, so their quarantine row is removed.</summary>
+        public Dictionary<string, IReadOnlyCollection<ScriptedObjectIdentity>> ReleasedQuarantine { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
         public void Report(SyncPhase phase, string message, int done = 0, int total = 0) =>

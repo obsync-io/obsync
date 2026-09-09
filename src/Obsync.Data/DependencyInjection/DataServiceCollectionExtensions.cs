@@ -25,6 +25,7 @@ public static class DataServiceCollectionExtensions
         services.TryAddSingleton<IRunRepository, RunRepository>();
         services.TryAddSingleton<IObjectStateRepository, ObjectStateRepository>();
         services.TryAddSingleton<IScriptingWatermarkRepository, ScriptingWatermarkRepository>();
+        services.TryAddSingleton<IScriptingQuarantineRepository, ScriptingQuarantineRepository>();
         services.TryAddSingleton<IAppSettingsRepository, AppSettingsRepository>();
 
         // Enterprise audit trail — shared by both hosts: the app audits profile/job changes and
