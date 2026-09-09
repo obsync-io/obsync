@@ -42,12 +42,23 @@ public sealed class IncrementalPlannerTests
 
     private static bool NotIgnored(SqlObjectType type, string schema, string name) => false;
 
+    /// <summary>
+    /// The ordinary case: every capable type is being scanned. Tests that care about the scanned set
+    /// call <see cref="IncrementalPlanner.Plan"/> directly.
+    /// </summary>
+    private static IncrementalPlan Plan(
+        IReadOnlyList<ModifiedObjectSnapshotItem> snapshot,
+        IReadOnlyDictionary<string, TrackedObjectState> prior,
+        IReadOnlyDictionary<SqlObjectType, DateTime> watermarks,
+        Func<SqlObjectType, string, string, bool> isIgnored) =>
+        IncrementalPlanner.Plan(snapshot, prior, watermarks, IncrementalPlanner.CapableTypes, isIgnored);
+
     [Fact]
     public void Skips_OlderObject_WithWatermarkAndPriorState()
     {
         var item = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
 
-        var plan = IncrementalPlanner.Plan([item], Prior(item), Watermarks(SqlObjectType.StoredProcedure), NotIgnored);
+        var plan = Plan([item], Prior(item), Watermarks(SqlObjectType.StoredProcedure), NotIgnored);
 
         var skip = Assert.Single(plan.SkippedItems);
         Assert.Equal(item, skip.Item);
@@ -60,7 +71,7 @@ public sealed class IncrementalPlannerTests
     {
         var item = Item(SqlObjectType.View, "vw_Old", Older);
 
-        var plan = IncrementalPlanner.Plan([item], Prior(item), Watermarks(), NotIgnored);
+        var plan = Plan([item], Prior(item), Watermarks(), NotIgnored);
 
         Assert.Empty(plan.SkippedItems);
         Assert.Empty(plan.FilterableTypes); // no watermark → nothing filterable either
@@ -73,7 +84,7 @@ public sealed class IncrementalPlannerTests
         // race where an object changes within the snapshot's last 3.33ms tick.
         var item = Item(SqlObjectType.View, "vw_Boundary", Watermark);
 
-        var plan = IncrementalPlanner.Plan([item], Prior(item), Watermarks(SqlObjectType.View), NotIgnored);
+        var plan = Plan([item], Prior(item), Watermarks(SqlObjectType.View), NotIgnored);
 
         Assert.Empty(plan.SkippedItems);
         Assert.Contains(SqlObjectType.View, plan.FilterableTypes); // boundary is no violation
@@ -84,7 +95,7 @@ public sealed class IncrementalPlannerTests
     {
         var item = Item(SqlObjectType.Table, "Orders", Newer);
 
-        var plan = IncrementalPlanner.Plan([item], Prior(item), Watermarks(SqlObjectType.Table), NotIgnored);
+        var plan = Plan([item], Prior(item), Watermarks(SqlObjectType.Table), NotIgnored);
 
         Assert.Empty(plan.SkippedItems);
         Assert.Contains(SqlObjectType.Table, plan.FilterableTypes);
@@ -97,7 +108,7 @@ public sealed class IncrementalPlannerTests
         // which case the providers never yield it anyway.
         var ignored = Item(SqlObjectType.Table, "Ignored", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [ignored],
             new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase),
             Watermarks(SqlObjectType.Table),
@@ -117,7 +128,7 @@ public sealed class IncrementalPlannerTests
         var ignored = Item(SqlObjectType.StoredProcedure, "usp_Ignored", Older);
         var normal = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [ignored, normal],
             Prior(ignored, normal),
             Watermarks(SqlObjectType.StoredProcedure),
@@ -140,7 +151,7 @@ public sealed class IncrementalPlannerTests
         var violation = Item(SqlObjectType.StoredProcedure, "usp_NewlyInScope", Older);
         var otherType = Item(SqlObjectType.View, "vw_Old", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [skippable, violation, otherType],
             Prior(skippable, otherType),
             Watermarks(SqlObjectType.StoredProcedure, SqlObjectType.View),
@@ -165,7 +176,7 @@ public sealed class IncrementalPlannerTests
         var skippable = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
         var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [skippable, clr],
             Prior(skippable),
             Watermarks(SqlObjectType.StoredProcedure),
@@ -187,7 +198,7 @@ public sealed class IncrementalPlannerTests
         var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
         var newlyInScope = Item(SqlObjectType.Function, "fn_NewlyInScope", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [clr, newlyInScope],
             Prior(),
             Watermarks(SqlObjectType.StoredProcedure, SqlObjectType.Function),
@@ -206,7 +217,7 @@ public sealed class IncrementalPlannerTests
     {
         var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [clr],
             Prior(clr),
             Watermarks(SqlObjectType.StoredProcedure),
@@ -220,7 +231,7 @@ public sealed class IncrementalPlannerTests
     [Fact]
     public void UnscriptableObject_StillContributesToTheNewWatermark()
     {
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Newer)],
             Prior(),
             Watermarks(SqlObjectType.StoredProcedure),
@@ -238,7 +249,7 @@ public sealed class IncrementalPlannerTests
     {
         var clr = Unscriptable(SqlObjectType.StoredProcedure, "usp_ClrProc", Older);
 
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [clr],
             Prior(),
             Watermarks(SqlObjectType.StoredProcedure),
@@ -251,7 +262,7 @@ public sealed class IncrementalPlannerTests
     [Fact]
     public void NewWatermarks_AreThePerTypeMax_AndAbsentForTypesWithoutSnapshotRows()
     {
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [
                 Item(SqlObjectType.Table, "A", Older),
                 Item(SqlObjectType.Table, "B", Newer),
@@ -269,7 +280,7 @@ public sealed class IncrementalPlannerTests
     [Fact]
     public void EmptySnapshot_KeepsWatermarkedTypesFilterable_AndProducesNoNewWatermarks()
     {
-        var plan = IncrementalPlanner.Plan(
+        var plan = Plan(
             [],
             new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase),
             Watermarks(SqlObjectType.Synonym),
@@ -298,5 +309,60 @@ public sealed class IncrementalPlannerTests
                 SqlObjectType.Function, SqlObjectType.Trigger, SqlObjectType.Synonym, SqlObjectType.Sequence,
             },
             IncrementalPlanner.CapableTypes);
+    }
+    /// <summary>
+    /// A type the caller withheld from the scan must not come back as filterable. Filterability used
+    /// to be derived from the stored watermark KEYS, and watermark writes are upserts that never
+    /// delete a row — so a type withheld for divergence still had one, and the planner offered a
+    /// filter for the very type the engine had just decided to re-scan in full. The caller was left
+    /// to remember the intersection.
+    ///
+    /// The consequence was the opposite of the intent: the withheld type was filtered HARDER than
+    /// normal, its unchanged objects never reached the engine, they were never marked seen, and the
+    /// deletion pass read every one of them as dropped.
+    /// </summary>
+    [Fact]
+    public void AWithheldType_IsNotOfferedItsOwnWatermarkBack()
+    {
+        var procedure = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
+        var view = Item(SqlObjectType.View, "v_Old", Older);
+
+        // Both types carry a stored watermark; only the view is being scanned this run.
+        var plan = IncrementalPlanner.Plan(
+            [procedure, view],
+            Prior(procedure, view),
+            Watermarks(SqlObjectType.StoredProcedure, SqlObjectType.View),
+            new HashSet<SqlObjectType> { SqlObjectType.View },
+            NotIgnored);
+
+        Assert.DoesNotContain(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+        Assert.Contains(SqlObjectType.View, plan.FilterableTypes);
+
+        // ...and nothing of the withheld type may be pre-marked as skipped either, or the deletion
+        // pass would read those objects as dropped.
+        Assert.DoesNotContain(plan.SkippedItems, skip => skip.Item.Type == SqlObjectType.StoredProcedure);
+    }
+
+    /// <summary>
+    /// The bootstrap: a first run has no prior state and therefore nothing to skip, but it must
+    /// still produce watermarks. Staging them only when there was prior state cost an entire extra
+    /// run — run 1 stored nothing, run 2 was a full scrape whose only product was the first
+    /// watermarks, and run 3 was the earliest run that could skip anything.
+    /// </summary>
+    [Fact]
+    public void AFirstRun_SkipsNothing_ButStillProducesWatermarks()
+    {
+        var item = Item(SqlObjectType.StoredProcedure, "usp_New", Newer);
+
+        var plan = IncrementalPlanner.Plan(
+            [item],
+            new Dictionary<string, TrackedObjectState>(),
+            new Dictionary<SqlObjectType, DateTime>(),
+            IncrementalPlanner.CapableTypes,
+            NotIgnored);
+
+        Assert.Empty(plan.SkippedItems);
+        Assert.Empty(plan.FilterableTypes);
+        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure]);
     }
 }

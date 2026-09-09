@@ -57,10 +57,28 @@ internal static class IncrementalPlanner
     /// modified within the same 3.33ms tick as the previous snapshot's max is re-read — that
     /// closes the boundary race at the cost of re-scripting a handful of boundary objects.
     /// </summary>
+    /// <param name="scannedTypes">
+    /// The types this run is actually scanning. Filterability is derived from it, so a type that is
+    /// not being scanned cannot appear in <c>FilterableTypes</c> at all.
+    /// <para>
+    /// This parameter is the fix for a whole class of defect rather than one instance of it.
+    /// Filterability used to be derived from the stored watermark KEYS, which are written as upserts
+    /// and never deleted — so a type the caller had withheld from the scan (because the branch
+    /// diverged) still carried a watermark row, and the planner duly offered a filter for it. The
+    /// caller then had to remember to intersect the result with what it was scanning. It did not,
+    /// and the type the engine had just decided to re-scan in full was filtered HARDER than usual:
+    /// its unchanged objects never reached the engine, were never marked seen, and the deletion pass
+    /// read every one of them as dropped.
+    /// </para>
+    /// <para>
+    /// Two sources of truth for one fact is what made that expressible. There is now one.
+    /// </para>
+    /// </param>
     internal static IncrementalPlan Plan(
         IReadOnlyList<ModifiedObjectSnapshotItem> snapshot,
         IReadOnlyDictionary<string, TrackedObjectState> priorStatesByKey,
         IReadOnlyDictionary<SqlObjectType, DateTime> watermarks,
+        IReadOnlySet<SqlObjectType> scannedTypes,
         Func<SqlObjectType, string, string, bool> isIgnored)
     {
         var newWatermarks = new Dictionary<SqlObjectType, DateTime>();
@@ -103,7 +121,9 @@ internal static class IncrementalPlanner
             }
         }
 
-        var filterable = watermarks.Keys.Where(t => !violatedTypes.Contains(t)).ToHashSet();
+        var filterable = watermarks.Keys
+            .Where(t => scannedTypes.Contains(t) && !violatedTypes.Contains(t))
+            .ToHashSet();
         // A violated type is fully scanned, so none of its objects may be pre-marked as seen —
         // the provider will yield them again and they must go through the normal apply path once.
         var skipped = candidates.Where(c => filterable.Contains(c.Item.Type)).ToList();

@@ -288,12 +288,24 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         /// </summary>
         public Dictionary<string, DateTime> ModifyDates { get; } = [];
 
+        /// <summary>
+        /// The incremental filter handed to this provider on each call. This is the observable that
+        /// matters: it is what decides whether SQL Server is asked for a definition at all, so a test
+        /// asserting on it is asserting on the actual saving rather than on a side effect of it.
+        /// </summary>
+        public List<IReadOnlyDictionary<SqlObjectType, DateTime>> RequestedWatermarks { get; } = [];
+
         public ScriptingStrategy Strategy => ScriptingStrategy.Metadata;
 
         public async IAsyncEnumerable<RawScriptedObject> ScriptAsync(
             ScriptRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             await Task.Yield();
+            if (request.IncrementalWatermarks is { Count: > 0 } filter)
+            {
+                RequestedWatermarks.Add(filter);
+            }
+
             foreach (var item in Items.Where(i => request.Types.Contains(i.Identity.Type)))
             {
                 // Honour the incremental floor, as a real provider does. This fake used to ignore it
@@ -449,6 +461,45 @@ public sealed class DeliveryGateTests : IAsyncLifetime
             .Returns(Task.FromResult<IReadOnlyList<ModifiedObjectSnapshotItem>>(
                 [.. objects.Select(o => new ModifiedObjectSnapshotItem(
                     o.Type, "dbo", o.Name, o.ModifyDate))]));
+    }
+
+    /// <summary>
+    /// The second run must be the first incremental one. Watermarks are staged only inside the
+    /// incremental planner, and the planner used to be gated on there being prior state — so run 1
+    /// stored no watermarks at all, run 2 was a full scrape whose only product was the first
+    /// watermarks, and run 3 was the earliest run that could skip anything. On an estate of the size
+    /// this product targets that is an entire wasted scrape of everything.
+    ///
+    /// Asserted through the provider's own filter, which is the thing that decides whether SQL Server
+    /// is asked for a definition at all: on run 2 it must carry a watermark for the type.
+    /// </summary>
+    [Fact]
+    public async Task TheSecondRun_IsAlreadyIncremental()
+    {
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "other")];
+        SetSnapshot(("P1", older), ("P2", newer));
+        SetCommit(true);
+        SetPush(true);
+
+        var first = await RunAsync();
+        Assert.Equal(RunStatus.Succeeded, first.Status);
+
+        // Run 1 has nothing to skip, but it must leave the watermarks behind.
+        var watermarks = await _provider.GetRequiredService<IScriptingWatermarkRepository>()
+            .GetForJobDatabaseAsync(_job.Id, "Db1");
+        Assert.Equal(newer, Assert.Contains(SqlObjectType.StoredProcedure, watermarks));
+
+        _scripts.RequestedWatermarks.Clear();
+        var second = await RunAsync();
+
+        Assert.Equal(RunStatus.NoChanges, second.Status);
+        var filter = Assert.Single(_scripts.RequestedWatermarks);
+        Assert.Equal(newer, Assert.Contains(SqlObjectType.StoredProcedure, filter));
     }
 
     [Fact]

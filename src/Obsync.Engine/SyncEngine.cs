@@ -1068,8 +1068,15 @@ public sealed class SyncEngine : ISyncEngine
 
         // Incremental scripting: snapshot modify_dates FIRST, mark unchanged objects as seen with
         // their prior hashes, and hand the providers per-type watermark filters. Export runs are
-        // always full snapshots, and a first run (no prior state) has nothing to skip.
-        var incrementalWatermarks = !fullSnapshot && context.Job.Advanced.IncrementalScripting && prior.Count > 0
+        // always full snapshots.
+        //
+        // This deliberately runs on a FIRST run too, which has nothing to skip. Watermarks are
+        // staged only inside this method, so gating it on prior state cost a whole extra run: run 1
+        // stored nothing, run 2 was a full scrape whose only product was the first watermarks, and
+        // run 3 was the earliest run that could skip anything. On a large estate that is an entire
+        // wasted scrape. The cost of closing it is one catalog query on a run that is already
+        // scripting everything.
+        var incrementalWatermarks = !fullSnapshot && context.Job.Advanced.IncrementalScripting
             ? await PlanIncrementalAsync(context, database, types, prior, seen, inventory, ignoreRules, localPath, cancellationToken)
                 .ConfigureAwait(false)
             : null;
@@ -1414,7 +1421,7 @@ public sealed class SyncEngine : ISyncEngine
         // nor treated as safety violations. Removing the schema filter later un-ignores them, and
         // the resulting no-prior violation forces the full scan that brings them into scope.
         var schemaFilter = context.Job.Selection.SchemaFilter;
-        var plan = IncrementalPlanner.Plan(snapshot, prior, watermarks,
+        var plan = IncrementalPlanner.Plan(snapshot, prior, watermarks, capableTypes.ToHashSet(),
             (type, schema, name) => ignoreRules.Matches(type, schema, name)
                 || (schemaFilter.Count > 0 && !schemaFilter.Contains(schema)));
 
@@ -1461,20 +1468,12 @@ public sealed class SyncEngine : ISyncEngine
             return null;
         }
 
-        // Intersected with the types actually being scanned, not only with FilterableTypes.
-        //
-        // FilterableTypes is derived from the STORED watermark keys, and a type withheld above for
-        // divergence still has its watermark row — those writes are upserts and never delete one.
-        // So the dictionary handed to the providers contained a filter for the very type this
-        // method had just decided to re-scan in full, which inverted the intent completely: the
-        // diverged type was filtered HARDER than normal, its unchanged objects never reached the
-        // engine, and because the snapshot had excluded them they were never marked seen either —
-        // so the deletion pass read every one of them as dropped. On a scheduled run the
-        // mass-deletion breaker turns that into a spurious warning; on Run Now, which bypasses the
-        // breaker by design, the deletions are applied.
-        var scannedInFull = capableTypes.ToHashSet();
+        // FilterableTypes is now derived from the scanned set inside the planner, so it can no
+        // longer name a type this run withheld. The intersection that used to live here — and whose
+        // absence let a diverged type be filtered harder than normal — is part of the planner's
+        // contract instead of a rule the caller has to remember.
         return watermarks
-            .Where(pair => plan.FilterableTypes.Contains(pair.Key) && scannedInFull.Contains(pair.Key))
+            .Where(pair => plan.FilterableTypes.Contains(pair.Key))
             .ToDictionary(pair => pair.Key, pair => pair.Value);
     }
 
