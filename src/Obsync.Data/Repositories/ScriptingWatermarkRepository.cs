@@ -33,9 +33,9 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
         Guid jobId, string database, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryAsync<(long ObjectType, string Watermark, string? Fingerprint)>(
+        var rows = await connection.QueryAsync<(long ObjectType, string Watermark, string? Fingerprint, string? SentinelKey)>(
             new CommandDefinition(
-                "SELECT object_type, watermark, fingerprint FROM scripting_watermarks "
+                "SELECT object_type, watermark, fingerprint, sentinel_key FROM scripting_watermarks "
                 + "WHERE job_id = $job AND database_name = $db;",
                 new { job = jobId.ToString(), db = database },
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
@@ -44,7 +44,8 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
             r => (SqlObjectType)r.ObjectType,
             r => new ScriptingWatermark(
                 DateTime.Parse(r.Watermark, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                r.Fingerprint));
+                r.Fingerprint,
+                r.SentinelKey));
     }
 
     public async Task UpsertManyAsync(
@@ -58,11 +59,13 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
 
         const string sql =
             """
-            INSERT INTO scripting_watermarks (job_id, database_name, object_type, watermark, fingerprint)
-            VALUES ($job, $db, $type, $watermark, $fingerprint)
+            INSERT INTO scripting_watermarks
+                (job_id, database_name, object_type, watermark, fingerprint, sentinel_key)
+            VALUES ($job, $db, $type, $watermark, $fingerprint, $sentinel)
             ON CONFLICT (job_id, database_name, object_type) DO UPDATE SET
                 watermark = excluded.watermark,
-                fingerprint = excluded.fingerprint;
+                fingerprint = excluded.fingerprint,
+                sentinel_key = excluded.sentinel_key;
             """;
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -77,6 +80,7 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
                 // "O" round-trips the raw DateTime exactly, preserving the opaque server-local value.
                 watermark = watermark.Value.ToString("O", CultureInfo.InvariantCulture),
                 fingerprint = watermark.Fingerprint,
+                sentinel = watermark.SentinelKey,
             }, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
         }
 

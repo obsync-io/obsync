@@ -1,0 +1,16 @@
+-- The object whose modify_date set this watermark.
+--
+-- A watermark assumes the database's modify_date timeline only ever moves forward. It does not:
+-- modify_date travels with the database, so a restore from backup or a prod-to-UAT refresh moves
+-- every value backwards, below a watermark already persisted. Every affected object is then older
+-- than the watermark, so it is skipped -- no file read, no hash check -- while the job reports
+-- "No changes" and the repository holds the wrong scripts.
+--
+-- Storing which object set the watermark is what tells a restore from an ordinary drop. If that
+-- object is still there and its date has moved BACKWARDS, the timeline moved and the watermark
+-- cannot be trusted. If it is simply gone, the type's maximum is compared instead -- less precise,
+-- so it can cost one unnecessary full scan when the newest object is dropped, which is the right
+-- way round to be wrong.
+--
+-- NULL means "written before this column existed", and falls back to the maximum comparison.
+ALTER TABLE scripting_watermarks ADD COLUMN sentinel_key TEXT NULL;

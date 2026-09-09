@@ -32,8 +32,10 @@ public sealed class IncrementalPlannerTests
             },
             StringComparer.OrdinalIgnoreCase);
 
-    private static Dictionary<SqlObjectType, DateTime> Watermarks(params SqlObjectType[] types) =>
-        types.ToDictionary(t => t, _ => Watermark);
+    private const string Fingerprint = "fp-current";
+
+    private static Dictionary<SqlObjectType, ScriptingWatermark> Watermarks(params SqlObjectType[] types) =>
+        types.ToDictionary(t => t, _ => new ScriptingWatermark(Watermark, Fingerprint));
 
     /// <summary>A module the server will never return a definition for: CLR, or WITH ENCRYPTION.</summary>
     private static ModifiedObjectSnapshotItem Unscriptable(
@@ -49,9 +51,10 @@ public sealed class IncrementalPlannerTests
     private static IncrementalPlan Plan(
         IReadOnlyList<ModifiedObjectSnapshotItem> snapshot,
         IReadOnlyDictionary<string, TrackedObjectState> prior,
-        IReadOnlyDictionary<SqlObjectType, DateTime> watermarks,
+        IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> watermarks,
         Func<SqlObjectType, string, string, bool> isIgnored) =>
-        IncrementalPlanner.Plan(snapshot, prior, watermarks, IncrementalPlanner.CapableTypes, isIgnored);
+        IncrementalPlanner.Plan(
+            snapshot, prior, watermarks, IncrementalPlanner.CapableTypes, Fingerprint, isIgnored);
 
     [Fact]
     public void Skips_OlderObject_WithWatermarkAndPriorState()
@@ -237,7 +240,7 @@ public sealed class IncrementalPlannerTests
             Watermarks(SqlObjectType.StoredProcedure),
             NotIgnored);
 
-        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure]);
+        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure].Value);
     }
 
     /// <summary>
@@ -269,11 +272,11 @@ public sealed class IncrementalPlannerTests
                 Item(SqlObjectType.View, "C", Watermark),
             ],
             new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<SqlObjectType, DateTime>(),
+            new Dictionary<SqlObjectType, ScriptingWatermark>(),
             NotIgnored);
 
-        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.Table]);
-        Assert.Equal(Watermark, plan.NewWatermarks[SqlObjectType.View]);
+        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.Table].Value);
+        Assert.Equal(Watermark, plan.NewWatermarks[SqlObjectType.View].Value);
         Assert.False(plan.NewWatermarks.ContainsKey(SqlObjectType.StoredProcedure));
     }
 
@@ -333,6 +336,7 @@ public sealed class IncrementalPlannerTests
             Prior(procedure, view),
             Watermarks(SqlObjectType.StoredProcedure, SqlObjectType.View),
             new HashSet<SqlObjectType> { SqlObjectType.View },
+            Fingerprint,
             NotIgnored);
 
         Assert.DoesNotContain(SqlObjectType.StoredProcedure, plan.FilterableTypes);
@@ -357,12 +361,205 @@ public sealed class IncrementalPlannerTests
         var plan = IncrementalPlanner.Plan(
             [item],
             new Dictionary<string, TrackedObjectState>(),
-            new Dictionary<SqlObjectType, DateTime>(),
+            new Dictionary<SqlObjectType, ScriptingWatermark>(),
             IncrementalPlanner.CapableTypes,
+            Fingerprint,
             NotIgnored);
 
         Assert.Empty(plan.SkippedItems);
         Assert.Empty(plan.FilterableTypes);
-        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure]);
+        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure].Value);
+    }
+    // ---- P2: the modify_date timeline only moves forward ------------------------------------
+    //
+    // modify_date travels with the database. A restore from backup, or a prod-to-UAT refresh, moves
+    // every value backwards -- below a watermark already persisted. Every affected object is then
+    // "older than the watermark", so it is skipped with no file read and no hash check, while the
+    // job reports No changes and the repository holds the wrong scripts.
+    //
+    // It was worse than a permanent skip. The new watermark was the snapshot maximum computed from
+    // an empty dictionary and persisted by blind upsert, so the restored database rewrote the
+    // watermark DOWN to its own maximum -- erasing the evidence of the move on the very run that
+    // should have caught it.
+
+    private static ScriptingWatermark Sentinelled(DateTime value, ModifiedObjectSnapshotItem sentinel) =>
+        new(value, Fingerprint, $"{(int)sentinel.Type}|{sentinel.Schema}|{sentinel.Name}");
+
+    [Fact]
+    public void ARestoredDatabase_IsNotTrusted_WhenTheSentinelMovedBackwards()
+    {
+        // The sentinel is the object whose modify_date set the watermark. After a restore it is
+        // still there, but its date now predates the watermark it established.
+        var sentinel = Item(SqlObjectType.StoredProcedure, "usp_Newest", Watermark);
+        var other = Item(SqlObjectType.StoredProcedure, "usp_Other", Older);
+        var restoredSentinel = Item(SqlObjectType.StoredProcedure, "usp_Newest", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [restoredSentinel, other],
+            Prior(sentinel, other),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                [SqlObjectType.StoredProcedure] = Sentinelled(Watermark, sentinel),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+
+        Assert.Equal(
+            WatermarkInvalidation.TimelineMovedBackwards,
+            plan.Invalidated[SqlObjectType.StoredProcedure]);
+        Assert.Empty(plan.SkippedItems);
+        Assert.DoesNotContain(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+
+        // The re-baseline is the restored timeline's own maximum -- it was scanned in full, so the
+        // lower value is now the truthful one.
+        Assert.Equal(Older, plan.NewWatermarks[SqlObjectType.StoredProcedure].Value);
+    }
+
+    [Fact]
+    public void AnOrdinaryEditOfTheNewestObject_IsNotMistakenForARestore()
+    {
+        // The sentinel's date moving FORWARD is the most ordinary event there is: the newest object
+        // is the one most likely to be edited next. Testing for "changed" rather than "moved
+        // backwards" would invalidate the watermark on almost every run.
+        var sentinel = Item(SqlObjectType.StoredProcedure, "usp_Newest", Watermark);
+        var edited = Item(SqlObjectType.StoredProcedure, "usp_Newest", Newer);
+        var old = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [edited, old],
+            Prior(sentinel, old),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                [SqlObjectType.StoredProcedure] = Sentinelled(Watermark, sentinel),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+
+        Assert.Empty(plan.Invalidated);
+        Assert.Contains(SqlObjectType.StoredProcedure, plan.FilterableTypes);
+        Assert.Equal(Newer, plan.NewWatermarks[SqlObjectType.StoredProcedure].Value);
+    }
+
+    [Fact]
+    public void WhenTheSentinelIsGone_TheTypeMaximumDecides()
+    {
+        // No sentinel to compare, so the type's maximum is used instead. It cannot tell a restore
+        // from the newest object simply being dropped, and errs toward the full scan -- one
+        // unnecessary scan is the right way round to be wrong.
+        var dropped = Item(SqlObjectType.View, "v_Newest", Watermark);
+        var survivor = Item(SqlObjectType.View, "v_Old", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [survivor],
+            Prior(dropped, survivor),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                [SqlObjectType.View] = Sentinelled(Watermark, dropped),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+
+        Assert.Equal(WatermarkInvalidation.TimelineMovedBackwards, plan.Invalidated[SqlObjectType.View]);
+    }
+
+    [Fact]
+    public void ATrustedWatermark_IsNeverLowered()
+    {
+        // Persistence is a blind upsert, so a lower value written here silently replaces a higher
+        // one. A watermark may only move down when it has been invalidated -- which is exactly when
+        // the type was scanned in full and the lower value is the truthful one.
+        var sentinel = Item(SqlObjectType.Table, "T_Newest", Watermark);
+        var remaining = Item(SqlObjectType.Table, "T_Old", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [remaining],
+            Prior(sentinel, remaining),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                // The sentinel is recorded and gone from the snapshot, and the type's maximum is
+                // BELOW the watermark, so this run is invalidated and re-baselined downward.
+                [SqlObjectType.Table] = Sentinelled(Watermark, sentinel),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+        Assert.Equal(Older, plan.NewWatermarks[SqlObjectType.Table].Value);
+
+        // ...whereas a TRUSTED watermark keeps its value even when this run's snapshot happens to
+        // contain nothing newer.
+        var trusted = IncrementalPlanner.Plan(
+            [remaining],
+            Prior(sentinel, remaining),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                [SqlObjectType.Table] = Sentinelled(Older, remaining),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+        Assert.Empty(trusted.Invalidated);
+        Assert.Equal(Older, trusted.NewWatermarks[SqlObjectType.Table].Value);
+    }
+
+    [Fact]
+    public void AChangedEmissionFingerprint_InvalidatesTheWatermark()
+    {
+        var item = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [item],
+            Prior(item),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                [SqlObjectType.StoredProcedure] = new(Watermark, "a-different-build"),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+
+        Assert.Equal(WatermarkInvalidation.EmissionChanged, plan.Invalidated[SqlObjectType.StoredProcedure]);
+        Assert.Empty(plan.SkippedItems);
+
+        // The re-stamp carries the CURRENT fingerprint, so the next run is incremental again rather
+        // than scanning in full forever.
+        Assert.Equal(Fingerprint, plan.NewWatermarks[SqlObjectType.StoredProcedure].Fingerprint);
+    }
+
+    [Fact]
+    public void ANullFingerprint_IsAdoptedRatherThanInvalidated()
+    {
+        // Rows written before fingerprints existed. Invalidating them would make the first run after
+        // upgrading a full scan of every type, which on a large estate is hours.
+        var item = Item(SqlObjectType.StoredProcedure, "usp_Old", Older);
+
+        var plan = IncrementalPlanner.Plan(
+            [item],
+            Prior(item),
+            new Dictionary<SqlObjectType, ScriptingWatermark>
+            {
+                [SqlObjectType.StoredProcedure] = new(Watermark, Fingerprint: null),
+            },
+            IncrementalPlanner.CapableTypes,
+            Fingerprint,
+            NotIgnored);
+
+        Assert.Empty(plan.Invalidated);
+        Assert.Single(plan.SkippedItems);
+    }
+
+    [Fact]
+    public void TheWatermarkRecordsWhichObjectSetIt()
+    {
+        var older = Item(SqlObjectType.View, "v_Old", Older);
+        var newest = Item(SqlObjectType.View, "v_Newest", Newer);
+
+        var plan = Plan([older, newest], Prior(older, newest), Watermarks(), NotIgnored);
+
+        Assert.Equal(
+            $"{(int)SqlObjectType.View}|dbo|v_Newest",
+            plan.NewWatermarks[SqlObjectType.View].SentinelKey);
     }
 }

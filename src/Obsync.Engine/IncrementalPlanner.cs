@@ -11,8 +11,26 @@ internal sealed record IncrementalSkip(ModifiedObjectSnapshotItem Item, TrackedO
 internal sealed record IncrementalPlan(
     IReadOnlyList<IncrementalSkip> SkippedItems,
     IReadOnlySet<SqlObjectType> FilterableTypes,
-    IReadOnlyDictionary<SqlObjectType, DateTime> NewWatermarks,
-    IReadOnlyList<ModifiedObjectSnapshotItem> IgnoredItems);
+    IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> NewWatermarks,
+    IReadOnlyList<ModifiedObjectSnapshotItem> IgnoredItems,
+    IReadOnlyDictionary<SqlObjectType, WatermarkInvalidation> Invalidated);
+
+/// <summary>Why a stored watermark could not be trusted this run.</summary>
+internal enum WatermarkInvalidation
+{
+    /// <summary>
+    /// Obsync would no longer emit the bytes the stored hashes were taken over - the normalizer, the
+    /// repository layout, an emission-affecting job setting, or the SMO library changed.
+    /// </summary>
+    EmissionChanged,
+
+    /// <summary>
+    /// The database's <c>modify_date</c> timeline moved backwards, which means this is not the
+    /// database the watermark was taken from: a restore from backup, or a refresh from another
+    /// environment.
+    /// </summary>
+    TimelineMovedBackwards,
+}
 
 /// <summary>
 /// The pure heart of incremental scripting: given a modification snapshot, the prior object
@@ -77,21 +95,57 @@ internal static class IncrementalPlanner
     internal static IncrementalPlan Plan(
         IReadOnlyList<ModifiedObjectSnapshotItem> snapshot,
         IReadOnlyDictionary<string, TrackedObjectState> priorStatesByKey,
-        IReadOnlyDictionary<SqlObjectType, DateTime> watermarks,
+        IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> stored,
         IReadOnlySet<SqlObjectType> scannedTypes,
+        string emissionFingerprint,
         Func<SqlObjectType, string, string, bool> isIgnored)
     {
-        var newWatermarks = new Dictionary<SqlObjectType, DateTime>();
+        // Pass 1: the snapshot's high-water mark per type, and WHICH object holds it. That identity
+        // is what lets the next pass tell a restored database from a dropped object.
+        var snapshotMax = new Dictionary<SqlObjectType, DateTime>();
+        var sentinelKeys = new Dictionary<SqlObjectType, string>();
+        var sentinelDates = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in snapshot)
+        {
+            var key = StateKey(item);
+            sentinelDates[key] = item.ModifyDate;
+            if (!snapshotMax.TryGetValue(item.Type, out var currentMax) || item.ModifyDate > currentMax)
+            {
+                snapshotMax[item.Type] = item.ModifyDate;
+                sentinelKeys[item.Type] = key;
+            }
+        }
+
+        // Pass 2: decide which stored watermarks may still be trusted. Every check fails toward
+        // WORK - an unverifiable precondition means one full scan of that type, which repairs the
+        // state and re-stamps the record. A full scan is expensive; a silent skip is wrong.
+        var invalidated = new Dictionary<SqlObjectType, WatermarkInvalidation>();
+        var watermarks = new Dictionary<SqlObjectType, DateTime>();
+        foreach (var (storedType, record) in stored)
+        {
+            // A null fingerprint predates the column and is adopted rather than invalidated, so
+            // upgrading does not force a full scan of every type on a large estate.
+            if (record.Fingerprint is not null && record.Fingerprint != emissionFingerprint)
+            {
+                invalidated[storedType] = WatermarkInvalidation.EmissionChanged;
+                continue;
+            }
+
+            if (MovedBackwards(storedType, record))
+            {
+                invalidated[storedType] = WatermarkInvalidation.TimelineMovedBackwards;
+                continue;
+            }
+
+            watermarks[storedType] = record.Value;
+        }
+
         var violatedTypes = new HashSet<SqlObjectType>();
         var candidates = new List<IncrementalSkip>();
         var ignored = new List<ModifiedObjectSnapshotItem>();
 
         foreach (var item in snapshot)
         {
-            if (!newWatermarks.TryGetValue(item.Type, out var max) || item.ModifyDate > max)
-            {
-                newWatermarks[item.Type] = item.ModifyDate;
-            }
 
             // Ignored/out-of-filter objects are never scripted, but their committed files are
             // deliberately retained. They must be reported REGARDLESS of modify_date — this check
@@ -128,7 +182,52 @@ internal static class IncrementalPlanner
         // the provider will yield them again and they must go through the normal apply path once.
         var skipped = candidates.Where(c => filterable.Contains(c.Item.Type)).ToList();
 
-        return new IncrementalPlan(skipped, filterable, newWatermarks, ignored);
+        var newWatermarks = snapshotMax.ToDictionary(
+            pair => pair.Key,
+            pair => new ScriptingWatermark(
+                // Never silently LOWER a watermark that is still trusted. Persistence is a blind
+                // upsert, and the new value used to be the snapshot maximum computed from an empty
+                // dictionary - so a restored database quietly rewrote the watermark DOWN to its own
+                // maximum, concealing the very timeline move that should have invalidated it. A
+                // watermark now only moves down when it has been invalidated, which is exactly when
+                // the type was scanned in full and the lower value is the truthful one.
+                invalidated.ContainsKey(pair.Key) || !stored.TryGetValue(pair.Key, out var previous)
+                    ? pair.Value
+                    : (previous.Value >= pair.Value ? previous.Value : pair.Value),
+                emissionFingerprint,
+                sentinelKeys.GetValueOrDefault(pair.Key)),
+            EqualityComparer<SqlObjectType>.Default);
+
+        return new IncrementalPlan(skipped, filterable, newWatermarks, ignored, invalidated);
+
+        bool MovedBackwards(SqlObjectType type, ScriptingWatermark record)
+        {
+            // The precise test: the object that SET this watermark is still here, and its date has
+            // gone BACKWARDS. A date moving forward is an ordinary edit - testing for "changed"
+            // rather than "moved backwards" would invalidate on every normal modification of the
+            // newest object, which is the most frequently modified object there is.
+            if (record.SentinelKey is null)
+            {
+                // A row written before sentinels existed. There is nothing reliable to compare: the
+                // type's maximum sitting below the watermark is equally consistent with a restore and
+                // with the newest object having been dropped at some point in the past, and on a
+                // large estate guessing "restore" would mean a full scan of every type on the first
+                // run after upgrading. Adopted, exactly as a null fingerprint is - and the very next
+                // run writes a sentinel, so the blind spot is one run wide.
+                return false;
+            }
+
+            if (sentinelDates.TryGetValue(record.SentinelKey, out var sentinelNow))
+            {
+                return sentinelNow < record.Value;
+            }
+
+            // The sentinel is gone. Fall back to comparing the type's maximum, which cannot tell a
+            // restore from the newest object simply being dropped - so it errs toward the full scan.
+            // A type with no rows at all keeps its watermark: an empty snapshot is not evidence that
+            // anything moved.
+            return snapshotMax.TryGetValue(type, out var max) && max < record.Value;
+        }
     }
 
     /// <summary>The engine's object-state key format — must match <c>SyncEngine.StateKey</c> exactly.</summary>

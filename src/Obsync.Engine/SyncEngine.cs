@@ -1411,33 +1411,8 @@ public sealed class SyncEngine : ISyncEngine
             }
         }
 
-        var stored = await _watermarks.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false);
-
-        // A watermark vouches for hashes produced by a particular emission configuration. If that
-        // configuration has changed, the objects below it would script to different bytes today, and
-        // skipping them would leave their files in the old format permanently — a repository that is
-        // a mixture of two formats, with only the objects that happen to change later ever being
-        // rewritten. A null fingerprint predates the column and is adopted rather than invalidated,
-        // which is what keeps the first run after upgrading from being a full scan of everything.
-        var fingerprint = context.EmissionFingerprint;
-        var staleTypes = stored
-            .Where(pair => pair.Value.Fingerprint is not null && pair.Value.Fingerprint != fingerprint)
-            .Select(pair => pair.Key)
-            .ToList();
-        if (staleTypes.Count > 0)
-        {
-            // Reported, not silent. Every mechanism that protects a watermark resolves to "do a full
-            // scan", and a full scan nobody can account for is indistinguishable from the product
-            // being arbitrarily slow.
-            context.Log(SyncLogLevel.Info,
-                $"Obsync now produces different output than when {string.Join(", ", staleTypes)} in {database} "
-                + "was last scripted, so incremental scripting cannot vouch for those files. Scanning "
-                + "those types in full once to bring them up to date.");
-        }
-
-        var watermarks = stored
-            .Where(pair => !staleTypes.Contains(pair.Key))
-            .ToDictionary(pair => pair.Key, pair => pair.Value.Value);
+        var watermarks = await _watermarks.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken)
+            .ConfigureAwait(false);
         var snapshot = await _modifiedObjects.GetSnapshotAsync(
             context.Connection, context.SqlPassword, database, capableTypes,
             context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
@@ -1448,9 +1423,33 @@ public sealed class SyncEngine : ISyncEngine
         // nor treated as safety violations. Removing the schema filter later un-ignores them, and
         // the resulting no-prior violation forces the full scan that brings them into scope.
         var schemaFilter = context.Job.Selection.SchemaFilter;
-        var plan = IncrementalPlanner.Plan(snapshot, prior, watermarks, capableTypes.ToHashSet(),
+        var plan = IncrementalPlanner.Plan(
+            snapshot, prior, watermarks, capableTypes.ToHashSet(), context.EmissionFingerprint,
             (type, schema, name) => ignoreRules.Matches(type, schema, name)
                 || (schemaFilter.Count > 0 && !schemaFilter.Contains(schema)));
+
+        // Reported, never silent. Every precondition the planner checks resolves to "scan this type
+        // in full", and a full scan nobody can account for is indistinguishable from the product
+        // being arbitrarily slow. This is the difference between a system that explains itself and
+        // one that needs the source read to diagnose.
+        foreach (var reason in plan.Invalidated.Values.Distinct())
+        {
+            var affected = string.Join(", ", plan.Invalidated.Where(pair => pair.Value == reason).Select(pair => pair.Key));
+            context.Log(
+                reason == WatermarkInvalidation.TimelineMovedBackwards ? SyncLogLevel.Warning : SyncLogLevel.Info,
+                reason switch
+                {
+                    WatermarkInvalidation.TimelineMovedBackwards =>
+                        $"The modify_date timeline in {database} has moved backwards for {affected}, which means "
+                        + "this is not the database the last run recorded — typically a restore from backup or a "
+                        + "refresh from another environment. Incremental scripting cannot trust what it recorded "
+                        + "about it, so those types are being scanned in full and re-baselined.",
+                    _ =>
+                        $"Obsync now produces different output than when {affected} in {database} was last "
+                        + "scripted, so incremental scripting cannot vouch for those files. Scanning those "
+                        + "types in full once to bring them up to date.",
+                });
+        }
 
         // The inventory entries feed only the object-inventory artifact and the docs generator —
         // when both are off, skip the per-skip path mapping and entry allocation (at VLDB scale
@@ -1481,8 +1480,7 @@ public sealed class SyncEngine : ISyncEngine
 
         if (plan.NewWatermarks.Count > 0)
         {
-            context.PendingWatermarks[database] = plan.NewWatermarks.ToDictionary(
-                pair => pair.Key, pair => new ScriptingWatermark(pair.Value, fingerprint));
+            context.PendingWatermarks[database] = plan.NewWatermarks;
         }
 
         if (plan.SkippedItems.Count > 0)
@@ -1502,7 +1500,7 @@ public sealed class SyncEngine : ISyncEngine
         // contract instead of a rule the caller has to remember.
         return watermarks
             .Where(pair => plan.FilterableTypes.Contains(pair.Key))
-            .ToDictionary(pair => pair.Key, pair => pair.Value);
+            .ToDictionary(pair => pair.Key, pair => pair.Value.Value);
     }
 
     /// <summary>
