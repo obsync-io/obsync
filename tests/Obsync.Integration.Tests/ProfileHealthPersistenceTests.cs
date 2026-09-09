@@ -132,7 +132,7 @@ public sealed class ProfileHealthPersistenceTests : IAsyncLifetime, IDisposable
     public void Dispose()
     {
         _provider?.Dispose();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        TestDatabase.ReleasePool(_dbPath);
         try
         {
             if (File.Exists(_dbPath))

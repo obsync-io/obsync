@@ -30,7 +30,7 @@ public sealed class SchemaFromANewerVersionTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        TestDatabase.ReleasePool(_dbPath);
         foreach (var path in new[] { _dbPath, _dbPath + "-wal", _dbPath + "-shm" })
         {
             if (File.Exists(path))
