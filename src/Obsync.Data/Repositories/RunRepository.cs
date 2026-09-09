@@ -23,7 +23,15 @@ public interface IRunRepository
     Task<IReadOnlyList<SyncRun>> GetForJobAsync(Guid jobId, int limit = 50, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SyncRun>> GetRecentAsync(int limit = 20, CancellationToken cancellationToken = default);
 
-    Task AddLogsAsync(IReadOnlyCollection<SyncRunLog> logs, CancellationToken cancellationToken = default);
+    /// <param name="runId">
+    /// The run every entry belongs to. Passed explicitly, and applied here, because
+    /// <c>run_logs.run_id</c> is a foreign key enforced on every connection: an entry that reached
+    /// this method carrying the default <see cref="Guid.Empty"/> failed its insert, rolled back the
+    /// single batch transaction holding EVERY log for the run, and surfaced as the run itself
+    /// failing to persist. Taking the id — as <c>AddChangesAsync</c> already does — is what stops a
+    /// caller stamping some entries and appending others afterwards.
+    /// </param>
+    Task AddLogsAsync(Guid runId, IReadOnlyCollection<SyncRunLog> logs, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SyncRunLog>> GetLogsAsync(Guid runId, CancellationToken cancellationToken = default);
 
     Task AddChangesAsync(Guid runId, IReadOnlyCollection<ObjectChange> changes, CancellationToken cancellationToken = default);
@@ -203,7 +211,7 @@ public sealed class RunRepository : IRunRepository
 
     private static readonly string FullChunkLogsSql = BuildLogsInsertSql(LogChunkRows);
 
-    public async Task AddLogsAsync(IReadOnlyCollection<SyncRunLog> logs, CancellationToken cancellationToken = default)
+    public async Task AddLogsAsync(Guid runId, IReadOnlyCollection<SyncRunLog> logs, CancellationToken cancellationToken = default)
     {
         if (logs.Count == 0)
         {
@@ -221,7 +229,7 @@ public sealed class RunRepository : IRunRepository
             for (var i = 0; i < chunk.Length; i++)
             {
                 var log = chunk[i];
-                parameters.Add($"run{i}", log.RunId.ToString());
+                parameters.Add($"run{i}", runId.ToString());
                 parameters.Add($"timestamp{i}", log.Timestamp);
                 parameters.Add($"level{i}", (int)log.Level);
                 parameters.Add($"message{i}", log.Message);

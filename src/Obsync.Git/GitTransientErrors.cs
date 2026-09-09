@@ -32,6 +32,11 @@ public static class GitTransientErrors
         "error 429",
         "remote error: internal server error",
         "temporary failure",
+        // Obsync's own stall kill. A transfer that went silent may well succeed on the next attempt,
+        // so it retries — unlike the absolute-ceiling kill ("did not finish within"), which is
+        // deliberately absent from this list because retrying it would only burn the same ceiling
+        // again on the same doomed transfer.
+        "produced no progress",
     ];
 
     // Substrings that mark a PERMANENT failure even if a transient marker also appears.

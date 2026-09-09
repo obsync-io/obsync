@@ -34,10 +34,53 @@ public sealed class GitCommandRunner : IGitCommandRunner
     private static readonly Lazy<string> ResolvedGitExecutable = new(() => ResolveGitExecutable());
 
     /// <summary>
-    /// How long a network command (clone/fetch/push) may run before Obsync terminates it. Generous:
-    /// a first clone of a large estate is legitimately slow.
+    /// How long a network command (clone/fetch/push) may produce NO progress output before Obsync
+    /// terminates it.
     /// </summary>
-    private static readonly TimeSpan NetworkCommandTimeout = TimeSpan.FromMinutes(10);
+    /// <remarks>
+    /// A total-duration budget answers "has this taken too long?", but the question worth asking is
+    /// "has this stopped making progress?" — and those coincide only when the payload is roughly
+    /// constant, which is exactly what is not true here. The budget used to be a flat ten minutes,
+    /// which was simultaneously too generous and too strict: a genuinely dead connection was
+    /// tolerated for the full ten minutes, while a healthy transfer with a great deal to send was
+    /// killed while it was still working. On a large initial push ten minutes demands sustained
+    /// throughput of megabytes per second INCLUDING the server's own pack indexing, which for a very
+    /// large pack takes minutes by itself.
+    /// <para>
+    /// Two consequences made that fatal rather than merely annoying. The kill message matched none of
+    /// <see cref="GitTransientErrors"/>' markers, so the retry loop returned immediately; and the
+    /// same budget governs <c>clone</c> and <c>fetch</c>, so an estate whose clone exceeded ten
+    /// minutes never reached the commit stage at all.
+    /// </para>
+    /// <para>
+    /// A stall is genuinely transient — the connection died, and the next attempt may not — so unlike
+    /// a ceiling kill it is classified retryable. Network commands are invoked with
+    /// <c>--progress</c> (git suppresses progress when stderr is not a terminal), which is what makes
+    /// "no output" mean "no progress" rather than "git does not talk to us".
+    /// </para>
+    /// </remarks>
+    private static readonly TimeSpan NetworkStallTimeout = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// How often the stall watchdog checks for silence. Fine enough that the reported stall is close
+    /// to <see cref="NetworkStallTimeout"/>, coarse enough to cost nothing.
+    /// </summary>
+    private static readonly TimeSpan StallPollInterval = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The stall budget this runner applies. A test seam, and only that: it exists so the watchdog
+    /// can be exercised against a real hanging git in seconds instead of minutes. Production
+    /// construction leaves it at <see cref="NetworkStallTimeout"/>.
+    /// </summary>
+    internal TimeSpan StallTimeout { get; init; } = NetworkStallTimeout;
+
+    /// <summary>
+    /// The absolute backstop for a network command that keeps reporting progress. This is a safety
+    /// net, not the primary control — <see cref="NetworkStallTimeout"/> is. It matches
+    /// <see cref="TreeScaleCommandTimeout"/> deliberately: the run that is permitted two hours to
+    /// BUILD a commit must be permitted two hours to DELIVER it.
+    /// </summary>
+    private static readonly TimeSpan NetworkCommandTimeout = TimeSpan.FromHours(2);
 
     /// <summary>
     /// How long a cheap local command may run — <c>config</c>, <c>rev-parse</c>, <c>remote</c>,
@@ -220,9 +263,23 @@ public sealed class GitCommandRunner : IGitCommandRunner
         RunAsync(workingDirectory, arguments, environment: null, cancellationToken);
 
     /// <summary>
-    /// Picks a timeout from what the command actually does. Network commands are recognised by
-    /// carrying an environment block (only <c>RunNetworkAsync</c> supplies one, and it always does
-    /// — the auth header and proxy live there); the rest are classified by verb.
+    /// Keeps only the final state of a progress line. Network commands run with <c>--progress</c> so
+    /// the stall watchdog has a heartbeat to watch, and git redraws progress with carriage returns
+    /// within a single newline-delimited chunk — so without this every retained stderr would carry
+    /// hundreds of "Receiving objects: 1%…2%…3%" fragments into <c>runs.error_message</c>, the run
+    /// log, and exported reports. The last segment is the useful one ("…100% (1000/1000), done.").
+    /// </summary>
+    internal static string LastProgressSegment(string line)
+    {
+        var lastCarriageReturn = line.LastIndexOf('\r');
+        return lastCarriageReturn < 0 ? line : line[(lastCarriageReturn + 1)..];
+    }
+
+    /// <summary>
+    /// Picks the ABSOLUTE budget from what the command actually does. Network commands are recognised
+    /// by carrying an environment block (only <c>RunNetworkAsync</c> supplies one, and it always does
+    /// — the auth header and proxy live there); the rest are classified by verb. For a network
+    /// command this is only the backstop: <see cref="NetworkStallTimeout"/> is the primary control.
     /// </summary>
     internal static TimeSpan SelectTimeout(IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment)
     {
@@ -323,8 +380,22 @@ public sealed class GitCommandRunner : IGitCommandRunner
         using var process = new Process { StartInfo = startInfo };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) { stdout.AppendLine(e.Data); } };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) { stderr.AppendLine(e.Data); } };
+
+        // Last moment git said anything on either stream. The stall watchdog below reads it; the
+        // handlers are the only writers, and they can fire on any thread pool thread.
+        var lastActivity = Environment.TickCount64;
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null) { return; }
+            Interlocked.Exchange(ref lastActivity, Environment.TickCount64);
+            stdout.AppendLine(e.Data);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is null) { return; }
+            Interlocked.Exchange(ref lastActivity, Environment.TickCount64);
+            stderr.AppendLine(LastProgressSegment(e.Data));
+        };
 
         try
         {
@@ -365,14 +436,36 @@ public sealed class GitCommandRunner : IGitCommandRunner
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
 
+        // The stall watchdog governs network commands; the ceiling above is only the backstop. A
+        // separate source is what lets the two be told apart afterwards — one is retryable and the
+        // other is not.
+        using var stallSource = new CancellationTokenSource();
+        using var attemptSource = CancellationTokenSource.CreateLinkedTokenSource(timeoutSource.Token, stallSource.Token);
+        var stallBudgetMs = (long)StallTimeout.TotalMilliseconds;
+        var pollInterval = StallPollInterval < StallTimeout ? StallPollInterval : StallTimeout / 3;
+        using var stallWatchdog = environment is null
+            ? null
+            : new Timer(
+                _ =>
+                {
+                    if (Environment.TickCount64 - Interlocked.Read(ref lastActivity) < stallBudgetMs)
+                    {
+                        return;
+                    }
+
+                    try { stallSource.Cancel(); } catch (ObjectDisposedException) { /* already finished */ }
+                },
+                null, pollInterval, pollInterval);
+
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+            await process.WaitForExitAsync(attemptSource.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // Our timeout, not the caller's cancellation: report a failed command rather than
             // throwing, so the run is recorded as Failed with a reason instead of Cancelled.
+            var stalled = stallSource.IsCancellationRequested;
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
 
             // Let the async output readers drain before the StringBuilders are read. The parameterless
@@ -380,6 +473,18 @@ public sealed class GitCommandRunner : IGitCommandRunner
             // without it this raced its own readers and could return torn output — a truncated or
             // interleaved final line in the very error the user is trying to read.
             try { process.WaitForExit(); } catch { /* already gone */ }
+
+            if (stalled)
+            {
+                _logger.LogError(
+                    "git {Args} produced no progress for {Minutes} minutes and was terminated.",
+                    string.Join(' ', RedactArguments(arguments)), StallTimeout.TotalMinutes);
+                return new GitCommandResult(
+                    TimedOutExitCode,
+                    stdout.ToString(),
+                    stderr + $"obsync: git produced no progress for {StallTimeout.TotalMinutes:0} minutes "
+                        + "and was terminated.");
+            }
 
             _logger.LogError(
                 "git {Args} exceeded {Minutes} minutes and was terminated.",

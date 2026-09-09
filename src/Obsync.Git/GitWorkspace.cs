@@ -154,16 +154,29 @@ public sealed partial class GitWorkspace : IGitWorkspace
                 context.LocalPath, ["config", "core.fsyncMethod", "batch"], cancellationToken).ConfigureAwait(false);
             EnsureObsyncTmpExcluded(context.LocalPath);
 
-            var fetch = await RunNetworkAsync(context.LocalPath, context, ["fetch", "origin"], cancellationToken).ConfigureAwait(false);
+            var fetch = await RunNetworkAsync(context.LocalPath, context, ["fetch", "--progress", "origin"], cancellationToken).ConfigureAwait(false);
             if (!fetch.Success)
             {
                 // Distinguish "network/auth problem" (surface it) from "the clone itself is broken"
                 // (a crash or kill mid-clone corrupts .git) — a broken workspace would otherwise
                 // fail every future run until someone manually deletes an internal folder. The
                 // workspace is fully regenerable, so delete and clone fresh.
-                var healthy = (await _git.RunAsync(context.LocalPath, ["rev-parse", "--git-dir"], cancellationToken)
+                //
+                // `rev-parse --git-dir` alone is NOT that test, and the gap was the whole failure
+                // mode: git initialises the destination repository BEFORE it fetches, so a clone
+                // killed mid-transfer leaves a perfectly valid .git with an unborn HEAD. `--git-dir`
+                // answers success, the workspace is declared healthy, and the reclone never runs —
+                // so a repository too large to clone inside its budget wedged permanently with no
+                // automatic way back. (The self-heal test only ever simulated an EMPTY .git
+                // directory, which is not the state a killed clone leaves.) Verifying HEAD resolves
+                // is what tells a half-transferred clone from a merely unreachable remote.
+                var gitDirOk = (await _git.RunAsync(context.LocalPath, ["rev-parse", "--git-dir"], cancellationToken)
                     .ConfigureAwait(false)).Success;
-                if (healthy)
+                var headOk = gitDirOk
+                    && (await _git.RunAsync(
+                        context.LocalPath, ["rev-parse", "--verify", "--quiet", "HEAD"], cancellationToken)
+                        .ConfigureAwait(false)).Success;
+                if (gitDirOk && headOk)
                 {
                     return Result.Failure($"git fetch failed: {Summarize(fetch.StandardError)}");
                 }
@@ -280,6 +293,9 @@ public sealed partial class GitWorkspace : IGitWorkspace
             parent ?? ".", context,
             [
                 "clone",
+                // Progress on stderr is the heartbeat the stall watchdog watches; git emits none
+                // when stderr is not a terminal, which is always the case here.
+                "--progress",
                 "-c", "core.longpaths=true",
                 "-c", "feature.manyFiles=true",
                 "-c", "core.fsyncMethod=batch",
@@ -565,7 +581,7 @@ public sealed partial class GitWorkspace : IGitWorkspace
         }
 
         var push = await RunNetworkAsync(
-            context.LocalPath, context, ["push", "-u", "origin", context.Branch], cancellationToken).ConfigureAwait(false);
+            context.LocalPath, context, ["push", "--progress", "-u", "origin", context.Branch], cancellationToken).ConfigureAwait(false);
         if (push.Success)
         {
             return Result.Success();

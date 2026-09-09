@@ -17,7 +17,7 @@ namespace Obsync.Git.Tests;
 public sealed class GitCommandTimeoutTests
 {
     private static readonly TimeSpan Cheap = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan Network = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan TreeScale = TimeSpan.FromHours(2);
 
     private static readonly Dictionary<string, string> NetworkEnvironment =
         new() { ["GIT_CONFIG_COUNT"] = "0" };
@@ -48,8 +48,24 @@ public sealed class GitCommandTimeoutTests
     public void NetworkCommands_AreRecognisedByTheirEnvironmentBlock()
     {
         // Only RunNetworkAsync supplies one, and it always does — the auth header and proxy live there.
-        Assert.Equal(Network, GitCommandRunner.SelectTimeout(["fetch", "origin"], NetworkEnvironment));
-        Assert.Equal(Network, GitCommandRunner.SelectTimeout(["ls-remote", "--heads"], NetworkEnvironment));
+        Assert.Equal(TreeScale, GitCommandRunner.SelectTimeout(["fetch", "origin"], NetworkEnvironment));
+        Assert.Equal(TreeScale, GitCommandRunner.SelectTimeout(["ls-remote", "--heads"], NetworkEnvironment));
+    }
+
+    /// <summary>
+    /// The asymmetry that made a large estate undeliverable: the same run was permitted two hours to
+    /// BUILD a commit and ten minutes to DELIVER it. Push, fetch and clone all sat under the ten,
+    /// so an estate whose clone alone exceeded it never reached the commit stage at all.
+    /// </summary>
+    [Fact]
+    public void DeliveringACommit_GetsAtLeastAsLongAsBuildingIt()
+    {
+        var building = GitCommandRunner.SelectTimeout(["add", "-A", "--", "."], environment: null);
+        var delivering = GitCommandRunner.SelectTimeout(["push", "-u", "origin", "main"], NetworkEnvironment);
+
+        Assert.True(
+            delivering >= building,
+            $"a push ({delivering}) must not be given less time than the add that produced it ({building}).");
     }
 
     [Fact]
@@ -69,5 +85,17 @@ public sealed class GitCommandTimeoutTests
     {
         Assert.Equal(Cheap, GitCommandRunner.SelectTimeout([], environment: null));
         Assert.Equal(Cheap, GitCommandRunner.SelectTimeout(["--version"], environment: null));
+    }
+
+    [Theory]
+    [InlineData("Receiving objects:  1% (1/100)\rReceiving objects: 100% (100/100), done.",
+                "Receiving objects: 100% (100/100), done.")]
+    [InlineData("fatal: repository not found", "fatal: repository not found")]
+    [InlineData("", "")]
+    public void OnlyTheFinalStateOfAProgressLineIsRetained(string received, string expected)
+    {
+        // --progress is forced on so the stall watchdog has a heartbeat, but the redraw fragments
+        // must not travel into runs.error_message, the run log and exported reports.
+        Assert.Equal(expected, GitCommandRunner.LastProgressSegment(received));
     }
 }

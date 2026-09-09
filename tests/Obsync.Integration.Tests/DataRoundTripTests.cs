@@ -111,7 +111,7 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
         };
         await runs.InsertAsync(run);
 
-        await runs.AddLogsAsync([new SyncRunLog { RunId = run.Id, Timestamp = DateTimeOffset.UtcNow, Message = "Scanned 42,120 objects" }]);
+        await runs.AddLogsAsync(run.Id, [new SyncRunLog { RunId = run.Id, Timestamp = DateTimeOffset.UtcNow, Message = "Scanned 42,120 objects" }]);
         await runs.AddChangesAsync(run.Id,
         [
             new ObjectChange
@@ -200,7 +200,7 @@ public sealed class DataRoundTripTests : IAsyncLifetime, IDisposable
             ServerName = "s", Databases = "d", StartedAt = now.AddDays(-100),
         };
         await runs.InsertAsync(oldRun);
-        await runs.AddLogsAsync([new SyncRunLog { RunId = oldRun.Id, Timestamp = now.AddDays(-100), Message = "m" }]);
+        await runs.AddLogsAsync(oldRun.Id, [new SyncRunLog { RunId = oldRun.Id, Timestamp = now.AddDays(-100), Message = "m" }]);
 
         var recentRun = new SyncRun
         {

@@ -432,11 +432,6 @@ public sealed class SyncEngine : ISyncEngine
             run.ObjectsScanned = context.Scanned;
             run.ObjectsFailed = context.Failed;
 
-            foreach (var log in context.Logs)
-            {
-                log.RunId = run.Id;
-            }
-
             // A persistence failure here (disk full, SQLITE_BUSY past its timeout) must not escape:
             // it would mask the run's real outcome AND leave the row stuck on "Running" until the
             // next host restart. Fall back to marking the run failed with the reason.
@@ -462,8 +457,20 @@ public sealed class SyncEngine : ISyncEngine
                 // us does not travel with it.
                 run.ErrorMessage = SecretRedactor.Scrub(run.ErrorMessage);
 
+                // AddLogsAsync applies the run id to every entry it inserts. The engine used to stamp
+                // them itself, in a loop that ran ABOVE the change-list cap — so the cap's own
+                // warning, appended afterwards, kept RunContext.Log's default RunId of Guid.Empty.
+                // run_logs.run_id is a foreign key with PRAGMA foreign_keys=ON, so that single row
+                // failed its insert, rolled back the one batch transaction holding EVERY log, and
+                // threw into the catch below, which rewrote the run as Failed with "its final state
+                // could not be saved" and no logs at all.
+                //
+                // A run only had to exceed MaxPersistedChanges to trigger it — which a first run
+                // against a large estate does by definition. The product's headline case, scripting a
+                // VLDB into a fresh repository, therefore reported Failed on run 1 however well it
+                // had actually gone.
                 await _runs.UpdateAsync(run, persistToken).ConfigureAwait(false);
-                await _runs.AddLogsAsync(context.Logs, persistToken).ConfigureAwait(false);
+                await _runs.AddLogsAsync(run.Id, context.Logs, persistToken).ConfigureAwait(false);
                 await _runs.AddChangesAsync(run.Id, persistedChanges, persistToken).ConfigureAwait(false);
                 await _jobs.UpdateRunSummaryAsync(job.Id, new JobRunSummary
                 {

@@ -108,6 +108,38 @@ public sealed class BatchInsertChunkingTests : IAsyncLifetime, IDisposable
         Assert.Equal($"h{total - 1:D4}", changes[^1].NewHash);
     }
 
+    /// <summary>
+    /// The defect that made every large first run report Failed. The engine stamped RunId onto the
+    /// log collection, then appended the change-list cap warning afterwards — so that one entry kept
+    /// the default Guid.Empty. run_logs.run_id is a foreign key enforced on every connection, so the
+    /// row failed, the single batch transaction holding EVERY log rolled back, and the run was
+    /// rewritten as Failed with "its final state could not be saved" and no logs at all.
+    ///
+    /// The trigger was simply exceeding the persisted-change cap, which a first run against a large
+    /// estate does by definition. AddLogsAsync now takes the run id and applies it, so an entry
+    /// appended at any point still lands under the run.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryAppendedAfterTheOthers_StillLandsUnderTheRun()
+    {
+        var runs = _provider.GetRequiredService<IRunRepository>();
+        var run = await InsertRunAsync(runs);
+        var timestamp = DateTimeOffset.UtcNow;
+
+        // The first entries carry the run id the way the engine's own logging does; the last one is
+        // the late arrival that used to carry Guid.Empty and take the whole batch down with it.
+        await runs.AddLogsAsync(run.Id,
+        [
+            new SyncRunLog { RunId = run.Id, Timestamp = timestamp, Message = "scanned" },
+            new SyncRunLog { RunId = run.Id, Timestamp = timestamp, Message = "committed" },
+            new SyncRunLog { Timestamp = timestamp, Message = "the change list was capped" },
+        ]);
+
+        var logs = await runs.GetLogsAsync(run.Id);
+        Assert.Equal(3, logs.Count);
+        Assert.Contains(logs, log => log.Message == "the change list was capped");
+    }
+
     [Fact]
     public async Task AddLogs_SpanningAChunkBoundary_RoundTrips()
     {
@@ -116,7 +148,7 @@ public sealed class BatchInsertChunkingTests : IAsyncLifetime, IDisposable
         var total = RunRepository.LogChunkRows + 13;
         var timestamp = DateTimeOffset.UtcNow;
 
-        await runs.AddLogsAsync([.. Enumerable.Range(0, total).Select(i => new SyncRunLog
+        await runs.AddLogsAsync(run.Id, [.. Enumerable.Range(0, total).Select(i => new SyncRunLog
         {
             RunId = run.Id, Timestamp = timestamp, Message = $"message {i}",
         })]);
