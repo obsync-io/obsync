@@ -33,6 +33,18 @@ public interface IScriptNormalizer
 /// <inheritdoc cref="IScriptNormalizer" />
 public sealed partial class ScriptNormalizer : IScriptNormalizer
 {
+    /// <summary>
+    /// The normalized-output format version: bump when a change here would produce different bytes
+    /// for the same input than a previous release did.
+    /// </summary>
+    /// <remarks>
+    /// Feeds <see cref="EmissionFingerprint"/>, which is what makes a stored hash refuse to be
+    /// trusted after the format that produced it changed. Without it, a release that alters emitted
+    /// output leaves every unchanged object's file in the old format permanently, because the
+    /// incremental planner never looks at a file it has decided to skip.
+    /// </remarks>
+    public const int FormatVersion = 1;
+
     // This runs once per scripted object (up to ~1M per run) and its output feeds the SHA-256
     // content hashes stored in the state database, so it must stay byte-identical to the
     // historical Replace/Split/Join/TrimEnd pipeline. The single-pass form below exists purely

@@ -492,7 +492,7 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         // Run 1 has nothing to skip, but it must leave the watermarks behind.
         var watermarks = await _provider.GetRequiredService<IScriptingWatermarkRepository>()
             .GetForJobDatabaseAsync(_job.Id, "Db1");
-        Assert.Equal(newer, Assert.Contains(SqlObjectType.StoredProcedure, watermarks));
+        Assert.Equal(newer, Assert.Contains(SqlObjectType.StoredProcedure, watermarks).Value);
 
         _scripts.RequestedWatermarks.Clear();
         var second = await RunAsync();
@@ -500,6 +500,57 @@ public sealed class DeliveryGateTests : IAsyncLifetime
         Assert.Equal(RunStatus.NoChanges, second.Status);
         var filter = Assert.Single(_scripts.RequestedWatermarks);
         Assert.Equal(newer, Assert.Contains(SqlObjectType.StoredProcedure, filter));
+    }
+
+    /// <summary>
+    /// A watermark vouches for hashes produced by one emission configuration. Change the
+    /// configuration and it is vouching for bytes Obsync would no longer produce — so it must stop
+    /// being trusted, or every object the planner skips keeps its old-format file forever while the
+    /// job reports "No changes" throughout.
+    ///
+    /// Toggling a job setting is the reachable half of this (a release changing the normalizer, the
+    /// layout or the SMO library is the other), and it is the half a user can trigger today.
+    /// </summary>
+    [Fact]
+    public async Task ChangingWhatWeEmit_StopsTheWatermarkBeingTrusted()
+    {
+        var older = new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Unspecified);
+        var newer = older.AddHours(1);
+
+        _job.Advanced.IncrementalScripting = true;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+        _scripts.Items = [Proc("P1", "body v1"), Proc("P2", "other")];
+        SetSnapshot(("P1", older), ("P2", newer));
+        SetCommit(true);
+        SetPush(true);
+
+        _ = await RunAsync();
+
+        // Sanity: without a configuration change the second run does filter.
+        _scripts.RequestedWatermarks.Clear();
+        _ = await RunAsync();
+        Assert.Single(_scripts.RequestedWatermarks);
+
+        // Now emit something different. Permissions ride into the SMO option set, so the same object
+        // would script to different bytes than the stored hash was taken over.
+        _job.Selection.IncludePermissions = !_job.Selection.IncludePermissions;
+        await _provider.GetRequiredService<IJobRepository>().UpsertAsync(_job);
+
+        _scripts.RequestedWatermarks.Clear();
+        var afterChange = await RunAsync();
+
+        // No filter is handed to the provider at all: every object of the type is read again, so the
+        // files are rewritten in the new format instead of being skipped in the old one.
+        Assert.Empty(_scripts.RequestedWatermarks);
+        Assert.Contains(
+            await _provider.GetRequiredService<IRunRepository>().GetLogsAsync(afterChange.Id),
+            log => log.Message.Contains("different output", StringComparison.Ordinal));
+
+        // ...and the run re-stamps the watermark under the new fingerprint, so the run after it is
+        // incremental again rather than scanning in full forever.
+        _scripts.RequestedWatermarks.Clear();
+        _ = await RunAsync();
+        Assert.Single(_scripts.RequestedWatermarks);
     }
 
     [Fact]

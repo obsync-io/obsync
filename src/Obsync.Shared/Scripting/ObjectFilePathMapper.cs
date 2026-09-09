@@ -27,6 +27,19 @@ public interface IObjectFilePathMapper
 /// <inheritdoc cref="IObjectFilePathMapper" />
 public sealed class ObjectFilePathMapper : IObjectFilePathMapper
 {
+    /// <summary>
+    /// The repository layout version: bump when a change here would put an object's file at a
+    /// DIFFERENT path than a previous release did — folder names, the sanitizer, the stem cap, the
+    /// collision suffix.
+    /// </summary>
+    /// <remarks>
+    /// A layout change is worse than a format change and must invalidate every watermark. Stale-path
+    /// cleanup only runs for objects that reach the apply path, so an object the planner skips keeps
+    /// its OLD file, and its state row keeps the old path — leaving two files for one object with
+    /// nothing to reconcile them. Feeds <see cref="EmissionFingerprint"/>.
+    /// </remarks>
+    public const int LayoutVersion = 1;
+
     private const string Extension = ".sql";
 
     /// <summary>Cap the stem length so even deeply nested workspaces stay within Windows path limits.</summary>

@@ -1,6 +1,7 @@
 using System.Globalization;
 using Dapper;
 using Obsync.Shared.Objects;
+using Obsync.Shared.Scripting;
 
 namespace Obsync.Data.Repositories;
 
@@ -12,12 +13,12 @@ namespace Obsync.Data.Repositories;
 /// </summary>
 public interface IScriptingWatermarkRepository
 {
-    Task<IReadOnlyDictionary<SqlObjectType, DateTime>> GetForJobDatabaseAsync(
+    Task<IReadOnlyDictionary<SqlObjectType, ScriptingWatermark>> GetForJobDatabaseAsync(
         Guid jobId, string database, CancellationToken cancellationToken = default);
 
     /// <summary>Upserts one database's watermarks in a single transaction.</summary>
     Task UpsertManyAsync(
-        Guid jobId, string database, IReadOnlyDictionary<SqlObjectType, DateTime> watermarks,
+        Guid jobId, string database, IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> watermarks,
         CancellationToken cancellationToken = default);
 }
 
@@ -28,21 +29,26 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
 
     public ScriptingWatermarkRepository(IDbConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
-    public async Task<IReadOnlyDictionary<SqlObjectType, DateTime>> GetForJobDatabaseAsync(
+    public async Task<IReadOnlyDictionary<SqlObjectType, ScriptingWatermark>> GetForJobDatabaseAsync(
         Guid jobId, string database, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryAsync<(long ObjectType, string Watermark)>(new CommandDefinition(
-            "SELECT object_type, watermark FROM scripting_watermarks WHERE job_id = $job AND database_name = $db;",
-            new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
+        var rows = await connection.QueryAsync<(long ObjectType, string Watermark, string? Fingerprint)>(
+            new CommandDefinition(
+                "SELECT object_type, watermark, fingerprint FROM scripting_watermarks "
+                + "WHERE job_id = $job AND database_name = $db;",
+                new { job = jobId.ToString(), db = database },
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
 
         return rows.ToDictionary(
             r => (SqlObjectType)r.ObjectType,
-            r => DateTime.Parse(r.Watermark, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+            r => new ScriptingWatermark(
+                DateTime.Parse(r.Watermark, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                r.Fingerprint));
     }
 
     public async Task UpsertManyAsync(
-        Guid jobId, string database, IReadOnlyDictionary<SqlObjectType, DateTime> watermarks,
+        Guid jobId, string database, IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> watermarks,
         CancellationToken cancellationToken = default)
     {
         if (watermarks.Count == 0)
@@ -52,9 +58,11 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
 
         const string sql =
             """
-            INSERT INTO scripting_watermarks (job_id, database_name, object_type, watermark)
-            VALUES ($job, $db, $type, $watermark)
-            ON CONFLICT (job_id, database_name, object_type) DO UPDATE SET watermark = excluded.watermark;
+            INSERT INTO scripting_watermarks (job_id, database_name, object_type, watermark, fingerprint)
+            VALUES ($job, $db, $type, $watermark, $fingerprint)
+            ON CONFLICT (job_id, database_name, object_type) DO UPDATE SET
+                watermark = excluded.watermark,
+                fingerprint = excluded.fingerprint;
             """;
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -67,7 +75,8 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
                 db = database,
                 type = (int)type,
                 // "O" round-trips the raw DateTime exactly, preserving the opaque server-local value.
-                watermark = watermark.ToString("O", CultureInfo.InvariantCulture),
+                watermark = watermark.Value.ToString("O", CultureInfo.InvariantCulture),
+                fingerprint = watermark.Fingerprint,
             }, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
         }
 

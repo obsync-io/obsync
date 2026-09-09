@@ -1,0 +1,14 @@
+-- The emission fingerprint that produced the hashes a watermark vouches for.
+--
+-- A watermark says "everything of this type older than this date is already scripted correctly".
+-- That is only true while Obsync would still emit the same bytes it emitted then: change the
+-- normalizer, the SMO option set, the repository layout, or an emission-affecting job setting, and
+-- every object the planner skips keeps its old-format file forever, silently, because a planned skip
+-- never reads the file it is vouching for.
+--
+-- NULL means "written before this column existed". Those rows are adopted at the current
+-- fingerprint on first read rather than invalidated: invalidating them would force a full scan of
+-- every type on the first run after upgrading, which on a large estate is hours. The trade is
+-- explicit -- if emitted output had already drifted before this release, that drift is now blessed
+-- rather than repaired.
+ALTER TABLE scripting_watermarks ADD COLUMN fingerprint TEXT NULL;

@@ -16,6 +16,7 @@ using Obsync.Shared.Abstractions;
 using Obsync.Shared.Models;
 using Obsync.Shared.Objects;
 using Obsync.Shared.Scripting;
+using Obsync.Smo;
 
 namespace Obsync.Engine;
 
@@ -1410,7 +1411,33 @@ public sealed class SyncEngine : ISyncEngine
             }
         }
 
-        var watermarks = await _watermarks.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false);
+        var stored = await _watermarks.GetForJobDatabaseAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false);
+
+        // A watermark vouches for hashes produced by a particular emission configuration. If that
+        // configuration has changed, the objects below it would script to different bytes today, and
+        // skipping them would leave their files in the old format permanently — a repository that is
+        // a mixture of two formats, with only the objects that happen to change later ever being
+        // rewritten. A null fingerprint predates the column and is adopted rather than invalidated,
+        // which is what keeps the first run after upgrading from being a full scan of everything.
+        var fingerprint = context.EmissionFingerprint;
+        var staleTypes = stored
+            .Where(pair => pair.Value.Fingerprint is not null && pair.Value.Fingerprint != fingerprint)
+            .Select(pair => pair.Key)
+            .ToList();
+        if (staleTypes.Count > 0)
+        {
+            // Reported, not silent. Every mechanism that protects a watermark resolves to "do a full
+            // scan", and a full scan nobody can account for is indistinguishable from the product
+            // being arbitrarily slow.
+            context.Log(SyncLogLevel.Info,
+                $"Obsync now produces different output than when {string.Join(", ", staleTypes)} in {database} "
+                + "was last scripted, so incremental scripting cannot vouch for those files. Scanning "
+                + "those types in full once to bring them up to date.");
+        }
+
+        var watermarks = stored
+            .Where(pair => !staleTypes.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value.Value);
         var snapshot = await _modifiedObjects.GetSnapshotAsync(
             context.Connection, context.SqlPassword, database, capableTypes,
             context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
@@ -1454,7 +1481,8 @@ public sealed class SyncEngine : ISyncEngine
 
         if (plan.NewWatermarks.Count > 0)
         {
-            context.PendingWatermarks[database] = plan.NewWatermarks;
+            context.PendingWatermarks[database] = plan.NewWatermarks.ToDictionary(
+                pair => pair.Key, pair => new ScriptingWatermark(pair.Value, fingerprint));
         }
 
         if (plan.SkippedItems.Count > 0)
@@ -3061,8 +3089,17 @@ public sealed class SyncEngine : ISyncEngine
             SqlPassword = sqlPassword;
             GitToken = gitToken;
             Databases = job.Databases;
+            EmissionFingerprint = Obsync.Shared.Scripting.EmissionFingerprint.Compute(job.Selection, SmoEmission.Contribution);
             _progress = progress;
         }
+
+        /// <summary>
+        /// What this build and this job's settings would emit, computed once per run. A watermark
+        /// written under a different fingerprint cannot be trusted: the objects below it were
+        /// scripted by a configuration that no longer produces the same bytes, so skipping them
+        /// would leave their files stale permanently.
+        /// </summary>
+        public string EmissionFingerprint { get; }
 
         /// <summary>The concrete databases this run scripts — the job's fixed list, or the
         /// dynamic scope resolved against the live server at the start of the run.</summary>
@@ -3151,7 +3188,7 @@ public sealed class SyncEngine : ISyncEngine
 
         /// <summary>Per-database incremental watermarks staged during scripting; persisted with the
         /// final states only when the run ends healthy. Written from single-threaded stages.</summary>
-        public Dictionary<string, IReadOnlyDictionary<SqlObjectType, DateTime>> PendingWatermarks { get; } =
+        public Dictionary<string, IReadOnlyDictionary<SqlObjectType, ScriptingWatermark>> PendingWatermarks { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
         public void Report(SyncPhase phase, string message, int done = 0, int total = 0) =>

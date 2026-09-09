@@ -5,6 +5,7 @@ using Obsync.Data.Repositories;
 using Obsync.Shared;
 using Obsync.Shared.Models;
 using Obsync.Shared.Objects;
+using Obsync.Shared.Scripting;
 
 namespace Obsync.Integration.Tests;
 
@@ -37,6 +38,41 @@ public sealed class ScriptingWatermarkTests : IAsyncLifetime, IDisposable
         return job;
     }
 
+    private static ScriptingWatermark Mark(DateTime value, string? fingerprint = "fp-current") =>
+        new(value, fingerprint);
+
+    /// <summary>
+    /// A watermark carries the emission fingerprint that produced the hashes it vouches for, and a
+    /// row written before the column existed reads back null — which the engine adopts rather than
+    /// invalidating, so upgrading does not force a full scan of every type.
+    /// </summary>
+    [Fact]
+    public async Task AWatermark_CarriesTheFingerprintThatProducedIt()
+    {
+        var job = await InsertJobAsync("fp");
+        var watermarks = _provider.GetRequiredService<IScriptingWatermarkRepository>();
+        var mark = new DateTime(2026, 9, 1, 8, 30, 0);
+
+        await watermarks.UpsertManyAsync(job.Id, "db", new Dictionary<SqlObjectType, ScriptingWatermark>
+        {
+            [SqlObjectType.View] = Mark(mark, "abc123"),
+            [SqlObjectType.Table] = Mark(mark, fingerprint: null),
+        });
+
+        var loaded = await watermarks.GetForJobDatabaseAsync(job.Id, "db");
+        Assert.Equal("abc123", loaded[SqlObjectType.View].Fingerprint);
+        Assert.Null(loaded[SqlObjectType.Table].Fingerprint);
+
+        // Re-upserting replaces the fingerprint in place, so a run under a new configuration
+        // re-stamps rather than leaving the old claim behind.
+        await watermarks.UpsertManyAsync(job.Id, "db", new Dictionary<SqlObjectType, ScriptingWatermark>
+        {
+            [SqlObjectType.View] = Mark(mark, "def456"),
+        });
+        loaded = await watermarks.GetForJobDatabaseAsync(job.Id, "db");
+        Assert.Equal("def456", loaded[SqlObjectType.View].Fingerprint);
+    }
+
     [Fact]
     public async Task Watermarks_RoundTripVerbatim_AndUpsertUpdatesInPlace()
     {
@@ -46,32 +82,32 @@ public sealed class ScriptingWatermarkTests : IAsyncLifetime, IDisposable
         // Server-local datetimes with sub-second precision must round-trip exactly, unshifted.
         var tableMark = new DateTime(2026, 7, 5, 23, 14, 59, 997);
         var procMark = new DateTime(2026, 7, 5, 22, 0, 0);
-        await watermarks.UpsertManyAsync(job.Id, "SalesDB", new Dictionary<SqlObjectType, DateTime>
+        await watermarks.UpsertManyAsync(job.Id, "SalesDB", new Dictionary<SqlObjectType, ScriptingWatermark>
         {
-            [SqlObjectType.Table] = tableMark,
-            [SqlObjectType.StoredProcedure] = procMark,
+            [SqlObjectType.Table] = Mark(tableMark),
+            [SqlObjectType.StoredProcedure] = Mark(procMark),
         });
-        await watermarks.UpsertManyAsync(job.Id, "OtherDB", new Dictionary<SqlObjectType, DateTime>
+        await watermarks.UpsertManyAsync(job.Id, "OtherDB", new Dictionary<SqlObjectType, ScriptingWatermark>
         {
-            [SqlObjectType.Table] = tableMark.AddDays(-1),
+            [SqlObjectType.Table] = Mark(tableMark.AddDays(-1)),
         });
 
         var loaded = await watermarks.GetForJobDatabaseAsync(job.Id, "SalesDB");
         Assert.Equal(2, loaded.Count);
-        Assert.Equal(tableMark, loaded[SqlObjectType.Table]);
-        Assert.Equal(procMark, loaded[SqlObjectType.StoredProcedure]);
+        Assert.Equal(tableMark, loaded[SqlObjectType.Table].Value);
+        Assert.Equal(procMark, loaded[SqlObjectType.StoredProcedure].Value);
 
         // Re-upserting advances in place (PK job/database/type) — no duplicate rows.
         var advanced = tableMark.AddHours(1);
-        await watermarks.UpsertManyAsync(job.Id, "SalesDB", new Dictionary<SqlObjectType, DateTime>
+        await watermarks.UpsertManyAsync(job.Id, "SalesDB", new Dictionary<SqlObjectType, ScriptingWatermark>
         {
-            [SqlObjectType.Table] = advanced,
+            [SqlObjectType.Table] = Mark(advanced),
         });
 
         loaded = await watermarks.GetForJobDatabaseAsync(job.Id, "SalesDB");
         Assert.Equal(2, loaded.Count);
-        Assert.Equal(advanced, loaded[SqlObjectType.Table]);
-        Assert.Equal(procMark, loaded[SqlObjectType.StoredProcedure]);
+        Assert.Equal(advanced, loaded[SqlObjectType.Table].Value);
+        Assert.Equal(procMark, loaded[SqlObjectType.StoredProcedure].Value);
 
         // The other database's rows are untouched, and an unknown database reads back empty.
         Assert.Single(await watermarks.GetForJobDatabaseAsync(job.Id, "OtherDB"));
@@ -85,8 +121,8 @@ public sealed class ScriptingWatermarkTests : IAsyncLifetime, IDisposable
         var survivor = await InsertJobAsync("survivor");
         var watermarks = _provider.GetRequiredService<IScriptingWatermarkRepository>();
         var mark = new DateTime(2026, 7, 5, 12, 0, 0);
-        await watermarks.UpsertManyAsync(job.Id, "db", new Dictionary<SqlObjectType, DateTime> { [SqlObjectType.View] = mark });
-        await watermarks.UpsertManyAsync(survivor.Id, "db", new Dictionary<SqlObjectType, DateTime> { [SqlObjectType.View] = mark });
+        await watermarks.UpsertManyAsync(job.Id, "db", new Dictionary<SqlObjectType, ScriptingWatermark> { [SqlObjectType.View] = Mark(mark) });
+        await watermarks.UpsertManyAsync(survivor.Id, "db", new Dictionary<SqlObjectType, ScriptingWatermark> { [SqlObjectType.View] = Mark(mark) });
 
         await _provider.GetRequiredService<IJobRepository>().DeleteAsync(job.Id);
 
