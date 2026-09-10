@@ -515,6 +515,13 @@
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
         <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
         <Setter Property="EnableRowVirtualization" Value="True" />
+        <!-- Recycle containers rather than creating and discarding one per row scrolled.
+             EnableRowVirtualization alone leaves the default Standard mode, which realizes a fresh
+             row container on every scroll and throws the old one away; Recycling reuses them. It
+             matters most on the Job Workspace's Changes grid, which loads up to 2,000 rows. Three
+             views already set this on their own grid — putting it here covers the other five
+             (History, Jobs, Dashboard, Servers, Repositories) and anything added later. -->
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
     </Style>
 
     <!-- ============================================================= -->

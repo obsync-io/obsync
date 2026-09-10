@@ -131,4 +131,63 @@ public sealed class DatabaseScopeWizardTests
         Assert.Equal(DatabaseScope.AllUserDatabases, saved()!.DatabaseScope);
         Assert.Equal(["Scratch", "TempWork"], saved()!.ExcludedDatabases);
     }
+    /// <summary>
+    /// The four settings that had no UI at all. Each was reachable only by hand-editing an exported
+    /// job config, and RemoveDroppedObjects is the highest-consequence setting in the product — it
+    /// decides whether Obsync deletes committed files when an object is dropped in SQL Server.
+    /// </summary>
+    [Fact]
+    public async Task Save_PersistsTheSettingsThatPreviouslyHadNoUi()
+    {
+        var connectionId = Guid.NewGuid();
+        var repositoryId = Guid.NewGuid();
+        var (vm, saved) = BuildVm(connectionId, repositoryId);
+        await vm.LoadAsync();
+        vm.InitializeForEdit(new SyncJob
+        {
+            Name = "Estate sync",
+            ConnectionProfileId = connectionId,
+            RepositoryProfileId = repositoryId,
+            Databases = ["Sales"],
+            Branch = "main",
+        });
+
+        vm.SqlRetryCount = 7;
+        vm.RemoveDroppedObjects = false;
+        vm.IgnorePatterns = "dbo.tmp_*" + Environment.NewLine + "staging.*";
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.Equal(7, saved()!.Advanced.SqlRetryCount);
+        Assert.False(saved()!.Selection.RemoveDroppedObjects);
+        Assert.Equal(["dbo.tmp_*", "staging.*"], saved()!.Selection.IgnorePatterns);
+    }
+
+    /// <summary>
+    /// The worker count was clamped at the bottom only, so a typed 999 became 999 consumer tasks
+    /// and, at the SMO layer, a fan-out bounded only by the object count.
+    /// </summary>
+    [Fact]
+    public async Task Save_ClampsAnAbsurdWorkerCount()
+    {
+        var connectionId = Guid.NewGuid();
+        var repositoryId = Guid.NewGuid();
+        var (vm, saved) = BuildVm(connectionId, repositoryId);
+        await vm.LoadAsync();
+        vm.InitializeForEdit(new SyncJob
+        {
+            Name = "Estate sync",
+            ConnectionProfileId = connectionId,
+            RepositoryProfileId = repositoryId,
+            Databases = ["Sales"],
+            Branch = "main",
+        });
+
+        vm.MaxParallelWorkers = 999;
+
+        await vm.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(saved());
+        Assert.Equal(64, saved()!.Advanced.MaxParallelWorkers);
+    }
 }

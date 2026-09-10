@@ -713,6 +713,19 @@
                             <TextBlock Text="GIT NETWORK ATTEMPTS (1 = NO RETRY)" Style="{StaticResource Caption}" />
                             <TextBox Text="{Binding GitRetryCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
                                      MaxLength="2" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                            <TextBlock Text="SQL ATTEMPTS ON A TRANSIENT ERROR (1 = NO RETRY)" Style="{StaticResource Caption}" />
+                            <TextBox Text="{Binding SqlRetryCount, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,12"
+                                     MaxLength="2" PreviewTextInput="OnDigitsOnly" DataObject.Pasting="OnPasteDigitsOnly" />
+                            <CheckBox Content="Remove committed files when an object is dropped in SQL Server"
+                                      IsChecked="{Binding RemoveDroppedObjects}" Margin="0,0,0,6" />
+                            <TextBlock Text="Off keeps a dropped object's script in the repository as a historical record. The mass-deletion guard still applies either way: an unattended run that loses an unusual number of objects at once suspends deletions and reports it rather than acting."
+                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                            <TextBlock Text="IGNORE PATTERNS (ONE PER LINE, e.g. dbo.tmp_*)" Style="{StaticResource Caption}" />
+                            <TextBox Text="{Binding IgnorePatterns, UpdateSourceTrigger=PropertyChanged}" Margin="0,4,0,4"
+                                     AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="56" MaxHeight="120"
+                                     VerticalScrollBarVisibility="Auto" />
+                            <TextBlock Text="Matched objects are never scripted, and files already committed for them are left untouched. An .obsyncignore file committed in the repository does the same thing and applies to every job using it."
+                                       Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,0,0,12" />
                             <CheckBox Content="Incremental scripting (recommended for very large databases)"
                                       IsChecked="{Binding IncrementalScripting}" Margin="0,0,0,6" />
                             <TextBlock Text="Skips objects unchanged since the last run using SQL Server's modify_date. Permission- or extended-property-only changes don't update modify_date — turn this off and run once to capture those."

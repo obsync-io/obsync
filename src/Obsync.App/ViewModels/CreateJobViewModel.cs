@@ -150,6 +150,28 @@ public sealed partial class CreateJobViewModel : ObservableObject
     [ObservableProperty] private int _gitRetryCount = 3;
     [ObservableProperty] private bool _incrementalScripting = true;
 
+    /// <summary>
+    /// Attempts for a transient SQL failure. Its git counterpart was surfaced and this was not, so
+    /// in practice every job shipped with the default — although a deadlock-prone estate is exactly
+    /// where raising it helps.
+    /// </summary>
+    [ObservableProperty] private int _sqlRetryCount = 3;
+
+    /// <summary>
+    /// Whether a dropped object's committed file is removed from the repository.
+    /// </summary>
+    /// <remarks>
+    /// The highest-consequence setting in the product — it decides whether Obsync DELETES committed
+    /// files — and it had no UI at all: reachable only by hand-editing an exported job config.
+    /// </remarks>
+    [ObservableProperty] private bool _removeDroppedObjects = true;
+
+    /// <summary>
+    /// Glob patterns for objects to leave unscripted, one per line. Equivalent to an
+    /// <c>.obsyncignore</c> committed in the repository, for people who would rather set it here.
+    /// </summary>
+    [ObservableProperty] private string _ignorePatterns = string.Empty;
+
     /// <summary>Comma-separated schema allow-list; empty = all schemas.</summary>
     [ObservableProperty] private string _schemaFilter = string.Empty;
 
@@ -613,10 +635,15 @@ public sealed partial class CreateJobViewModel : ObservableObject
         QueryTimeoutSeconds = job.Advanced.SqlCommandTimeoutSeconds;
         LockTimeoutSeconds = job.Advanced.SqlLockTimeoutSeconds;
         GitRetryCount = job.Advanced.GitRetryCount;
+        SqlRetryCount = job.Advanced.SqlRetryCount;
         IncrementalScripting = job.Advanced.IncrementalScripting;
+        RemoveDroppedObjects = job.Selection.RemoveDroppedObjects;
+        IgnorePatterns = string.Join(Environment.NewLine, job.Selection.IgnorePatterns);
         ShowAdvanced = job.Advanced.GitRetryCount != 3
+            || job.Advanced.SqlRetryCount != 3
             || job.Advanced.MaxParallelWorkers != 0 || job.Advanced.SqlLockTimeoutSeconds != 0
-            || job.Advanced.SqlCommandTimeoutSeconds != 120 || !job.Advanced.IncrementalScripting;
+            || job.Advanced.SqlCommandTimeoutSeconds != 120 || !job.Advanced.IncrementalScripting
+            || !job.Selection.RemoveDroppedObjects || job.Selection.IgnorePatterns.Count > 0;
     }
 
     [RelayCommand]
@@ -1039,12 +1066,23 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
         job.Schedule = BuildSchedule();
         // Mutate the existing Advanced object so the unsurfaced retry counts are preserved.
-        job.Advanced.MaxParallelWorkers = Math.Max(0, MaxParallelWorkers);
+        // Clamped at both ends. The lower bound was the only one, so a typed 999 became 999
+        // consumer tasks and, at the SMO layer, a fan-out bounded only by the object count. 64 is
+        // far above any useful degree of parallelism for this workload and well below the point
+        // where it becomes self-harm.
+        job.Advanced.MaxParallelWorkers = Math.Clamp(MaxParallelWorkers, 0, 64);
         job.Advanced.SqlCommandTimeoutSeconds = Math.Max(1, QueryTimeoutSeconds);
         job.Advanced.SqlLockTimeoutSeconds = Math.Max(0, LockTimeoutSeconds);
         // At least one attempt, or the operation would never run at all.
         job.Advanced.GitRetryCount = Math.Clamp(GitRetryCount, 1, 10);
+        job.Advanced.SqlRetryCount = Math.Clamp(SqlRetryCount, 1, 10);
         job.Advanced.IncrementalScripting = IncrementalScripting;
+        job.Selection.RemoveDroppedObjects = RemoveDroppedObjects;
+        job.Selection.IgnorePatterns =
+        [
+            .. IgnorePatterns
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        ];
         job.UpdatedAt = _clock.UtcNow;
         if (!IsEditMode)
         {

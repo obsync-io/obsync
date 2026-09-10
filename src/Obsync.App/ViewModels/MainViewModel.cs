@@ -28,6 +28,29 @@ public sealed partial class MainViewModel : ObservableObject, IShellNavigator
     [ObservableProperty]
     private object? _currentView;
 
+    /// <summary>
+    /// Releases a Job Workspace view model when navigation moves away from it.
+    /// </summary>
+    /// <remarks>
+    /// Cleanup cannot depend on the view's Unloaded event. Both the outgoing and incoming workspace
+    /// resolve to the SAME DataTemplate, so WPF's ContentPresenter reuses the existing view and only
+    /// swaps its DataContext — Unloaded never fires, and the previous view model stays subscribed to
+    /// the run-state object that the run coordinator keeps alive for the life of the process.
+    /// <para>
+    /// Each leaked view model retains its loaded runs, changes and logs, and keeps reacting to run
+    /// notifications with background reloads nobody can see. The path is ordinary: open one job's
+    /// workspace, then click a failure toast for another. Unloaded still fires when the workspace is
+    /// left for a rail section, so this covers the case it cannot.
+    /// </para>
+    /// </remarks>
+    partial void OnCurrentViewChanged(object? oldValue, object? newValue)
+    {
+        if (!ReferenceEquals(oldValue, newValue) && oldValue is JobDetailViewModel previous)
+        {
+            previous.DetachRunState();
+        }
+    }
+
     // The active top-level section, bound by each nav-rail RadioButton (via SectionToBool) so the
     // highlight always tracks the shown page — including programmatic navigation and job drill-down.
     [ObservableProperty]
