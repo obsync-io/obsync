@@ -80,45 +80,58 @@ public sealed class ObjectStateRepository : IObjectStateRepository
     public async Task<IReadOnlyList<TrackedObjectSnapshot>> GetTrackingStatesAsync(
         Guid jobId, string database, CancellationToken cancellationToken = default)
     {
-        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryAsync<SlimStateRow>(new CommandDefinition(
-            """
-            SELECT id AS Id, object_type AS ObjectType, schema_name AS SchemaName,
-                   object_name AS ObjectName, file_path AS FilePath, last_hash AS LastHash
-            FROM object_states
-            WHERE job_id = $job AND database_name = $db COLLATE NOCASE;
-            """,
-            new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
-
-        // Materialised into the slim TrackedObjectSnapshot rather than the full persisted row: a
-        // run reads exactly these six columns, and the other nine cost roughly 110 bytes per object
-        // in fields nothing looks at. On a million-object database that is the difference between
-        // holding the tracked estate and holding it twice over.
+        // Read directly, rather than through Dapper, for the one query whose result set is the size
+        // of the estate.
+        //
+        // Dapper buffers a whole result set by default, so a million SlimStateRow shells were alive
+        // at once WHILE the million-element projection was being built — roughly double the
+        // steady-state footprint, at exactly the moment the engine is about to allocate its own
+        // per-object structures. Its unbuffered mode is not a safe substitute here (it was tried:
+        // it fails this repository's own integration tests), so this reads the rows itself and
+        // projects each one as it arrives. No intermediate row type exists at all now.
+        //
+        // The projection is the slim TrackedObjectSnapshot rather than the full persisted row: a run
+        // reads exactly these six columns, and the other nine cost roughly 110 bytes per object in
+        // fields nothing looks at.
         //
         // Schema names are pooled. A database of a million objects typically has a handful of
-        // schemas, and the mapper hands back a separate string per row — so without this, "dbo" is
+        // schemas, and a reader hands back a fresh string per row — so without this, "dbo" is
         // materialised a million times.
-        var schemas = new Dictionary<string, string>(StringComparer.Ordinal);
-        return [.. rows.Select(row => new TrackedObjectSnapshot
-        {
-            Id = row.Id,
-            ObjectType = (Shared.Objects.SqlObjectType)row.ObjectType,
-            SchemaName = Pool(schemas, row.SchemaName),
-            ObjectName = row.ObjectName,
-            FilePath = row.FilePath,
-            LastHash = row.LastHash,
-        })];
+        await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, object_type, schema_name, object_name, file_path, last_hash
+            FROM object_states
+            WHERE job_id = $job AND database_name = $db COLLATE NOCASE;
+            """;
+        command.Parameters.AddWithValue("$job", jobId.ToString());
+        command.Parameters.AddWithValue("$db", database);
 
-        static string Pool(Dictionary<string, string> pool, string value)
+        var schemas = new Dictionary<string, string>(StringComparer.Ordinal);
+        var states = new List<TrackedObjectSnapshot>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            if (pool.TryGetValue(value, out var existing))
+            var schema = reader.GetString(2);
+            if (!schemas.TryGetValue(schema, out var pooledSchema))
             {
-                return existing;
+                pooledSchema = schema;
+                schemas[schema] = pooledSchema;
             }
 
-            pool[value] = value;
-            return value;
+            states.Add(new TrackedObjectSnapshot
+            {
+                Id = reader.GetInt64(0),
+                ObjectType = (Shared.Objects.SqlObjectType)reader.GetInt32(1),
+                SchemaName = pooledSchema,
+                ObjectName = reader.GetString(3),
+                FilePath = reader.GetString(4),
+                LastHash = reader.GetString(5),
+            });
         }
+
+        return states;
     }
 
     public async Task<IReadOnlyList<TrackedObjectState>> SearchAsync(

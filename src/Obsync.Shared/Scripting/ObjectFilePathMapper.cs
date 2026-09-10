@@ -110,6 +110,13 @@ public sealed class ObjectFilePathMapper : IObjectFilePathMapper
         return $"{descriptor.FolderName}/{stem}{Extension}";
     }
 
+    /// <summary>The stand-in for a name that sanitizes away to nothing, which always counts as changed.</summary>
+    private static string Fallback(out bool changed)
+    {
+        changed = true;
+        return "_";
+    }
+
     private static string Sanitize(string name, out bool changed)
     {
         changed = false;
@@ -117,6 +124,45 @@ public sealed class ObjectFilePathMapper : IObjectFilePathMapper
         {
             changed = true;
             return "_";
+        }
+
+        // The overwhelming majority of SQL object names contain no invalid filename character at
+        // all, and this runs once per object — so the clean case skips the builder entirely.
+        // `InvalidChars` is already a SearchValues, so the test is one vectorized scan, and
+        // TrimEnd returns the SAME instance when nothing trims. A clean name therefore allocates
+        // nothing here where it previously allocated a StringBuilder, its internal buffer and a
+        // string.
+        //
+        // Provably identical output: the loop below is a character-for-character copy when no
+        // invalid character is present, so the only difference is which allocations happen. That
+        // matters — a change in what this returns would move files, and LayoutVersion must not
+        // need bumping for a pure allocation fix.
+        if (!name.AsSpan().ContainsAny(InvalidChars))
+        {
+            var clean = name.TrimEnd('.', ' ');
+            if (clean.Length != name.Length)
+            {
+                changed = true;
+            }
+
+            if (clean.Length == 0)
+            {
+                return Fallback(out changed);
+            }
+
+            // The reserved-device check belongs on BOTH paths. A name like CON contains no invalid
+            // character at all, so it takes this branch — and skipping the check here would emit
+            // CON.sql, which `git add` refuses outright (exit 128, nothing staged, the whole run
+            // fails). That is precisely what the check exists to prevent, and a fast path that
+            // dropped it would have reintroduced it for the only names that trigger it.
+            // (Verified: removing this makes ReservedDeviceNamesAreMangled fail.)
+            if (IsReservedDeviceName(clean))
+            {
+                changed = true;
+                return $"_{clean}";
+            }
+
+            return clean;
         }
 
         var builder = new StringBuilder(name.Length);

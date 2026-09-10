@@ -108,14 +108,27 @@ public sealed class ModifiedObjectReader : IModifiedObjectReader
         }
 
         var items = new List<ModifiedObjectSnapshotItem>();
+
+        // Schema names are pooled, exactly as the tracking projection pools them on the SQLite side.
+        // A database of a million objects typically has a handful of schemas, and the reader hands
+        // back a fresh string per row — so "dbo" was being materialised a million times, in a list
+        // that is held alongside the equally large prior-state map.
+        var schemaPool = new Dictionary<string, string>(StringComparer.Ordinal);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             // sys.objects.type is char(2), so single-letter codes carry a trailing space.
             var code = reader.GetString(0).TrimEnd();
             var definitionUnavailable = ModuleCodes.Contains(code) && reader.GetInt32(4) == 1;
+            var schema = reader.GetString(1);
+            if (!schemaPool.TryGetValue(schema, out var pooled))
+            {
+                pooled = schema;
+                schemaPool[schema] = pooled;
+            }
+
             items.Add(new ModifiedObjectSnapshotItem(
-                codeToType[code], reader.GetString(1), reader.GetString(2), reader.GetDateTime(3),
+                codeToType[code], pooled, reader.GetString(2), reader.GetDateTime(3),
                 definitionUnavailable));
         }
 
