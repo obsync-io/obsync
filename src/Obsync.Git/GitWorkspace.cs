@@ -808,6 +808,15 @@ public sealed partial class GitWorkspace : IGitWorkspace
     internal static string Summarize(string error)
     {
         var redacted = SecretRedactor.Scrub(error.Trim()) ?? string.Empty;
-        return redacted.Length <= MaxSummaryLength ? redacted : redacted[..MaxSummaryLength] + "…";
+        if (redacted.Length <= MaxSummaryLength)
+        {
+            return redacted;
+        }
+
+        // Keep the END, not the beginning. git states the cause last — "fatal: …" comes after
+        // whatever progress, hints and advice preceded it — so truncating the head threw away the one
+        // line the user needed and kept the noise. On the failures that matter most (a large clone or
+        // push) that meant an error message made entirely of transfer progress.
+        return "…" + redacted[^MaxSummaryLength..];
     }
 }

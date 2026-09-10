@@ -87,15 +87,31 @@ public sealed class GitCommandTimeoutTests
         Assert.Equal(Cheap, GitCommandRunner.SelectTimeout(["--version"], environment: null));
     }
 
+    /// <summary>
+    /// Progress redraws are dropped from the retained stderr, and everything else is kept.
+    /// </summary>
+    /// <remarks>
+    /// This replaced a helper that collapsed a line to the text after its last carriage return —
+    /// which did nothing, because .NET delivers each redraw as its OWN line (pinned by
+    /// <c>ProcessOutputLineSplittingTests</c>). The consequence was that forcing <c>--progress</c> on
+    /// for the stall watchdog made a long transfer's stderr grow without bound, and the truncation
+    /// that followed kept the head — so the <c>fatal:</c> line the user actually needed was thrown
+    /// away and replaced with transfer percentages.
+    /// </remarks>
     [Theory]
-    [InlineData("Receiving objects:  1% (1/100)\rReceiving objects: 100% (100/100), done.",
-                "Receiving objects: 100% (100/100), done.")]
-    [InlineData("fatal: repository not found", "fatal: repository not found")]
-    [InlineData("", "")]
-    public void OnlyTheFinalStateOfAProgressLineIsRetained(string received, string expected)
+    [InlineData("Receiving objects:  47% (470000/1000000)", true)]
+    [InlineData("Resolving deltas:   3% (1/33)", true)]
+    [InlineData("remote: Counting objects:  99% (100/101)", true)]
+    // The final redraw of a phase is informative and is kept.
+    [InlineData("Receiving objects: 100% (1000/1000), done.", false)]
+    // Real diagnostics must never be mistaken for progress, however they are shaped.
+    [InlineData("fatal: repository 'https://example/x.git' not found", false)]
+    [InlineData("error: RPC failed; HTTP 500 curl 22", false)]
+    [InlineData("remote: Resolving deltas failed", false)]
+    [InlineData("hint: 100% of nothing", false)]
+    [InlineData("", false)]
+    public void ProgressRedrawsAreRecognised(string line, bool isProgress)
     {
-        // --progress is forced on so the stall watchdog has a heartbeat, but the redraw fragments
-        // must not travel into runs.error_message, the run log and exported reports.
-        Assert.Equal(expected, GitCommandRunner.LastProgressSegment(received));
+        Assert.Equal(isProgress, GitCommandRunner.IsProgressRedraw(line));
     }
 }

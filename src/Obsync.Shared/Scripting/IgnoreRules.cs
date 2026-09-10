@@ -48,6 +48,15 @@ public sealed class IgnoreRules
             }
         }
 
+        if (ObjectPatterns.Count == 0)
+        {
+            // The qualified name was built before this loop, so a job with no object patterns — the
+            // default — allocated one per object and discarded it. This runs once per object in the
+            // apply path and again per snapshot item from the incremental planner, so it is two
+            // allocations per object on an incremental run for a loop that never executes.
+            return false;
+        }
+
         var qualified = string.IsNullOrEmpty(schema) ? name : $"{schema}.{name}";
         foreach (var glob in ObjectPatterns)
         {

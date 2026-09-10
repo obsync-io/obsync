@@ -113,7 +113,26 @@ public sealed class GitCommandRunner : IGitCommandRunner
     /// therefore get <see cref="TreeScaleCommandTimeout"/> rather than the cheap budget.
     /// </summary>
     private static readonly HashSet<string> TreeScaleCommands =
-        new(StringComparer.Ordinal) { "add", "commit", "checkout", "clean", "reset", "status", "gc" };
+        new(StringComparer.Ordinal)
+        {
+            "add", "commit", "checkout", "clean", "reset", "status", "gc", "maintenance",
+            // `diff --cached --quiet` cannot short-circuit when nothing changed: it must compare every
+            // index entry against the HEAD tree, which at a million files on a cold cache with
+            // on-access antivirus exceeds the cheap budget. Being killed there fails the run, leaves
+            // state correctly un-advanced, and produces the identical failure on the next run —
+            // exactly the permanently-stuck job this list exists to prevent. It was simply missed.
+            "diff",
+            // The history rail and diff viewer read the same clone the engine commits to, and on a
+            // million-file repository these walk trees rather than a handful of refs.
+            "merge", "rev-list", "log", "show",
+        };
+
+    /// <summary>
+    /// How much of a command's stderr is retained. Generous enough to hold any real diagnostic —
+    /// git's failures are a handful of lines — and bounded so a long transfer cannot grow it without
+    /// limit. When it is exceeded the OLDEST half is dropped, because git puts the cause last.
+    /// </summary>
+    private const int MaxCapturedErrorChars = 64 * 1024;
 
     /// <summary>Exit code reported for a command Obsync terminated on timeout (matching GNU timeout).</summary>
     internal const int TimedOutExitCode = 124;
@@ -263,16 +282,45 @@ public sealed class GitCommandRunner : IGitCommandRunner
         RunAsync(workingDirectory, arguments, environment: null, cancellationToken);
 
     /// <summary>
-    /// Keeps only the final state of a progress line. Network commands run with <c>--progress</c> so
-    /// the stall watchdog has a heartbeat to watch, and git redraws progress with carriage returns
-    /// within a single newline-delimited chunk — so without this every retained stderr would carry
-    /// hundreds of "Receiving objects: 1%…2%…3%" fragments into <c>runs.error_message</c>, the run
-    /// log, and exported reports. The last segment is the useful one ("…100% (1000/1000), done.").
+    /// Whether a line is one of git's transfer-progress redraws rather than something worth keeping.
     /// </summary>
-    internal static string LastProgressSegment(string line)
+    /// <remarks>
+    /// Network commands run with <c>--progress</c> so the stall watchdog has a heartbeat to watch,
+    /// which means a long transfer emits thousands of these.
+    /// <para>
+    /// This replaced an attempt to collapse each line to the text after its last carriage return,
+    /// which did nothing at all: .NET's redirected-output reader treats a carriage return as a LINE
+    /// TERMINATOR, so a redraw never reaches the handler with one embedded — it arrives as its own
+    /// event. <c>ProcessOutputLineSplittingTests</c> pins that behaviour, because it is easy to
+    /// assume the opposite and the consequence is invisible until a transfer fails.
+    /// </para>
+    /// <para>
+    /// Matching on the shape rather than counting bytes keeps the LAST redraw of each phase
+    /// ("Receiving objects: 100% (1000/1000), done.") — the one that is actually informative — while
+    /// dropping the thousands leading up to it, and leaves every non-progress line untouched.
+    /// </para>
+    /// </remarks>
+    internal static bool IsProgressRedraw(string line)
     {
-        var lastCarriageReturn = line.LastIndexOf('\r');
-        return lastCarriageReturn < 0 ? line : line[(lastCarriageReturn + 1)..];
+        // git's shape is exactly "<phase>: <n>% (<done>/<total>)" — the counted parenthesis is what
+        // makes this precise rather than "any line with a percent sign in it". A line that merely
+        // mentions a percentage (a hint, an error quoting one) must never be discarded.
+        var percent = line.IndexOf("% (", StringComparison.Ordinal);
+        if (percent <= 0 || line.EndsWith("done.", StringComparison.Ordinal))
+        {
+            // The final redraw of a phase carries ", done." and is worth keeping: it is the one line
+            // that says the phase completed and how much it moved.
+            return false;
+        }
+
+        // Digits immediately before the percent sign, then the phase label's colon.
+        var digit = percent - 1;
+        while (digit >= 0 && char.IsAsciiDigit(line[digit]))
+        {
+            digit--;
+        }
+
+        return digit < percent - 1 && line.AsSpan(0, digit + 1).TrimEnd().EndsWith(":", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -393,8 +441,28 @@ public sealed class GitCommandRunner : IGitCommandRunner
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) { return; }
+
+            // Activity is recorded for EVERY line, progress included — that is the whole point of
+            // forcing --progress on. Only the retaining is selective.
             Interlocked.Exchange(ref lastActivity, Environment.TickCount64);
-            stderr.AppendLine(LastProgressSegment(e.Data));
+            if (IsProgressRedraw(e.Data))
+            {
+                return;
+            }
+
+            lock (stderr)
+            {
+                // Bounded. git's stderr is otherwise unbounded — a multi-hour push emits thousands of
+                // lines — and every byte of it is carried into runs.error_message, the run log,
+                // exported reports and support bundles, then lower-cased and scanned ~45 times by the
+                // transient-error classifier on every retry.
+                if (stderr.Length > MaxCapturedErrorChars)
+                {
+                    stderr.Remove(0, stderr.Length - (MaxCapturedErrorChars / 2));
+                }
+
+                stderr.AppendLine(e.Data);
+            }
         };
 
         try
