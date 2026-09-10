@@ -1542,13 +1542,6 @@ public sealed class SyncEngine : ISyncEngine
             context.Job.Advanced.SqlCommandTimeoutSeconds, context.Job.Advanced.SqlLockTimeoutSeconds,
             context.Job.Selection.SchemaFilter, cancellationToken).ConfigureAwait(false);
 
-        // Handed back for the skip path: a failure at the SAME modify_date as a previous failure is
-        // what distinguishes a permanently unscriptable object from a transient one.
-        foreach (var item in snapshot)
-        {
-            snapshotDates[IncrementalPlanner.StateKey(item)] = item.ModifyDate;
-        }
-
         // "Ignored" for planning purposes means either an ignore-rule match or an out-of-filter
         // schema — the providers never yield those, so they must neither be skipped as unchanged
         // nor treated as safety violations. Removing the schema filter later un-ignores them, and
@@ -1563,6 +1556,15 @@ public sealed class SyncEngine : ISyncEngine
         // in full", and a full scan nobody can account for is indistinguishable from the product
         // being arbitrarily slow. This is the difference between a system that explains itself and
         // one that needs the source read to diagnose.
+        // The planner composed a state key for every snapshot object and kept their modify dates;
+        // this used to build a second, identical dictionary from a second set of identical keys.
+        // The skip path needs it to tell a permanently unscriptable object from a transient failure:
+        // a failure at the SAME modify_date as the previous one is the evidence that it is permanent.
+        foreach (var (key, modifyDate) in plan.ModifyDates)
+        {
+            snapshotDates[key] = modifyDate;
+        }
+
         foreach (var reason in plan.Invalidated.Values.Distinct())
         {
             var affected = string.Join(", ", plan.Invalidated.Where(pair => pair.Value == reason).Select(pair => pair.Key));
@@ -1590,7 +1592,10 @@ public sealed class SyncEngine : ISyncEngine
         foreach (var skip in plan.SkippedItems)
         {
             var identity = new ScriptedObjectIdentity(skip.Item.Type, skip.Item.Schema, skip.Item.Name);
-            seen.TryAdd(StateKey(identity), 0);
+
+            // The planner matched this object BY its state key, so it hands the key over rather than
+            // making the caller compose an identical second string per object.
+            seen.TryAdd(skip.StateKey, 0);
             context.IncrementScanned();
             if (wantInventoryEntries)
             {

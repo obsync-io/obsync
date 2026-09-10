@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Obsync.Shared.Scripting;
 
 /// <summary>
@@ -94,13 +96,46 @@ public static class RepositoryLayout
     /// Symlinks and junctions are deliberately not resolved: it would cost a syscall per component
     /// on a path this hot, and the workspace is a clone Obsync creates itself.
     /// </remarks>
+    /// <summary>
+    /// Normalised form and containment prefix for a root, cached because both are pure string work
+    /// over a value that does not change during a run.
+    /// </summary>
+    /// <remarks>
+    /// This is called at least twice per scripted object — and four times with a local export
+    /// mirror configured — so at a million objects it re-normalised the same workspace path millions
+    /// of times and rebuilt the same prefix string with it. Only fully-qualified roots are cached:
+    /// <c>Path.GetFullPath</c> of a relative root depends on the current directory, so caching one
+    /// would be wrong if that ever moved. Every root Obsync passes here is absolute.
+    /// </remarks>
+    private static readonly ConcurrentDictionary<string, (string Full, string Prefix)> RootCache =
+        new(StringComparer.Ordinal);
+
     public static string? ResolveWithin(string root, string relativePath)
     {
         string rootFull;
+        string prefix;
         string full;
         try
         {
-            rootFull = Path.GetFullPath(root);
+            if (Path.IsPathFullyQualified(root))
+            {
+                (rootFull, prefix) = RootCache.GetOrAdd(root, static key =>
+                {
+                    var normalised = Path.GetFullPath(key);
+
+                    // Trim first: GetFullPath preserves a trailing separator on the root, and
+                    // appending a second one would build "C:\ws\\" and reject everything.
+                    return (normalised, normalised.TrimEnd(
+                        Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar);
+                });
+            }
+            else
+            {
+                rootFull = Path.GetFullPath(root);
+                prefix = rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar;
+            }
+
             full = Path.GetFullPath(relativePath, rootFull);
         }
         catch (ArgumentException)
@@ -108,11 +143,6 @@ public static class RepositoryLayout
             // An embedded NUL, or a root that is not fully qualified.
             return null;
         }
-
-        // Trim first: GetFullPath preserves a trailing separator on the root, and appending a
-        // second one would build "C:\ws\\" and reject everything.
-        var prefix = rootFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            + Path.DirectorySeparatorChar;
 
         // Strictly inside: a relative path that collapses to the root itself ("", ".", "..") means
         // the composition is broken, not that the write is legitimate.
