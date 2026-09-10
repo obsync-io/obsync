@@ -2,6 +2,147 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.14.1 - 2026-09-10
+
+**Guards that scale, and a hot path that stops paying for work it had already done.** Six parallel
+audits of the engine, the data layer, the desktop app, the git and SMO providers, the option surface
+and the scale limits. This release carries what they found in the first two categories: defects that
+produce a wrong or stuck outcome, and allocation on the paths that run once per object.
+
+No schema migration. Nothing to do on upgrade.
+
+Test suite: 1,462 → 1,479.
+
+### Fixed — the 100 MB guard counted characters, not bytes
+
+GitHub's limit is on the file, and UTF-8 encodes non-ASCII to two, three or four bytes each — so a
+script of forty million characters of Cyrillic or CJK is over a hundred megabytes on disk while
+passing the guard comfortably. It was then written, committed, and rejected on push, which wedges the
+branch for every later run: the exact outcome the guard exists to prevent, reached *through* it. The
+reported size was understated for the same reason. The object-inventory artifact was already counting
+bytes; the per-object path was not.
+
+### Fixed — deletions were suspended on every scheduled run of a large estate
+
+The mass-deletion circuit breaker's large-loss rule used a flat count of 100 objects. On the estates
+this product targets, losing more than a hundred tracked objects in a day is ordinary — one release
+retiring a staging schema does it — so the rule fired on essentially every scheduled run.
+
+The effect was the opposite of caution. Deletions were suspended daily, dropped objects kept their
+files in the repository indefinitely, the run reported Warning every day, and the remedy the warning
+offers is to use Run Now in the desktop app, which a headless service install does not have. A guard
+that always fires protects nothing and teaches people to ignore it.
+
+That rule is now proportional to the tracked estate, with the old count as a floor so small scopes
+are not made more permissive. The other three rules were already scale-free and still catch a total
+wipe at any size, a majority loss, and a whole-schema wipe — the signature of the schema-scoped
+`DENY` this guard was written for.
+
+### Fixed — a mature database could make the desktop app unstartable
+
+Run-history retention was one unbounded `DELETE`. Each deleted run cascades its logs and up to 50,000
+change rows, so pruning a month of history on a large estate was tens of millions of cascaded deletes
+in a single transaction, holding the only SQLite write lock throughout — every other writer waited on
+the busy timeout and then failed.
+
+It also ran *before the main window appeared*, inside the startup error handler. A prune that threw
+therefore became **"Obsync failed to start"**. It now deletes in bounded batches, runs after the
+window is up, and its failure is logged rather than fatal. Bounded deletion is also safer to
+interrupt: runs are independent, so a partial prune simply leaves less for the next pass.
+
+### Fixed — the proxy bypass list never reached git
+
+Bypass entries were applied to the .NET proxy, which governs the API client only. So the Add
+Repository dialog, the token check and the whole preflight honoured the bypass while every `clone`,
+`fetch` and `push` still went through the proxy, because git was handed a proxy URL unconditionally.
+The user saw a row of green ticks and then a failing run.
+
+Bypass entries are also compiled as **regular expressions**, and the setter throws on the first one
+that does not compile — on the run path. A single `*.corp.local`, which is what anyone would type,
+failed every run of every job. Invalid entries are now ignored with a warning that says how to write
+them.
+
+### Fixed — scheduling had no concurrency limit and no misfire policy
+
+Quartz's default pool allows ten concurrent jobs, and the natural configuration is "everything at
+02:00" — so ten databases could script, hash, write and commit simultaneously, each holding its own
+estate in memory and competing for one write lock. Capped at two.
+
+Cron triggers had no misfire instruction, so a run that outlasted its own interval was restarted the
+moment it finished, and again, permanently. Obsync already has a deliberate catch-up mechanism that
+fires exactly once per job; Quartz doing its own on top of that is what turned a slow night into a
+loop with no exit.
+
+### Fixed — a failed transfer reported progress instead of the error
+
+Introduced in 0.13.2 alongside the stall watchdog. Collapsing git's progress redraws assumed the
+carriage returns arrive within one line; .NET treats a carriage return as a **line terminator**, so
+each redraw arrives separately and the collapsing did nothing. Forcing `--progress` on therefore made
+a long transfer's captured output grow without bound, and the truncation kept the *head* of it — so
+on a failed large clone or push, the run's error message, the run log and support bundles carried
+thousands of transfer percentages and discarded git's `fatal:` line, which is written last.
+
+Progress redraws are now recognised by shape and dropped, the final `done.` line of each phase is
+kept, capture is bounded, and truncation keeps the tail.
+
+### Fixed — `git diff` ran on the two-minute budget
+
+`diff --cached --quiet` cannot short-circuit when nothing changed: it must compare every index entry
+against the `HEAD` tree. At a million files on a cold cache that exceeds the cheap budget, so it was
+killed, the run failed, state correctly did not advance, and the next run failed identically — the
+permanently-stuck job the tree-scale budget exists to prevent. `merge`, `rev-list`, `log` and `show`
+were added for the same reason.
+
+### Performance
+
+Every figure below is a micro-benchmark scaled to a million objects, not a measurement of a
+production run. The two largest are on the **unchanged** path — that is, on nearly every object of a
+steady-state run.
+
+| | Removed per million objects |
+|---|---|
+| Comparing a file against what was scripted allocated two full-size arrays, on what is the common path rather than a fallback (the bundled git checks files out with CRLF, so the fast byte comparison fails for every object) | **11.9 GB**, ~2.5 s |
+| Scripts encoded into a fresh array per object; anything over ~42,000 characters landed on the Large Object Heap | **~6 GB** |
+| Every scripted object's path was re-normalised against a root that never changes, twice per object | **0.6–1.25 GB**, 0.9–1.9 s |
+| A single unchanged object composed its state key **five** times; three were duplicates | **335 MB** allocated, 224 MB retained, 1.2 s |
+| The path sanitizer built a `StringBuilder` for every name, though almost no SQL object name contains an invalid filename character | **~306 MB**, 0.41 s |
+| The prior-state map held the full persisted row — nine fields a run never reads | **~112 MB** |
+| Schema names were materialised once per object on both sides; a large database has a handful of schemas | tens of MB |
+
+Also: the divergence sweep now runs across the same worker pool as scripting instead of
+single-threaded beside it, and stops early once every type is condemned; the tracking read no longer
+materialises the estate twice; the object-inventory manifest predicts its size before generating it
+rather than after; and SQLite gets 64 MB of page cache instead of 2 MB, against an index that runs to
+tens of megabytes of interior pages alone.
+
+Two of these were memory *ceilings* rather than costs. The SMO provider wrote into an unbounded
+channel, so the engine's backpressure stopped at the provider boundary and a slow consumer let the
+workers buffer the whole scripted database in memory. And the module queries carried an `ORDER BY`
+that no catalog index satisfies, forcing a blocking sort whose payload includes the definition column
+— so SQL Server had to buffer and sort gigabytes before the engine received its first object, on a
+provider written to stream.
+
+### Internal
+
+- The SMO prefetch gate priced its cost as bytes × objects × connections in its own comment but
+  compared only the object count — refusing 100,000 objects on one connection while permitting 12,500
+  across eight, which is the same memory. It is now a byte budget set to exactly what the old ceiling
+  permitted at maximum fan-out. Crossing it is also no longer silent: it measured about **4× slower**
+  and said nothing.
+- A workspace whose clone was interrupted could not repair itself; the health probe could not
+  distinguish a half-transferred clone from an unreachable remote.
+- The integration suite failed about one run in four, in a different unrelated test each time,
+  because fixtures disposed pooled database connections process-globally while other test classes
+  were still using them.
+
+### Known limits
+
+The database checklist keeps its ticks across the "sync all user databases" toggle, where they change
+meaning from *include* to *exclude*. The header and hint change with it, and the behaviour is
+deliberate — but when editing an existing dynamic-scope job the checklist is populated with only the
+excluded databases, so switching the toggle off leaves a list that does not offer the others. Reload
+the databases after switching scope.
+
 ## 0.14.0 - 2026-09-09
 
 **A skip now carries the conditions it depends on, and refuses to be used when one stops holding.**
