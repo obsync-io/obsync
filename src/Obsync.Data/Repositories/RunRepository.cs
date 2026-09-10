@@ -219,8 +219,16 @@ public sealed class RunRepository : IRunRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        // One transaction for the batch (one journal fsync total), and multi-row VALUES chunks so
-        // each command inserts LogChunkRows rows instead of paying a command round-trip per row.
+        // One transaction for the batch (one WAL fsync total), and multi-row VALUES chunks so each
+        // command inserts LogChunkRows rows instead of paying a command round-trip per row.
+        //
+        // Deliberately NOT bounded the way the object-state and run-change batches are. A run's log
+        // is a narrative — one entry per phase, per database, per warning — and the per-object
+        // reasons that could make it grow with the estate are aggregated into a single entry's
+        // detail rather than one row each. Even a bad run lands in the tens or low hundreds of rows,
+        // which is a single LogChunkRows statement and a lock window measured in microseconds. There
+        // is no lock window here to shrink, so splitting it would buy nothing and cost extra fsyncs
+        // on every run in the product. Revisit only if per-object rows ever land in this table.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         foreach (var chunk in logs.Chunk(LogChunkRows))
         {
@@ -283,12 +291,20 @@ public sealed class RunRepository : IRunRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        // One transaction for the batch — a VLDB first run records every object as an Added change,
-        // so this insert can carry hundreds of thousands of rows. Multi-row VALUES chunks keep it to
-        // one command per ChangeChunkRows rows instead of a command round-trip per row.
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var run = runId.ToString();
-        foreach (var chunk in changes.Chunk(ChangeChunkRows))
+
+        // Multi-row VALUES chunks (one command per ChangeChunkRows rows instead of a round-trip per
+        // row) inside BOUNDED transactions — a VLDB first run records every object as an Added
+        // change, and even after the engine's 50,000-row cap that is ten transaction segments' worth
+        // of write lock to hold in one go. See BoundedBatchWriter.
+        //
+        // Bounding is unconditionally safe for this table: run_changes is display and report detail
+        // for ONE run (History, the diff viewer, the exported report) and no tracking decision reads
+        // it — object_states is what the engine compares against. An interrupted batch therefore
+        // leaves a truncated change list on a run that was interrupted anyway, and that run is
+        // rewritten as Failed by orphaned-run recovery on the next host start. Nothing infers a sync
+        // result from these rows, so a short list cannot become a wrong one.
+        await BoundedBatchWriter.ExecuteAsync(connection, changes, ChangeChunkRows, chunk =>
         {
             var sql = chunk.Length == ChangeChunkRows ? FullChunkChangesSql : BuildChangesInsertSql(chunk.Length);
             var parameters = new DynamicParameters();
@@ -305,11 +321,8 @@ public sealed class RunRepository : IRunRepository
                 parameters.Add($"new{i}", change.NewHash);
             }
 
-            await connection.ExecuteAsync(new CommandDefinition(
-                sql, parameters, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
-        }
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return (sql, parameters);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ObjectChange>> GetChangesAsync(Guid runId, int limit = 0, CancellationToken cancellationToken = default)

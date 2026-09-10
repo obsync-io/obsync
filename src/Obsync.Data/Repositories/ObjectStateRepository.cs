@@ -32,15 +32,16 @@ public interface IObjectStateRepository
     Task UpsertAsync(TrackedObjectState state, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Upserts a batch on ONE connection inside ONE transaction. On a VLDB first run this persists
+    /// Upserts a batch on ONE connection, in bounded transactions. On a VLDB first run this persists
     /// hundreds of thousands of states — per-row connections/auto-commits would take longer than
-    /// the scripting itself.
+    /// the scripting itself, and one transaction for the whole batch would hold the database's
+    /// single write lock against every other writer for its entire duration.
     /// </summary>
     Task UpsertManyAsync(IReadOnlyCollection<TrackedObjectState> states, CancellationToken cancellationToken = default);
 
     Task DeleteAsync(long id, CancellationToken cancellationToken = default);
 
-    /// <summary>Deletes a batch of state rows in one transaction (mass-drop handling at VLDB scale).</summary>
+    /// <summary>Deletes a batch of state rows (mass-drop handling at VLDB scale).</summary>
     Task DeleteManyAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default);
 
     Task<int> CountAllAsync(CancellationToken cancellationToken = default);
@@ -149,6 +150,12 @@ public sealed class ObjectStateRepository : IObjectStateRepository
     /// </summary>
     internal const int UpsertChunkRows = 200;
 
+    /// <summary>
+    /// Ids per <c>DELETE ... WHERE id IN (...)</c> statement: one parameter each, so 500 is far
+    /// under the same 32,766-variable limit and keeps the expanded SQL text small.
+    /// </summary>
+    internal const int DeleteChunkIds = 500;
+
     private static string BuildUpsertSql(int rowCount)
     {
         var values = string.Join(",\n    ", Enumerable.Range(0, rowCount).Select(i =>
@@ -211,12 +218,44 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        // One transaction for the whole batch (SQLite pays the journal fsync once instead of once
-        // per row), and multi-row VALUES chunks so each command upserts UpsertChunkRows rows —
-        // per-row commands cost a Dapper prepare + SQLite round-trip each, which dominates a
-        // VLDB first run at hundreds of thousands of states.
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var chunk in states.Chunk(UpsertChunkRows))
+
+        // Multi-row VALUES chunks so each command upserts UpsertChunkRows rows — per-row commands
+        // cost a Dapper prepare + SQLite round-trip each, which dominates a VLDB first run at
+        // hundreds of thousands of states — inside BOUNDED transactions rather than one transaction
+        // spanning the batch. See BoundedBatchWriter for why the write lock has to be released
+        // periodically and how the row count was chosen.
+        //
+        // What an interrupted batch leaves behind, and why the next run repairs it:
+        //
+        //  * SyncEngine.PersistStatesAsync only calls this once the changeset has been DELIVERED
+        //    (commit pushed, or the pull request opened). Every hash written here therefore
+        //    describes content the repository ALREADY holds — a row in a committed segment is true,
+        //    a row that did not make it is merely absent or stale.
+        //
+        //  * The rows are independent: one per tracked object, keyed by identity. Nothing reads two
+        //    of them together and their order carries no meaning, so a prefix is as valid as the
+        //    whole.
+        //
+        //  * Watermarks are written AFTER this call (and after DeleteManyAsync), so an interrupted
+        //    batch can never leave a watermark ahead of the states it was meant to cover. That
+        //    ordering is what makes bounding safe here: a watermark is the ONLY thing that lets a
+        //    later run SKIP an object, and partial persistence therefore leaves the database behind
+        //    the repository, never ahead of it. No object is ever treated as unchanged when it is.
+        //
+        //  * So the next run re-scripts the objects whose rows were not written, finds a hash that
+        //    differs from (or has no) stored state, and records them as Modified/Added. It rewrites
+        //    the files with byte-identical content, git stages nothing, and CommitAndPushAsync's
+        //    "detected changes produced an identical git tree" branch marks the changeset delivered
+        //    — so PersistStatesAsync runs and finishes the write. It converges in one run.
+        //
+        //  * A row that was never written cannot cause a spurious deletion either: the deletion pass
+        //    only proposes deletions for objects that HAVE a state row.
+        //
+        // PersistStatesAsync is already a sequence of separate transactions (states, deletes,
+        // watermarks, quarantine — each on its own connection), so this introduces no new failure
+        // class. It makes the existing one finer-grained, and every extra checkpoint leaves LESS for
+        // the next run to redo.
+        await BoundedBatchWriter.ExecuteAsync(connection, states, UpsertChunkRows, chunk =>
         {
             // Full chunks reuse one cached SQL text so Dapper caches a single command shape.
             var sql = chunk.Length == UpsertChunkRows ? FullChunkUpsertSql : BuildUpsertSql(chunk.Length);
@@ -226,11 +265,8 @@ public sealed class ObjectStateRepository : IObjectStateRepository
                 AddUpsertParameters(parameters, chunk[i], i);
             }
 
-            await connection.ExecuteAsync(new CommandDefinition(
-                sql, parameters, transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
-        }
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return (sql, parameters);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
@@ -249,16 +285,22 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         }
 
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        // Chunked IN lists keep each statement well under SQLite's parameter limit.
-        foreach (var chunk in ids.Chunk(500))
-        {
-            await connection.ExecuteAsync(new CommandDefinition(
-                "DELETE FROM object_states WHERE id IN @ids;", new { ids = chunk },
-                transaction, cancellationToken: cancellationToken)).ConfigureAwait(false);
-        }
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        // Bounded transactions, for the same reason as UpsertManyAsync — a mass drop hands this the
+        // whole tracked population at once.
+        //
+        // The ids are independent, and a row that survives an interrupted batch is a tombstone for
+        // an object that is gone from SQL and whose file the delivered commit has already removed.
+        // The next run lists it as a deletion candidate again, DeleteRecordedFile finds the file
+        // already absent and skips it, git stages nothing, the "identical git tree" branch delivers
+        // the run, and the row is deleted for good. Committing partway is strictly BETTER than
+        // all-or-nothing here: fewer leftover candidates next run means the mass-deletion circuit
+        // breaker is less likely to read them as a suspicious disappearance and suspend them again.
+        await BoundedBatchWriter.ExecuteAsync(
+            connection, ids, DeleteChunkIds,
+            // Chunked IN lists keep each statement well under SQLite's parameter limit.
+            chunk => ("DELETE FROM object_states WHERE id IN @ids;", new { ids = chunk }),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<int> CountAllAsync(CancellationToken cancellationToken = default)

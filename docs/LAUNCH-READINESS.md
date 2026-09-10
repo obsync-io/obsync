@@ -50,9 +50,11 @@ internal AI build-prompt file removed from the public repo.
 Methodology: `tools/Obsync.Benchmark` drives the production engine (metadata providers → hashing →
 atomic writes → git commit) against generated workloads on a local SQL Server 2025 instance, with
 fully isolated state (temp `obsync.db`, temp workspaces, a local bare repository as the remote — no
-network noise). Workload mix: 60% procedures / 20% views / 20% functions (~1.5 KB realistic
-scripts), plus SMO-path tables and six hostile objects (an encrypted procedure and path-illegal
-names). Reports land in `artifacts/benchmarks/`.
+network noise). Workload mix: 60% procedures / 20% views / 20% functions, plus SMO-path tables and six hostile
+objects (an encrypted procedure and path-illegal names). The generated bodies averaged **~750 bytes**,
+not the ~1.5 KB previously stated here — real stored procedures run 2-10 KB, so any working-tree or
+repository size extrapolated from these runs is a floor rather than an estimate. The harness now
+takes `--object-bytes` so that can be measured instead of assumed. Reports land in `artifacts/benchmarks/`.
 
 Results (after-fix suite, commit `3384b5a`, 12 logical cores, local SQL Server 2025 Developer;
 reports: `bench-2000/10000/50000-20260710-*.md`):

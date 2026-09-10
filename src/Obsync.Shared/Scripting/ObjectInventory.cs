@@ -28,6 +28,24 @@ public static class ObjectInventoryWriter
     // post-hoc Replace that would copy the (potentially ~100 MB) document a second time.
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, NewLine = "\n" };
 
+    /// <summary>
+    /// Roughly how many bytes one entry adds to the manifest, for predicting the total size BEFORE
+    /// generating it.
+    /// </summary>
+    /// <remarks>
+    /// An entry is five indented JSON fields: type, schema, name, a repository path, and a
+    /// 64-character SHA-256. Past roughly 380,000 objects the manifest clears the size guard, and
+    /// without a prediction it is generated and thrown away on every single run — real time spent to
+    /// rediscover something the object count already implied.
+    /// <para>
+    /// This is an estimate and only needs to be good enough to avoid that pointless work, so callers
+    /// should apply it with a wide margin and let the exact guard decide anything close. It is pinned
+    /// against the real writer by a test, so the estimate and the artifact cannot drift apart
+    /// unnoticed.
+    /// </para>
+    /// </remarks>
+    public const int ApproximateBytesPerEntry = 250;
+
     public static string Serialize(string server, string database, IEnumerable<ObjectInventoryEntry> entries)
     {
         return JsonSerializer.Serialize(BuildDocument(server, database, entries), Options) + "\n";

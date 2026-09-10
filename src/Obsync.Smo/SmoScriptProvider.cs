@@ -27,18 +27,21 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
     /// </summary>
     internal const int MinItemsPerSlice = 32;
 
-    /// <summary>
-    /// Largest work list the partitioned path bulk-prefetches child metadata for. Prefetch caches
-    /// ~7 KB per table on EVERY slice connection (measured), so an unbounded 8-way prefetch of a
-    /// 100k-table database would hold multiple gigabytes; above the ceiling scripting stays lazy.
-    /// </summary>
-    internal const int PrefetchCeiling = 25_000;
-
     private readonly ILogger<SmoScriptProvider> _logger;
 
     public SmoScriptProvider(ILogger<SmoScriptProvider> logger) => _logger = logger;
 
     public ScriptingStrategy Strategy => ScriptingStrategy.Smo;
+
+    /// <summary>
+    /// Raised when a collection was too large to bulk-prefetch and the run fell back to lazy,
+    /// per-object metadata reads for it — the one thing about a VLDB sweep that used to be
+    /// invisible. This assembly has an <c>ILogger</c> and no access to the run log, so the caller
+    /// records it: subscribe for the duration of a run and write <see cref="SmoPrefetchLimit.Message"/>
+    /// as a run-log warning. The payload names its database, so a subscriber that outlives a single
+    /// database (this provider is a singleton) can still attribute the report.
+    /// </summary>
+    public event Action<SmoPrefetchLimit>? PrefetchLimitReached;
 
     private sealed record SmoTypeMap(
         Func<Database, IEnumerable> GetCollection,
@@ -137,10 +140,13 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
                 // already narrowed the list, and lazy loading per object is cheaper than bulk
                 // prefetching children for every table in the database.
                 //
-                // The ceiling applies here too. It did not, and this is the branch a narrow schema
-                // filter selects: ComputeSliceCount returns 1 below 32 selected objects, so a filter
-                // picking 20 tables out of 500k took the unbounded path and prefetched all 500k.
-                if (watermark is null && inCollection <= PrefetchCeiling)
+                // The budget applies here too. The ceiling it replaced did not, and this is the
+                // branch a narrow schema filter selects: ComputeSliceCount returns 1 below 32
+                // selected objects, so a filter picking 20 tables out of 500k took the unbounded
+                // path and prefetched all 500k. An empty work list is excluded for the same reason
+                // — prefetching a whole database to script nothing is pure waste, and reporting a
+                // budget refusal for a sweep that had no work would be noise.
+                if (work.Count > 0 && watermark is null && ShouldPrefetch(request, type, typeMap, inCollection, sliceCount: 1))
                 {
                     Prefetch(database, typeMap, options, type);
                 }
@@ -175,11 +181,10 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
             // watermark). A watermark-narrowed list scripts a handful of objects, and bulk-loading
             // children for every table in the database would cost more than the lazy loads saved.
             // Measured on 2,000 tables: 230s lazy → 54s prefetched (4.2×), at ~7 KB of cached
-            // child metadata per table PER SLICE — hence the ceiling: past ~25k tables the 8-way
-            // duplicated prefetch would hold gigabytes, so huge sweeps stay lazy (and slow) rather
-            // than risking memory; the startup log above sets that expectation.
+            // child metadata per table PER SLICE — which is why the budget below counts the slices
+            // as well as the objects: a sweep that fans out eight ways pays for eight copies.
             // Gated on the collection size, not the selected size: prefetch loads the former.
-            var prefetch = watermark is null && inCollection <= PrefetchCeiling;
+            var prefetch = watermark is null && ShouldPrefetch(request, type, typeMap, inCollection, sliceCount);
             await foreach (var raw in ScriptPartitionedAsync(
                 request, type, typeMap, names, sliceCount, prefetch, cancellationToken)
                 .ConfigureAwait(false))
@@ -402,6 +407,52 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
                 ? ["Schema", "Name", "IsSystemObject"]
                 : ["Schema", "Name"];
         server.SetDefaultInitFields(typeMap.HeavyClrType, fields);
+    }
+
+    /// <summary>
+    /// Decides whether this type's bulk prefetch fits the memory budget and, when it does not,
+    /// reports the refusal so the caller can put it in the run log.
+    ///
+    /// The refusal is the whole reason this method exists rather than an inline comparison. Prefetch
+    /// cannot be applied in slices: <c>Database.PrefetchObjects</c> has no overload that narrows it
+    /// to a subset, and the metadata it loads is pinned to the SMO objects for the life of the
+    /// connection with no release short of dropping the collection — so the choice really is all or
+    /// nothing per type per connection. Since it is a cliff, crossing it must at least be audible.
+    /// </summary>
+    private bool ShouldPrefetch(
+        ScriptRequest request, SqlObjectType type, SmoTypeMap typeMap, int inCollection, int sliceCount)
+    {
+        // Only the heavy types prefetch at all (Prefetch returns immediately for the rest), so a
+        // budget verdict on, say, a 500k-row Role collection would be a report about nothing.
+        if (typeMap.HeavyClrType is null)
+        {
+            return false;
+        }
+
+        if (SmoPrefetchBudget.Fits(inCollection, sliceCount))
+        {
+            return true;
+        }
+
+        var limit = new SmoPrefetchLimit(
+            request.Database, type, inCollection, sliceCount,
+            SmoPrefetchBudget.EstimateBytes(inCollection, sliceCount),
+            SmoPrefetchBudget.BudgetBytes,
+            SmoPrefetchBudget.MaxObjects(sliceCount));
+
+        _logger.LogWarning("{Message}", limit.Message);
+
+        try
+        {
+            PrefetchLimitReached?.Invoke(limit);
+        }
+        catch (Exception ex)
+        {
+            // Telling the caller about a slow path must never be the thing that fails the run.
+            _logger.LogDebug("Reporting the prefetch limit failed: {Message}", ex.Message);
+        }
+
+        return false;
     }
 
     private void Prefetch(Database database, SmoTypeMap typeMap, ScriptingOptions options, SqlObjectType type)

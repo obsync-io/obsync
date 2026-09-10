@@ -1,3 +1,4 @@
+using System.Text;
 using Obsync.Shared.Scripting;
 
 namespace Obsync.Shared.Tests;
@@ -83,5 +84,35 @@ public sealed class ObjectInventoryWriterTests
         await ObjectInventoryWriter.WriteAsync(streamed, "SRV", "SalesDB", entries);
 
         Assert.Equal(reference, streamed.ToArray());
+    }
+    /// <summary>
+    /// The size prediction must be measured against the REAL writer, not against an idea of it.
+    /// Past roughly 380,000 objects the manifest clears the size guard, and the prediction is what
+    /// stops it being generated and discarded on every run — so if the two drift apart, the product
+    /// either resumes doing the pointless work or starts refusing manifests it could have written.
+    /// </summary>
+    [Fact]
+    public void TheSizeEstimate_MatchesWhatTheWriterActuallyProduces()
+    {
+        const int count = 5_000;
+        var entries = Enumerable.Range(0, count).Select(i => new ObjectInventoryEntry(
+            "StoredProcedure",
+            "dbo",
+            $"usp_SomeReasonablyTypicalProcedureName_{i:D6}",
+            $"db/procedures/dbo.usp_SomeReasonablyTypicalProcedureName_{i:D6}.sql",
+            new string('a', 64))).ToList();
+
+        var actualBytesPerEntry =
+            Encoding.UTF8.GetByteCount(ObjectInventoryWriter.Serialize("server", "db", entries)) / (double)count;
+
+        // Wide, because it is an estimate used with a wide margin -- but tight enough that a change
+        // to the manifest's shape cannot pass unnoticed.
+        var ratio = ObjectInventoryWriter.ApproximateBytesPerEntry / actualBytesPerEntry;
+        Assert.True(
+            ratio is > 0.6 and < 1.6,
+            $"The writer produces {actualBytesPerEntry:N0} bytes per entry, but "
+            + $"ApproximateBytesPerEntry says {ObjectInventoryWriter.ApproximateBytesPerEntry}. Update the "
+            + "constant: the engine uses it to decide whether generating the manifest is worth attempting "
+            + "at all.");
     }
 }

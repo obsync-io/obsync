@@ -4,19 +4,64 @@ Audit date: 2026-07-15 · Harness: `tools/Obsync.Benchmark` (drives the REAL pip
 SMO providers → hashing → file writes → git commit — with fully isolated state and a local bare
 repository as the remote, so numbers include full git cost and zero network noise).
 
+> **Corrections, 2026-09-09.** Every measurement below is real and was left untouched. Three things
+> about them were stated wrongly or not at all, and the corrections apply to the addendum as well as
+> to the main table. They are listed here rather than only in place because each one changes how a
+> number should be read:
+>
+> 1. **Object size: ~750 bytes.** The workload generator emitted one fixed comment-padded body per
+>    type (a ~1 KB procedure, much smaller views and functions), which came out at **≈750 bytes per
+>    file** across the working tree — 35.9 MB over 50,207 files, measured below. Real stored
+>    procedures run 2-10 KB. Every size-derived figure here (working tree, `.git`, and any
+>    extrapolation to a VLDB repository) is therefore optimistic by roughly **3-10×**, and the
+>    hashing/normalization/write share of per-object cost is understated by the same factor.
+>    Throughput figures in objects/second are affected far less — the first scan is dominated by
+>    per-object catalog round trips, not by body size — but they are not independent of it either.
+>    The harness now takes `--object-bytes` (default 4,096) and records the measured average module
+>    size in each artifact; nothing below has been re-measured at a realistic size.
+> 2. **The divergence sweep and every push path were never exercised.** The harness hardcoded
+>    `CommitMode.LocalCommitOnly`, with no way to override it. `SyncEngine.DivergedTypes` — the sweep
+>    that reads and hashes *every tracked file* on *every* pull-request run — is gated on
+>    `CommitMode == PullRequest`, so it never ran here; LocalCommitOnly also never pushes. No number
+>    in this document covers pull-request mode, the divergence sweep, `git push`, or the head-branch
+>    recut/reconcile. The harness now takes `--mode local|direct|pr`.
+> 3. **The recorded artifacts state a workload they did not measure** — see the workload section.
+
 ## Environment
 
 - MOWNICA: Windows 11 Home (26200), 12 logical cores
 - SQL Server 2025 RTM-GDR (17.0.1125.2), local instance, Windows auth
 - git 2.50.1.windows.1; commit under test `4e5bbd8` (all audit fixes applied)
-- Mode: LocalCommitOnly (full commit cost; push excluded by design of the harness)
+- Mode: LocalCommitOnly (full commit cost). Push was **not** excluded by design — the harness had
+  the mode hardcoded with no override, so no other mode could be run. Corrected: `--mode`.
 
 ## Workload
 
-`ObsyncBench` database: **50,202 objects** — T-SQL modules (60% procedures / 20% views /
-20% functions), 100 tables (exercising the SMO path), plus hostile-name and encrypted objects.
-This is the audit's "thousands of objects" scale test; the product's stated VLDB target
-(hundreds of thousands) extrapolates from the same pipeline but was not run at that size here.
+`ObsyncBench` database: **50,202 objects scanned**, at roughly **750 bytes per object** (see the
+corrections above). Composed of T-SQL modules plus 100 tables (exercising the SMO path) and
+hostile-name/encrypted objects. This is the audit's "thousands of objects" scale test; the product's
+stated VLDB target (hundreds of thousands) extrapolates from the same pipeline but was not run at
+that size here.
+
+**What the recorded artifact says, and why it is wrong.** The generator was an idempotent *top-up*:
+it created only what was missing and never removed anything, so a request for 10,000 objects against
+a database that already held 50,000 scanned 50,000 while the artifact header still printed the
+request. `artifacts/benchmarks/bench-10000-20260715-185551.md` therefore carries
+"10,000 module objects (60% procs / 20% views / 20% functions), 100 tables" in its header and
+"50,202" in its Scanned column; the header is the request, and only the Scanned column describes the
+run. The same defect mislabels the whole `bench-10000-20260716-*` set, in both directions:
+`-014234.md` and `-015636.md` scanned **2,308** objects (the 2,000-table workload on the separate
+`ObsyncTblBench` database) under a header claiming 10,000 modules and 100 tables, while `-015810.md`
+and `-021544.md` scanned 50,202 under the same header. The addendum's own row labels ("2,000 tables
++ 300 modules", "50,202") describe what was actually scanned and are correct; the *file headers*
+behind them are not.
+
+Two consequences for this section as originally written: the estate's per-type composition is **not
+known** from the artifacts — "60% procedures / 20% views / 20% functions, 100 tables" describes the
+last *request*, not the 50,202 objects that were walked, which accumulated across successive top-up
+runs of differing sizes — and the artifact file names encode the request too. The harness now
+reports the counts read back from SQL Server before each suite, names the file after the measured
+count, and can rebuild the database to exactly the requested workload (`--reset-workload`).
 
 ## Results (report: `artifacts/benchmarks/bench-10000-20260715-185551.md`)
 
@@ -29,7 +74,9 @@ This is the audit's "thousands of objects" scale test; the product's stated VLDB
 | Cancellation probe (8 s in) | Cancelled | 2,087 | — | 0 | 8.2 s | — | 326 MB | — |
 
 Phase timing (full initial): scripting 460.5 s, first commit 126.0 s, repository preparation 0.6 s.
-Workspace after the suite: 50,207 files, 35.9 MB working tree, 20.1 MB `.git`.
+Workspace after the suite: 50,207 files, 35.9 MB working tree, 20.1 MB `.git` — **≈750 bytes per
+file**. At a realistic 2-10 KB per object the same 50k estate is roughly 100-500 MB of working tree,
+so read both figures as a floor, not as a projection.
 
 Notes:
 - The Warning statuses are **by design**: the workload contains deliberately unscriptable objects
@@ -83,6 +130,18 @@ Notes:
 5. Not measured here (bounded by environment): slow-network Git/GitHub behavior, low-memory and
    low-disk operation, and a true 500k-object VLDB run — see RELEASE_READINESS for the remaining
    human-gated items.
+6. Not measured here (bounded by the harness, until 2026-09-09): **pull-request mode in full** — the
+   `DivergedTypes` sweep that reads and hashes every tracked file on every PR run, the head-branch
+   recut from base, the head-branch reconcile, and `git push` in any mode. The sweep is the one
+   per-run cost that scales with the *tracked* estate rather than with the changed set, and its
+   in-code estimate (≈51 µs/file, ~1 minute per run at a million objects) has never been checked
+   against a measurement. The harness can now run it: `--mode pr` against the local bare remote
+   exercises the sweep, the recut, the reconcile and the push for real. Opening the pull request
+   itself cannot be done locally and is recorded by a local stand-in, so GitHub's REST latency and
+   its failure modes remain unmeasured.
+7. Object size: everything above was measured at ~750 bytes per object. Re-running the suite with
+   `--object-bytes 4096` (or higher) is the cheapest way to put real numbers behind the working-tree
+   and repository projections.
 
 ---
 
@@ -131,3 +190,9 @@ full-sweep self-heal semantics), per-type aggregate no-change short-circuit (che
 risk needs a conservative-fallback design), per-database parallelism (multiplies production SQL
 load; needs opt-in design), streaming pending-state to a staging table (touches the delivery-gate
 invariant), provider-stream overlap (subtle fault-teardown concurrency for a modest win).
+(4) **Added 2026-09-09:** the corrections at the top of this document apply to this table too. Every
+row was measured in LocalCommitOnly mode on ~750-byte objects, so none of it covers the divergence
+sweep, push, or pull-request mode, and none of it says anything about production-sized bodies. The
+row labels here are accurate; the artifact files behind them are the mislabelled
+`bench-10000-2026071*` set described in the Workload section — the "2,000 tables + 300 modules" rows
+come from files whose headers claim 10,000 modules and 100 tables.

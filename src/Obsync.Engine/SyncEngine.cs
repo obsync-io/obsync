@@ -850,29 +850,20 @@ public sealed class SyncEngine : ISyncEngine
         var skipped = new ConcurrentBag<string>();
         var ignoreRules = await LoadIgnoreRulesAsync(context, localPath, dbFolder, cancellationToken).ConfigureAwait(false);
 
-        // The self-heal existence probe for unchanged objects, batched: one directory enumeration
-        // per database pass instead of one File.Exists stat per tracked object (a violated-type
-        // full scan at VLDB scale otherwise pays ~1M NTFS stats). Lazy — incremental runs whose
-        // planner skipped everything never touch it. Rewrites are idempotent, so a file appearing
-        // mid-run can at worst cause one redundant write.
-        var existingFiles = new Lazy<HashSet<string>>(() =>
-        {
-            var dbRoot = ResolveOrThrow(localPath, dbFolder);
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (Directory.Exists(dbRoot))
-            {
-                var gitDir = $"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}";
-                foreach (var file in Directory.EnumerateFiles(dbRoot, "*", SearchOption.AllDirectories))
-                {
-                    if (!file.Contains(gitDir, StringComparison.OrdinalIgnoreCase))
-                    {
-                        set.Add(file);
-                    }
-                }
-            }
-
-            return set;
-        }, LazyThreadSafetyMode.ExecutionAndPublication);
+        // The self-heal existence probe for unchanged objects, batched per FOLDER: one directory
+        // enumeration per folder actually probed, instead of one File.Exists stat per tracked object
+        // (a violated-type full scan at VLDB scale otherwise pays ~1M NTFS stats).
+        //
+        // This used to hold one absolute path per file for the whole database, which is the wrong
+        // shape at the scale this product targets. It is also the structure a no-change run pays for
+        // and a first run does not, which is why steady-state memory measured HIGHER than the initial
+        // scrape (363 MB vs 439 MB peak working set at 50k objects). Storing file NAMES under their
+        // folder drops the repeated directory prefix — roughly 120 characters per object at typical
+        // path depths, against a ~35-character name — and only materialises folders that are
+        // actually probed.
+        //
+        // Rewrites are idempotent, so a file appearing mid-run can at worst cause one redundant write.
+        var existingFiles = new FolderFileIndex(ResolveOrThrow(localPath, dbFolder));
 
         // Snapshot the run counters so the docs artifact can tell whether THIS database changed
         // (databases are processed sequentially, so the delta is unambiguous).
@@ -1008,7 +999,7 @@ public sealed class SyncEngine : ISyncEngine
                 // modification was silently dropped from every later run while the job reported
                 // success. Comparing the bytes closes that, and also covers a file edited by hand in
                 // the repository, which Obsync should overwrite because it is the source of truth.
-                if (existingFiles.Value.Contains(absolutePath) && FileHasContent(absolutePath, scriptBytes))
+                if (existingFiles.Contains(absolutePath) && FileHasContent(absolutePath, scriptBytes))
                 {
                     return;
                 }
@@ -1205,6 +1196,25 @@ public sealed class SyncEngine : ISyncEngine
             seen.TryAdd(key, 0);
             try
             {
+                // Predict before building. The guard below is exact, but reaching it means the whole
+                // manifest has already been generated and hashed — and past roughly 380,000 objects
+                // it is generated and thrown away on EVERY run, spending real time to rediscover a
+                // fact that was knowable from the object count before a byte was written.
+                //
+                // The estimate only has to be good enough to avoid the pointless work, so it is
+                // deliberately conservative: it skips only when the projected size clears the limit
+                // by a wide margin, and anything close still goes through the exact guard. An
+                // underestimate therefore costs nothing but the generation that happens today.
+                var projected = (long)entries.Count * ObjectInventoryWriter.ApproximateBytesPerEntry;
+                if (projected > MaxScriptChars * 2)
+                {
+                    context.IncrementFailed();
+                    skipped.Add($"Generated file object-inventory — {entries.Count:N0} objects would produce "
+                        + $"roughly {projected / (1024 * 1024):N0} MB, and GitHub rejects files over 100 MB. "
+                        + "Split this database across repositories, or turn the manifest off for this job.");
+                    return;
+                }
+
                 string hash;
                 long byteLength;
                 using (var counting = new CountingHashStream())
@@ -1247,7 +1257,7 @@ public sealed class SyncEngine : ISyncEngine
                     // The gap this leaves is a manifest that exists but is stale, which the recut
                     // cannot produce — the recut removes the file outright — so it needs a file
                     // edited by hand in the repository to reach.
-                    if (existingFiles.Value.Contains(absolutePath))
+                    if (existingFiles.Contains(absolutePath))
                     {
                         return;
                     }
@@ -1479,7 +1489,10 @@ public sealed class SyncEngine : ISyncEngine
         if (context.Job.CommitMode == CommitMode.PullRequest)
         {
             var diverged = DivergedTypes(
-                prior, localPath, capableTypes, compareContent: context.Job.Selection.NormalizeScripts);
+                prior, localPath, capableTypes, compareContent: context.Job.Selection.NormalizeScripts,
+                maxWorkers: context.Job.Advanced.MaxParallelWorkers > 0
+                    ? context.Job.Advanced.MaxParallelWorkers
+                    : Environment.ProcessorCount);
             if (diverged.Count > 0)
             {
                 context.Log(SyncLogLevel.Warning,
@@ -1877,9 +1890,43 @@ public sealed class SyncEngine : ISyncEngine
                 ScriptingParallelism = Math.Min(8, workers),
             };
 
-            await foreach (var raw in provider.ScriptAsync(request, cancellationToken).ConfigureAwait(false))
+            // SMO cannot bulk-prefetch a collection past its memory budget, and scripting then falls
+            // back to reading each object's metadata individually — identical output, measured about
+            // four times slower on a 2,000-table sweep. That used to happen in complete silence: the
+            // run simply took far longer with nothing anywhere saying why, which is indistinguishable
+            // from the product being arbitrarily slow.
+            //
+            // The provider cannot say so itself (that assembly has an ILogger and no access to the
+            // run log), so it hands us a finished sentence to record. Subscribed around this
+            // enumeration rather than for process life, because the providers are DI singletons: a
+            // subscription left attached would report another database's prefetch into this run.
+            var smo = provider as SmoScriptProvider;
+            void OnPrefetchLimit(SmoPrefetchLimit limit)
             {
-                yield return raw;
+                if (string.Equals(limit.Database, database, StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Log(SyncLogLevel.Warning, limit.Message);
+                }
+            }
+
+            if (smo is not null)
+            {
+                smo.PrefetchLimitReached += OnPrefetchLimit;
+            }
+
+            try
+            {
+                await foreach (var raw in provider.ScriptAsync(request, cancellationToken).ConfigureAwait(false))
+                {
+                    yield return raw;
+                }
+            }
+            finally
+            {
+                if (smo is not null)
+                {
+                    smo.PrefetchLimitReached -= OnPrefetchLimit;
+                }
             }
         }
     }
@@ -2605,17 +2652,29 @@ public sealed class SyncEngine : ISyncEngine
     /// </remarks>
     private HashSet<SqlObjectType> DivergedTypes(
         Dictionary<string, TrackedObjectState> prior, string localPath, IReadOnlyList<SqlObjectType> capableTypes,
-        bool compareContent)
+        bool compareContent, int maxWorkers)
     {
         var capable = capableTypes.ToHashSet();
-        var diverged = new HashSet<SqlObjectType>();
+        var diverged = new ConcurrentDictionary<SqlObjectType, byte>();
 
-        foreach (var state in prior.Values)
+        // Parallel because the worst case here is the HEALTHY case, and it was single-threaded.
+        //
+        // The per-type early exit below means a genuinely diverged estate finishes almost at once —
+        // one missing file condemns its whole type and every later file of that type is skipped. It
+        // is when nothing has diverged that nothing short-circuits, and this reads and hashes every
+        // tracked file of every capable type. Measured at 51 microseconds per file, which is about a
+        // minute of wall clock per run at a million objects, on a pass that runs immediately before
+        // a scripting phase already fanned out across every core.
+        //
+        // Reading files is IO-bound and hashing is CPU-bound, so this scales with the same worker
+        // count the scripting phase uses rather than needing one of its own.
+        var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, maxWorkers) };
+        Parallel.ForEach(prior.Values, options, (state, loop) =>
         {
-            if (!capable.Contains(state.ObjectType) || diverged.Contains(state.ObjectType)
+            if (!capable.Contains(state.ObjectType) || diverged.ContainsKey(state.ObjectType)
                 || string.IsNullOrEmpty(state.FilePath) || string.IsNullOrEmpty(state.LastHash))
             {
-                continue;
+                return;
             }
 
             try
@@ -2623,13 +2682,13 @@ public sealed class SyncEngine : ISyncEngine
                 var absolute = ResolveOrThrow(localPath, state.FilePath);
                 if (!File.Exists(absolute))
                 {
-                    diverged.Add(state.ObjectType);
-                    continue;
+                    Condemn(state.ObjectType, loop);
+                    return;
                 }
 
                 if (!compareContent)
                 {
-                    continue;
+                    return;
                 }
 
                 // Normalized for the same reason as FileHasContent: a checked-out CRLF file hashes
@@ -2639,16 +2698,30 @@ public sealed class SyncEngine : ISyncEngine
                 var onDisk = NormalizeLineEndings(File.ReadAllBytes(absolute));
                 if (!string.Equals(_hasher.ComputeHash(onDisk), state.LastHash, StringComparison.OrdinalIgnoreCase))
                 {
-                    diverged.Add(state.ObjectType);
+                    Condemn(state.ObjectType, loop);
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 // Unreadable is not evidence of divergence; the run proceeds as before.
             }
-        }
+        });
 
-        return diverged;
+        return [.. diverged.Keys];
+
+        void Condemn(SqlObjectType type, ParallelLoopState loop)
+        {
+            diverged.TryAdd(type, 0);
+
+            // Every capable type is already condemned, so no further reading can change the answer.
+            // Without this the fully-diverged case — an unmerged pull request, where the recut has
+            // removed every proposed file — would keep reading to the end of the estate for a result
+            // that is already settled.
+            if (diverged.Count >= capable.Count)
+            {
+                loop.Stop();
+            }
+        }
     }
 
     /// <summary>
@@ -3177,6 +3250,67 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     /// <summary>Mutable per-run accumulator passed between the engine stages.</summary>
+    /// <summary>
+    /// Answers "does this file exist" for a database's tree, one folder at a time.
+    /// </summary>
+    /// <remarks>
+    /// Obsync's layout puts every object of a type in a single folder per database, so a probe is
+    /// always "is this NAME present in that folder". Enumerating a folder once and keeping its names
+    /// costs one directory read per folder touched, against one filesystem stat per object — and
+    /// keeps the repeated directory prefix out of memory, which at a million objects is the
+    /// difference between holding roughly 120 characters per object and roughly 35.
+    /// <para>
+    /// Folders are materialised on first probe and cached for the rest of the database pass. Probes
+    /// run concurrently across scripting workers, so the cache is concurrent and each folder is
+    /// enumerated exactly once even under a race.
+    /// </para>
+    /// </remarks>
+    private sealed class FolderFileIndex
+    {
+        private readonly ConcurrentDictionary<string, Lazy<HashSet<string>>> _folders =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly string _root;
+
+        public FolderFileIndex(string root) => _root = root;
+
+        public bool Contains(string absolutePath)
+        {
+            var folder = Path.GetDirectoryName(absolutePath);
+            if (folder is null)
+            {
+                return false;
+            }
+
+            var names = _folders.GetOrAdd(folder, key => new Lazy<HashSet<string>>(
+                () => Enumerate(key), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+            return names.Contains(Path.GetFileName(absolutePath));
+        }
+
+        private HashSet<string> Enumerate(string folder)
+        {
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Never enumerate git's own storage: a probe should not be able to walk into .git, and
+            // the destination folder can legitimately be the repository root.
+            var gitDir = $"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}";
+            if (folder.Contains(gitDir, StringComparison.OrdinalIgnoreCase)
+                || folder.EndsWith($"{Path.DirectorySeparatorChar}.git", StringComparison.OrdinalIgnoreCase)
+                || !folder.StartsWith(_root, StringComparison.OrdinalIgnoreCase)
+                || !Directory.Exists(folder))
+            {
+                return names;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.TopDirectoryOnly))
+            {
+                names.Add(Path.GetFileName(file));
+            }
+
+            return names;
+        }
+    }
+
     private sealed class RunContext
     {
         private readonly IProgress<SyncProgress>? _progress;
