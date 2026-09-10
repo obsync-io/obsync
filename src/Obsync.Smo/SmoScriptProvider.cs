@@ -206,8 +206,24 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
         IReadOnlyList<(string Schema, string Name)> work, int sliceCount, bool prefetch,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        // Unbounded is fine: items are strings the workers have already produced.
-        var channel = Channel.CreateUnbounded<RawScriptedObject>(new UnboundedChannelOptions { SingleReader = true });
+        // Bounded, because the engine's backpressure has to reach through here.
+        //
+        // This was unbounded, on the reasoning that the items are strings the workers have already
+        // produced. The flaw is what those strings ARE: each is an entire object's script, kilobytes
+        // to hundreds of kilobytes. The engine's own pipeline is deliberately bounded so that
+        // "memory stays flat for very large sources", but that backpressure stopped at this
+        // boundary — when the consumer slowed (writing and hashing a million files, with on-access
+        // antivirus, is slower than reading metadata), the slice workers kept running flat out and
+        // buffered everything not yet consumed. The ceiling was the whole scripted database in RAM.
+        //
+        // Four items per slice keeps every worker fed while it waits, without letting any of them
+        // run away from the consumer.
+        var channel = Channel.CreateBounded<RawScriptedObject>(
+            new BoundedChannelOptions(Math.Max(1, sliceCount) * 4)
+            {
+                SingleReader = true,
+                FullMode = BoundedChannelFullMode.Wait,
+            });
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = linkedCts.Token;
@@ -252,9 +268,21 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
             channel.Writer.Complete(failure);
         }, CancellationToken.None);
 
-        await foreach (var raw in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        // The finally is what makes bounding safe. With an unbounded channel a consumer that
+        // abandoned the enumeration early simply left the workers to finish into a buffer nobody
+        // read; with a bounded one they park forever inside WriteAsync, `completion` is never
+        // awaited, and their SMO connections leak for the life of the process. Cancelling on the way
+        // out releases them however the loop is left — break, exception, or disposal.
+        try
         {
-            yield return raw;
+            await foreach (var raw in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return raw;
+            }
+        }
+        finally
+        {
+            await linkedCts.CancelAsync().ConfigureAwait(false);
         }
 
         await completion.ConfigureAwait(false);

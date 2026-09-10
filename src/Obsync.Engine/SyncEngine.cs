@@ -970,11 +970,24 @@ public sealed class SyncEngine : ISyncEngine
                 return;
             }
 
-            // One UTF-8 encoding per object: the same bytes feed the content hash AND the file
-            // write (File.WriteAllTextAsync would encode the identical bytes a second time — the
-            // engine writes UTF-8 without BOM, exactly what the hasher consumes).
-            var scriptBytes = Encoding.UTF8.GetBytes(script);
-            var hash = _hasher.ComputeHash(scriptBytes);
+            // One UTF-8 encoding per object, into a POOLED buffer.
+            //
+            // The same bytes feed the content hash AND the file write (File.WriteAllTextAsync would
+            // encode them a second time — the engine writes UTF-8 without BOM, exactly what the
+            // hasher consumes). Allocating that array per object cost measured ~6 GB per million
+            // objects, and any script over roughly 42,000 characters produces an array above the
+            // 85 KB threshold and therefore lands on the LARGE OBJECT HEAP — which is not compacted
+            // and drags in gen2 collections. Wide tables and long procedures do that routinely.
+            //
+            // Renting means an unchanged object — the overwhelming majority of a steady-state run —
+            // allocates nothing here at all. The buffer is returned on every exit path, including
+            // the early return for an unchanged file and any exception, hence the try/finally.
+            var scriptBytes = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(script.Length));
+            try
+            {
+            var encoded = Encoding.UTF8.GetBytes(script, scriptBytes);
+            var scriptMemory = scriptBytes.AsMemory(0, encoded);
+            var hash = _hasher.ComputeHash(scriptMemory.Span);
             var repoRelativePath = RepositoryLayout.Combine(dbFolder, relativePath);
             var absolutePath = ResolveOrThrow(localPath, repoRelativePath);
 
@@ -1008,7 +1021,7 @@ public sealed class SyncEngine : ISyncEngine
                 // modification was silently dropped from every later run while the job reported
                 // success. Comparing the bytes closes that, and also covers a file edited by hand in
                 // the repository, which Obsync should overwrite because it is the source of truth.
-                if (existingFiles.Contains(absolutePath) && FileHasContent(absolutePath, scriptBytes))
+                if (existingFiles.Contains(absolutePath) && FileHasContent(absolutePath, scriptMemory.Span))
                 {
                     return;
                 }
@@ -1020,7 +1033,7 @@ public sealed class SyncEngine : ISyncEngine
                 changeType = ChangeType.Restored;
             }
 
-            await WriteFileAsync(context, localPath, repoRelativePath, scriptBytes, context.Job.LocalExportPath, dbFolder, relativePath, ct)
+            await WriteFileAsync(context, localPath, repoRelativePath, scriptMemory, context.Job.LocalExportPath, dbFolder, relativePath, ct)
                 .ConfigureAwait(false);
 
             switch (changeType)
@@ -1061,6 +1074,11 @@ public sealed class SyncEngine : ISyncEngine
                 LastRunId = run.Id,
                 LastStatus = RunStatus.Running,
             });
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(scriptBytes);
+            }
         }
 
         // An object a provider could not script (encrypted/CLR module, SMO failure) is recorded as a
@@ -1667,8 +1685,15 @@ public sealed class SyncEngine : ISyncEngine
             GuardAgainstCaseTwin(identitiesSeen, key, identity, "The server scope");
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
-            var scriptBytes = Encoding.UTF8.GetBytes(script);
-            var hash = _hasher.ComputeHash(scriptBytes);
+            // Pooled, exactly as the database pass encodes. Server scope is small by comparison,
+            // but the same reasoning applies and keeping the two paths identical is what stops one
+            // of them quietly regressing.
+            var scriptBytes = ArrayPool<byte>.Shared.Rent(Encoding.UTF8.GetMaxByteCount(script.Length));
+            try
+            {
+            var encoded = Encoding.UTF8.GetBytes(script, scriptBytes);
+            var scriptMemory = scriptBytes.AsMemory(0, encoded);
+            var hash = _hasher.ComputeHash(scriptMemory.Span);
             var repoRelativePath = RepositoryLayout.Combine(serverRoot, relativePath);
             var absolutePath = ResolveOrThrow(localPath, repoRelativePath);
 
@@ -1684,7 +1709,7 @@ public sealed class SyncEngine : ISyncEngine
                 // there and is not enough here — a file left stale by a pull request that closed
                 // unmerged, or edited by hand in the repository, must be overwritten from the
                 // server, which is the source of truth.
-                if (File.Exists(absolutePath) && FileHasContent(absolutePath, scriptBytes))
+                if (File.Exists(absolutePath) && FileHasContent(absolutePath, scriptMemory.Span))
                 {
                     return;
                 }
@@ -1692,7 +1717,7 @@ public sealed class SyncEngine : ISyncEngine
                 changeType = ChangeType.Restored;
             }
 
-            await WriteFileAsync(context, localPath, repoRelativePath, scriptBytes, context.Job.LocalExportPath, serverRoot, relativePath, ct)
+            await WriteFileAsync(context, localPath, repoRelativePath, scriptMemory, context.Job.LocalExportPath, serverRoot, relativePath, ct)
                 .ConfigureAwait(false);
 
             switch (changeType)
@@ -1733,6 +1758,11 @@ public sealed class SyncEngine : ISyncEngine
                 LastRunId = run.Id,
                 LastStatus = RunStatus.Running,
             });
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(scriptBytes);
+            }
         }
 
         // A server object the provider could not script is recorded as a skip, never silently
@@ -2602,7 +2632,7 @@ public sealed class SyncEngine : ISyncEngine
     /// Any I/O failure answers "no": rewriting a file we could not read is harmless and idempotent,
     /// whereas skipping one we could not verify is the loss this exists to prevent.
     /// </remarks>
-    private static bool FileHasContent(string absolutePath, byte[] expected)
+    private static bool FileHasContent(string absolutePath, ReadOnlySpan<byte> expected)
     {
         try
         {
@@ -3022,7 +3052,7 @@ public sealed class SyncEngine : ISyncEngine
     }
 
     private static async Task WriteFileAsync(
-        RunContext context, string localPath, string repoRelativePath, byte[] utf8Content,
+        RunContext context, string localPath, string repoRelativePath, ReadOnlyMemory<byte> utf8Content,
         string? localExportRoot, string dbFolder, string relativePath, CancellationToken cancellationToken)
     {
         var absolute = ResolveOrThrow(localPath, repoRelativePath);
@@ -3046,7 +3076,8 @@ public sealed class SyncEngine : ISyncEngine
     /// a hard process kill between write and rename. Takes the already-encoded UTF-8 bytes (no BOM)
     /// so the hot path encodes each script exactly once — for the hash and this write.
     /// </summary>
-    private static async Task WriteAtomicAsync(string absolute, byte[] utf8Content, CancellationToken cancellationToken)
+    private static async Task WriteAtomicAsync(
+        string absolute, ReadOnlyMemory<byte> utf8Content, CancellationToken cancellationToken)
     {
         var temp = absolute + ".obsync-tmp";
         try

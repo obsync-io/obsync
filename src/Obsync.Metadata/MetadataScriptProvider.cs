@@ -96,7 +96,20 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         AppendSchemaFilter(sql, "s.name", request.Selection.SchemaFilter);
         var watermark = IncrementalWatermark(request, type);
         AppendWatermarkFilter(sql, "o.modify_date", watermark);
-        sql.Append(" ORDER BY s.name, o.name;");
+        // No ORDER BY, deliberately.
+        //
+        // No catalog index provides (schema name, object name) order across sys.objects joined to
+        // sys.schemas, so ordering forces a Sort -- and Sort is a BLOCKING operator whose payload
+        // here includes the nvarchar(max) definition column. At half a million modules averaging a
+        // few kilobytes, SQL Server had to read, buffer and sort gigabytes through a memory grant
+        // (and spill it to tempdb when the grant was under-estimated, which is routine for MAX
+        // types) BEFORE the engine received its first object. This provider is written to stream and
+        // at scale it did not.
+        //
+        // Nothing downstream depends on the order: each object is written to its own file and
+        // compared against its own stored hash, so determinism comes from the repository layout
+        // rather than from the sequence rows arrive in.
+        sql.Append(";");
 
         await using var command = CreateCommand(connection, sql.ToString(), request);
         for (var i = 0; i < typeCodes.Length; i++)
@@ -149,7 +162,20 @@ public sealed class MetadataScriptProvider : IObjectScriptProvider
         // sys.triggers.modify_date carries the same catalog value as sys.objects.modify_date.
         var watermark = IncrementalWatermark(request, SqlObjectType.Trigger);
         AppendWatermarkFilter(sql, "t.modify_date", watermark);
-        sql.Append(" ORDER BY ps.name, t.name;");
+        // No ORDER BY, deliberately.
+        //
+        // No catalog index provides (schema name, object name) order across sys.objects joined to
+        // sys.schemas, so ordering forces a Sort -- and Sort is a BLOCKING operator whose payload
+        // here includes the nvarchar(max) definition column. At half a million modules averaging a
+        // few kilobytes, SQL Server had to read, buffer and sort gigabytes through a memory grant
+        // (and spill it to tempdb when the grant was under-estimated, which is routine for MAX
+        // types) BEFORE the engine received its first object. This provider is written to stream and
+        // at scale it did not.
+        //
+        // Nothing downstream depends on the order: each object is written to its own file and
+        // compared against its own stored hash, so determinism comes from the repository layout
+        // rather than from the sequence rows arrive in.
+        sql.Append(";");
 
         await using var command = CreateCommand(connection, sql.ToString(), request);
         AddSchemaFilterParameters(command, request.Selection.SchemaFilter);
