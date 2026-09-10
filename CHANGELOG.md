@@ -2,6 +2,147 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.14.0 - 2026-09-09
+
+**A skip now carries the conditions it depends on, and refuses to be used when one stops holding.**
+Seven defects were found and fixed over the previous releases. Read together they were not seven
+bugs but **one gap, seven times**: incremental scripting caches a belief — *this object has not
+changed, so do not script it, do not hash it, do not look at its file* — and that belief rested on
+five assumptions, none of them written down and none of them checked.
+
+This release names all five and makes four of them checkable. The fifth is unchanged and measured
+rather than guessed (see below).
+
+**Upgrading:** three schema migrations (V015-V017) run on first start. Existing watermarks are
+adopted rather than invalidated, so the first run after upgrading is not a full scan.
+
+Test suite: 1,419 → 1,462.
+
+### Fixed — a restored or refreshed database was scripted as though nothing had changed
+
+`modify_date` travels with the database. A restore from backup, or a prod-to-UAT refresh, moves
+every value **backwards** — below a watermark already persisted. Every affected object was then
+"older than the watermark", so it was skipped with no file read and no hash check, while the job
+reported *No changes* and the repository held the wrong scripts.
+
+It was worse than a permanent skip. The next watermark was the snapshot's maximum, computed from an
+empty dictionary and persisted by blind upsert — so the restored database quietly rewrote the
+watermark **down** to its own maximum, erasing the evidence on the very run that should have caught
+it. Objects between the two values were re-read the run after; everything below the new maximum,
+which is nearly the whole estate, stayed skipped indefinitely.
+
+Each watermark now records **which object's `modify_date` set it**. If that object is still present
+and its date has moved backwards, the type is scanned in full and re-baselined. Backwards, not
+merely changed: the newest object is the one most likely to be edited next, so invalidating on
+"changed" would fire on almost every run. If the object is gone, the type's maximum decides instead
+— which cannot tell a restore from a dropped object, and so errs toward the full scan. A trusted
+watermark can also no longer move down at all; it lowers only when it has been invalidated, which is
+exactly when the type was scanned in full and the lower value is the truthful one.
+
+### Fixed — changing what Obsync emits left every skipped object's file stale forever
+
+A watermark asserts that everything older than it is already scripted correctly. That is only true
+while Obsync would still emit the same bytes. Nothing recorded what produced them, so nothing could
+notice when it changed — and a planned skip never reads the file it is vouching for.
+
+The failure was quiet and permanent: after a release that changed emitted output, or after a job
+setting was toggled, objects that happened to change later were rewritten in the new format and
+objects that did not kept their old-format file **forever**, while the job reported *No changes*
+throughout. A repository-layout change was worse still — stale-path cleanup only runs for objects
+that reach the write path, so a skipped object kept its **old file alongside the new one**.
+
+Each watermark now carries a fingerprint of everything that decides emitted bytes: the normalizer's
+format, the repository layout, the emission-affecting job settings, the SMO option set, and **the
+SMO library version** — which can change output with no change to this codebase at all. A type whose
+fingerprint no longer matches is scanned in full once and re-stamped, and says so in the run log.
+
+The inputs are hand-curated, so two tests keep the curation honest rather than trusting it: one
+fails when a setting is added without being classified, the other pins the SMO option set.
+
+### Fixed — one unscriptable object held its whole type back forever
+
+A skip of an object that has prior state blocks its type's watermark from advancing. That is right
+for a transient failure and a trap for a permanent one. A procedure later altered `WITH ENCRYPTION`,
+or a table SMO cannot script, has a `modify_date` above the frozen watermark — so it was re-streamed
+every run, yielded as unscriptable every run, and re-froze the watermark every run. The loop had no
+exit: every object of that type modified since the freeze was re-scripted on every later run, and
+that set only grows. The run also escalated to Warning forever, which trains people to ignore the
+colour.
+
+At the moment of the skip a transient failure and a permanent one are identical. The difference is
+only visible over time, so that is what is now recorded: an object skipped **again**, for the same
+reason, at the same `modify_date`, stops holding its type back. Nothing is lost — the watermark
+advances past it, the planner then treats it as an ordinary unchanged object, and its last good file
+is retained. It is attempted again the moment its `modify_date` changes, and its record is deleted
+once it scripts.
+
+Quarantined objects no longer escalate a run to Warning. They are reported once, with the reason and
+how long it has been true.
+
+### Fixed — a withheld type was filtered as though it were not
+
+A type withheld because the branch diverged is withheld precisely so it gets scanned in **full**.
+Filterability was derived from the stored watermark keys, which are written as upserts and never
+deleted, so the type the engine had just decided to re-scan was filtered *harder* than usual: its
+unchanged objects never reached the engine, were never marked seen, and the deletion pass read every
+one of them as dropped.
+
+Fixed on `main` before this release. The planner now takes the set of types being scanned and derives
+filterability from it, so the shape is no longer expressible rather than merely no longer occurring.
+
+### Changed — the second run is now the first incremental one
+
+Watermarks were staged only inside the incremental planner, and the planner was gated on there being
+prior state. So run 1 stored nothing, run 2 was a full scrape whose only product was the first
+watermarks, and **run 3** was the earliest run that could skip anything. On a large estate that is an
+entire wasted scrape. The snapshot is now taken on the first run too — one catalog query on a run
+that is already scripting everything.
+
+### Performance
+
+- **Memory.** The self-heal existence probe held one absolute path per file for the whole database —
+  the structure a no-change run pays for and a first run does not, which is why steady-state peak
+  memory measured *higher* than the initial scrape (439 MB against 363 MB at 50,202 objects). It now
+  keeps file names under their folder and materialises a folder on first probe.
+- **Divergence.** The pull-request divergence sweep ran single-threaded immediately before a
+  scripting phase that fans out across every core. It now uses the same worker count, and stops early
+  once every type is condemned instead of reading to the end of the estate for a settled answer.
+- **Object inventory.** Past roughly 380,000 objects the manifest clears the size guard, and was
+  generated and discarded on every run to rediscover it. The size is now projected from the object
+  count first.
+- **SMO prefetch.** The prefetch gate priced its cost as bytes × objects × connections in its own
+  comment but only ever compared the count — refusing 100,000 objects on one connection while
+  allowing 12,500 across eight, which is the same memory. It is now a byte budget set to exactly what
+  the old ceiling permitted at maximum fan-out: unchanged at eight-way, roughly 200,000 objects on a
+  single connection. Crossing it is also no longer silent; it measured about **4× slower** and said
+  nothing.
+- **State writes.** Persisting hundreds of thousands of rows in one transaction held SQLite's write
+  lock for its whole duration. Readers were never affected (WAL), but every other *writer* — a second
+  job, the scheduler, the CLI — waited on the busy timeout and then failed. Large writes now commit
+  every 5,000 rows and leave the lock genuinely free at each boundary.
+
+### Internal
+
+- Migrations **V015** (watermark fingerprint), **V016** (watermark sentinel), **V017** (quarantine).
+- A spike measured the proposal to replace the divergence sweep with git tree-id comparison:
+  `rev-parse <ref>:<path>` does not scale with estate size (24.3 ms at 24,000 files, 18.9 ms at
+  70,000) and `diff --name-only` gives object rather than type granularity. It is **not** adopted
+  here — a tree id describes the commit, not the working tree, so it cannot answer the missing-file
+  question that stops a partial proposal shipping. Recorded in `docs/product-improvements/`.
+- The benchmark harness could not measure most of the above: commit mode was hardcoded to the one
+  mode where the divergence sweep does not run, and the workload generator's top-up meant artifacts
+  reported the request rather than what was scanned. Both fixed; the performance report keeps its
+  measurements and gains the caveats they needed.
+- The integration suite failed about one run in four, in a different unrelated test each time,
+  because fixtures disposed pooled database connections process-globally while other test classes
+  were still using them.
+
+### Known limits
+
+An object that Obsync scripted before and can no longer script now costs one run's watermark rather
+than every run's. The `.obsyncignore` guidance for such objects was wrong in both halves and has been
+corrected — it never reached the code path that records a skip.
+
 ## 0.13.2 - 2026-09-09
 
 **Three ways a large estate could not be delivered, and one way it was told it had failed.** Found

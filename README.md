@@ -14,7 +14,7 @@ The entire product is built around one clean concept — the **Sync Job**:
 
 ## Status
 
-Actively maintained. The current release is **v0.9.0** — download the MSI from
+Actively maintained. The current release is **v0.14.0** — download the MSI from
 **[Releases](https://github.com/obsync-io/obsync/releases)**, or build it yourself (see
 [Installing](#installing)). See [CHANGELOG.md](CHANGELOG.md) for what shipped in each version and
 the [issue tracker](https://github.com/obsync-io/obsync/issues) for what is planned.
@@ -160,12 +160,14 @@ and leaves state untouched — the next run re-detects everything the cancelled 
   scripting they are captured by the every-run `permissions.sql`/security-review artifacts rather
   than the object's own file until it next changes.
 - An object that Obsync scripted successfully in the past and can no longer script — a procedure
-  later altered `WITH ENCRYPTION`, a table SMO cannot handle — **holds its object type's incremental
-  watermark at the last run that scripted it**. Every object of that type modified since is then
-  re-scripted on every run, and the run reports Warning. `.obsyncignore` does not release it: ignore
-  rules are consulted when planning and when writing, not when recording a skip. Drop the object,
-  remove the encryption, or accept the reduced incremental benefit for that type.
-  (An object that was *never* scriptable costs nothing — it is recognised and excluded.)
+  later altered `WITH ENCRYPTION`, a table SMO cannot handle — holds its object type's incremental
+  watermark back for **one run**. Seen a second time, unchanged and failing for the same reason, it
+  is recorded as known-unscriptable: it stops holding the type back, its last scripted file is kept,
+  and the run no longer reports Warning for it. It is attempted again as soon as its `modify_date`
+  changes. (An object that was *never* scriptable costs nothing — it is recognised and excluded.)
+- A database restored from backup, or refreshed from another environment, moves every `modify_date`
+  backwards. Obsync detects this and re-scans the affected object types in full once, which is
+  slower than a normal run and is reported in the run log.
 - Objects of one type share a single folder per database (`procedures/`, `tables/`, …). Past roughly
   100,000 files in one folder, GitHub stops rendering the directory listing and both NTFS
   enumeration and git's untracked scan slow noticeably. This layout is deliberate and stable —
