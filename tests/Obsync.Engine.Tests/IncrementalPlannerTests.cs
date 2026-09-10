@@ -19,10 +19,10 @@ public sealed class IncrementalPlannerTests
         SqlObjectType type, string name, DateTime modifyDate, string schema = "dbo") =>
         new(type, schema, name, modifyDate);
 
-    private static Dictionary<string, TrackedObjectState> Prior(params ModifiedObjectSnapshotItem[] items) =>
+    private static Dictionary<string, TrackedObjectSnapshot> Prior(params ModifiedObjectSnapshotItem[] items) =>
         items.ToDictionary(
             i => $"{(int)i.Type}|{i.Schema}|{i.Name}",
-            i => new TrackedObjectState
+            i => new TrackedObjectSnapshot
             {
                 ObjectType = i.Type,
                 SchemaName = i.Schema,
@@ -50,7 +50,7 @@ public sealed class IncrementalPlannerTests
     /// </summary>
     private static IncrementalPlan Plan(
         IReadOnlyList<ModifiedObjectSnapshotItem> snapshot,
-        IReadOnlyDictionary<string, TrackedObjectState> prior,
+        IReadOnlyDictionary<string, TrackedObjectSnapshot> prior,
         IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> watermarks,
         Func<SqlObjectType, string, string, bool> isIgnored) =>
         IncrementalPlanner.Plan(
@@ -113,7 +113,7 @@ public sealed class IncrementalPlannerTests
 
         var plan = Plan(
             [ignored],
-            new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, TrackedObjectSnapshot>(StringComparer.OrdinalIgnoreCase),
             Watermarks(SqlObjectType.Table),
             (_, _, name) => name == "Ignored");
 
@@ -271,7 +271,7 @@ public sealed class IncrementalPlannerTests
                 Item(SqlObjectType.Table, "B", Newer),
                 Item(SqlObjectType.View, "C", Watermark),
             ],
-            new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, TrackedObjectSnapshot>(StringComparer.OrdinalIgnoreCase),
             new Dictionary<SqlObjectType, ScriptingWatermark>(),
             NotIgnored);
 
@@ -285,7 +285,7 @@ public sealed class IncrementalPlannerTests
     {
         var plan = Plan(
             [],
-            new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, TrackedObjectSnapshot>(StringComparer.OrdinalIgnoreCase),
             Watermarks(SqlObjectType.Synonym),
             NotIgnored);
 
@@ -360,7 +360,7 @@ public sealed class IncrementalPlannerTests
 
         var plan = IncrementalPlanner.Plan(
             [item],
-            new Dictionary<string, TrackedObjectState>(),
+            new Dictionary<string, TrackedObjectSnapshot>(),
             new Dictionary<SqlObjectType, ScriptingWatermark>(),
             IncrementalPlanner.CapableTypes,
             Fingerprint,

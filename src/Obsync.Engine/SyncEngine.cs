@@ -826,7 +826,7 @@ public sealed class SyncEngine : ISyncEngine
         // Export Only writes a full snapshot: an empty prior map makes every object "Added" (so all
         // are written), the deletion pass a no-op, and no object_states are consulted.
         var prior = fullSnapshot
-            ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
+            ? new Dictionary<string, TrackedObjectSnapshot>(StringComparer.OrdinalIgnoreCase)
             : BuildPriorMap(
                 await _objectStates.GetTrackingStatesAsync(context.Job.Id, database, cancellationToken).ConfigureAwait(false),
                 database);
@@ -1454,7 +1454,7 @@ public sealed class SyncEngine : ISyncEngine
     /// </summary>
     private async Task<IReadOnlyDictionary<SqlObjectType, DateTime>?> PlanIncrementalAsync(
         RunContext context, string database, IReadOnlyList<SqlObjectType> types,
-        Dictionary<string, TrackedObjectState> prior,
+        Dictionary<string, TrackedObjectSnapshot> prior,
         ConcurrentDictionary<string, byte> seen, ConcurrentBag<ObjectInventoryEntry> inventory,
         IgnoreRules ignoreRules, string localPath, Dictionary<string, DateTime> snapshotDates,
         CancellationToken cancellationToken)
@@ -1628,7 +1628,7 @@ public sealed class SyncEngine : ISyncEngine
         var serverRoot = context.Job.DestinationFolder;
 
         var prior = fullSnapshot
-            ? new Dictionary<string, TrackedObjectState>(StringComparer.OrdinalIgnoreCase)
+            ? new Dictionary<string, TrackedObjectSnapshot>(StringComparer.OrdinalIgnoreCase)
             : BuildPriorMap(
                 await _objectStates.GetTrackingStatesAsync(context.Job.Id, RepositoryLayout.ServerScopeName, cancellationToken).ConfigureAwait(false),
                 "The server scope");
@@ -2004,7 +2004,7 @@ public sealed class SyncEngine : ISyncEngine
     /// </summary>
     private async Task GenerateDocumentationAsync(
         RunContext context, string database, IReadOnlyList<ObjectInventoryEntry> inventory,
-        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen,
+        Dictionary<string, TrackedObjectSnapshot> prior, ConcurrentDictionary<string, byte> seen,
         int changesBeforeDatabase,
         Func<ScriptedObjectIdentity, string, string, CancellationToken, Task> apply, CancellationToken cancellationToken)
     {
@@ -2112,7 +2112,7 @@ public sealed class SyncEngine : ISyncEngine
 
     private static void ApplyDeletions(
         RunContext context, RunTrigger trigger, string database, string localPath,
-        Dictionary<string, TrackedObjectState> prior, ConcurrentDictionary<string, byte> seen,
+        Dictionary<string, TrackedObjectSnapshot> prior, ConcurrentDictionary<string, byte> seen,
         IReadOnlyCollection<SqlObjectType> scopedTypes)
     {
         if (!context.Job.Selection.RemoveDroppedObjects)
@@ -2121,13 +2121,13 @@ public sealed class SyncEngine : ISyncEngine
         }
 
         var typesInScope = scopedTypes as IReadOnlySet<SqlObjectType> ?? scopedTypes.ToHashSet();
-        var candidates = new List<TrackedObjectState>();
+        var candidates = new List<TrackedObjectSnapshot>();
 
         // The population the breaker reasons about: prior rows this run COULD legitimately have
         // re-seen. Using prior.Count as the denominator instead counted rows the run was never
         // going to touch (a deselected type, a synthetic artifact), which diluted the ratio and made
         // the safety stop progressively harder to trip the more types a job had deselected.
-        var inScope = new List<TrackedObjectState>();
+        var inScope = new List<TrackedObjectSnapshot>();
         foreach (var (key, state) in prior)
         {
             // A prior row whose type was not part of this run's selection is out of scope, not
@@ -2290,7 +2290,7 @@ public sealed class SyncEngine : ISyncEngine
     /// </list>
     /// </remarks>
     internal static string? DisappearanceLooksLikeLostVisibility(
-        IReadOnlyCollection<TrackedObjectState> candidates, IReadOnlyCollection<TrackedObjectState> inScope)
+        IReadOnlyCollection<TrackedObjectSnapshot> candidates, IReadOnlyCollection<TrackedObjectSnapshot> inScope)
     {
         if (candidates.Count == 0)
         {
@@ -2651,7 +2651,7 @@ public sealed class SyncEngine : ISyncEngine
     /// diverged on every run.</para>
     /// </remarks>
     private HashSet<SqlObjectType> DivergedTypes(
-        Dictionary<string, TrackedObjectState> prior, string localPath, IReadOnlyList<SqlObjectType> capableTypes,
+        Dictionary<string, TrackedObjectSnapshot> prior, string localPath, IReadOnlyList<SqlObjectType> capableTypes,
         bool compareContent, int maxWorkers)
     {
         var capable = capableTypes.ToHashSet();
@@ -3077,7 +3077,7 @@ public sealed class SyncEngine : ISyncEngine
 
     internal static string StateKey(ScriptedObjectIdentity identity) => $"{(int)identity.Type}|{identity.Schema}|{identity.Name}";
 
-    private static string StateKey(TrackedObjectState state) => $"{(int)state.ObjectType}|{state.SchemaName}|{state.ObjectName}";
+    private static string StateKey(TrackedObjectSnapshot state) => $"{(int)state.ObjectType}|{state.SchemaName}|{state.ObjectName}";
 
     /// <summary>
     /// Builds the prior-state lookup, failing with an actionable message when a case-sensitive
@@ -3086,10 +3086,10 @@ public sealed class SyncEngine : ISyncEngine
     /// pair cannot be tracked distinctly; without this check the duplicate key surfaced as an
     /// opaque crash on every run.
     /// </summary>
-    private static Dictionary<string, TrackedObjectState> BuildPriorMap(
-        IReadOnlyList<TrackedObjectState> states, string scope)
+    private static Dictionary<string, TrackedObjectSnapshot> BuildPriorMap(
+        IReadOnlyList<TrackedObjectSnapshot> states, string scope)
     {
-        var map = new Dictionary<string, TrackedObjectState>(states.Count, StringComparer.OrdinalIgnoreCase);
+        var map = new Dictionary<string, TrackedObjectSnapshot>(states.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var state in states)
         {
             if (!map.TryAdd(StateKey(state), state))

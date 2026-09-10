@@ -15,7 +15,7 @@ public interface IObjectStateRepository
     /// database pass — at VLDB scale the display-only columns of the wide row (timestamps, commit
     /// SHA, status, error text) roughly double the resident memory for data the engine never reads.
     /// </summary>
-    Task<IReadOnlyList<TrackedObjectState>> GetTrackingStatesAsync(
+    Task<IReadOnlyList<TrackedObjectSnapshot>> GetTrackingStatesAsync(
         Guid jobId, string database, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -77,7 +77,7 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         return [.. rows.Select(Map)];
     }
 
-    public async Task<IReadOnlyList<TrackedObjectState>> GetTrackingStatesAsync(
+    public async Task<IReadOnlyList<TrackedObjectSnapshot>> GetTrackingStatesAsync(
         Guid jobId, string database, CancellationToken cancellationToken = default)
     {
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -90,19 +90,35 @@ public sealed class ObjectStateRepository : IObjectStateRepository
             """,
             new { job = jobId.ToString(), db = database }, cancellationToken: cancellationToken)).ConfigureAwait(false);
 
-        // DatabaseName comes from the (NOCASE-matched) argument instead of one duplicated string
-        // per row; the unset wide-row fields stay at their defaults — the engine never reads them.
-        return [.. rows.Select(row => new TrackedObjectState
+        // Materialised into the slim TrackedObjectSnapshot rather than the full persisted row: a
+        // run reads exactly these six columns, and the other nine cost roughly 110 bytes per object
+        // in fields nothing looks at. On a million-object database that is the difference between
+        // holding the tracked estate and holding it twice over.
+        //
+        // Schema names are pooled. A database of a million objects typically has a handful of
+        // schemas, and the mapper hands back a separate string per row — so without this, "dbo" is
+        // materialised a million times.
+        var schemas = new Dictionary<string, string>(StringComparer.Ordinal);
+        return [.. rows.Select(row => new TrackedObjectSnapshot
         {
             Id = row.Id,
-            JobId = jobId,
-            DatabaseName = database,
             ObjectType = (Shared.Objects.SqlObjectType)row.ObjectType,
-            SchemaName = row.SchemaName,
+            SchemaName = Pool(schemas, row.SchemaName),
             ObjectName = row.ObjectName,
             FilePath = row.FilePath,
             LastHash = row.LastHash,
         })];
+
+        static string Pool(Dictionary<string, string> pool, string value)
+        {
+            if (pool.TryGetValue(value, out var existing))
+            {
+                return existing;
+            }
+
+            pool[value] = value;
+            return value;
+        }
     }
 
     public async Task<IReadOnlyList<TrackedObjectState>> SearchAsync(

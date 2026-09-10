@@ -5,7 +5,7 @@ using Obsync.Shared.Scripting;
 namespace Obsync.Engine;
 
 /// <summary>One snapshot object the incremental pass skips, with the prior state that stands in for it.</summary>
-internal sealed record IncrementalSkip(ModifiedObjectSnapshotItem Item, TrackedObjectState PriorState);
+internal sealed record IncrementalSkip(ModifiedObjectSnapshotItem Item, TrackedObjectSnapshot PriorState);
 
 /// <summary>The pure output of <see cref="IncrementalPlanner.Plan"/> for one database.</summary>
 internal sealed record IncrementalPlan(
@@ -94,7 +94,7 @@ internal static class IncrementalPlanner
     /// </param>
     internal static IncrementalPlan Plan(
         IReadOnlyList<ModifiedObjectSnapshotItem> snapshot,
-        IReadOnlyDictionary<string, TrackedObjectState> priorStatesByKey,
+        IReadOnlyDictionary<string, TrackedObjectSnapshot> priorStatesByKey,
         IReadOnlyDictionary<SqlObjectType, ScriptingWatermark> stored,
         IReadOnlySet<SqlObjectType> scannedTypes,
         string emissionFingerprint,
