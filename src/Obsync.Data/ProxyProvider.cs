@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using System.Net.Http;
 using Obsync.Data.Repositories;
 using Obsync.Shared;
@@ -16,11 +18,14 @@ public sealed class ProxyProvider : IProxyProvider
 
     private readonly IAppSettingsRepository _settings;
     private readonly ICredentialStore _credentials;
+    private readonly ILogger<ProxyProvider> _logger;
 
-    public ProxyProvider(IAppSettingsRepository settings, ICredentialStore credentials)
+    public ProxyProvider(
+        IAppSettingsRepository settings, ICredentialStore credentials, ILogger<ProxyProvider> logger)
     {
         _settings = settings;
         _credentials = credentials;
+        _logger = logger;
     }
 
     public async Task<ProxyResolution?> ResolveAsync(CancellationToken cancellationToken = default)
@@ -51,12 +56,40 @@ public sealed class ProxyProvider : IProxyProvider
             gitUrl = $"{uri.Scheme}://{Uri.EscapeDataString(settings.Username)}:{Uri.EscapeDataString(password)}@{uri.Host}:{uri.Port}";
         }
 
-        var webProxy = new WebProxy(uri)
+        var webProxy = new WebProxy(uri) { Credentials = credential };
+
+        // Entries are compiled as REGULAR EXPRESSIONS by WebProxy, not matched as hostnames, and the
+        // setter throws on the first one that does not compile. That throw lands on the run path, so
+        // a single malformed entry — "*.corp.local", which is what anyone would type — failed every
+        // run of every job. Invalid entries are dropped rather than allowed to do that.
+        var bypass = new List<string>();
+        foreach (var host in settings.BypassHosts.Where(h => !string.IsNullOrWhiteSpace(h)))
         {
-            Credentials = credential,
-            BypassList = [.. settings.BypassHosts.Where(h => !string.IsNullOrWhiteSpace(h))],
-        };
-        return new ProxyResolution(webProxy, gitUrl);
+            try
+            {
+                _ = new Regex(host);
+                bypass.Add(host);
+            }
+            catch (ArgumentException)
+            {
+                _logger.LogWarning(
+                    "Proxy bypass entry {Entry} is not a valid pattern and was ignored. "
+                    + "Bypass entries are regular expressions, so a host like host.example.com is "
+                    + "written as host\\.example\\.com and a wildcard as .*\\.example\\.com.",
+                    host);
+            }
+        }
+
+        webProxy.BypassList = [.. bypass];
+
+        // ...and the bypass has to reach GIT, not only HttpClient.
+        //
+        // BypassList governs WebProxy, which is the HTTP client's proxy — so the Add Repository
+        // dialog, the token check and the whole preflight honoured it while every clone, fetch and
+        // push still went through the proxy, because git was handed a proxy URL unconditionally.
+        // The user saw five green ticks and then a failing run. This mirrors what the System mode
+        // already does a few lines below.
+        return new ProxyResolution(webProxy, webProxy.IsBypassed(GitHubRemote) ? null : gitUrl);
     }
 
     private static ProxyResolution? ResolveSystem()

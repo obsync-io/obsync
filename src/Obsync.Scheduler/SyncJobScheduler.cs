@@ -133,7 +133,18 @@ public sealed class SyncJobScheduler : ISyncJobScheduler
             var trigger = TriggerBuilder.Create()
                 .WithIdentity(job.Id.ToString("N"), Group)
                 .ForJob(jobKey)
-                .WithCronSchedule(cron!, x => x.InTimeZone(TimeZoneInfo.Local))
+                .WithCronSchedule(cron!, x => x
+                    .InTimeZone(TimeZoneInfo.Local)
+                    // Skip what was missed rather than firing it the moment the way clears.
+                    //
+                    // Quartz's default for a misfired cron trigger is to fire once immediately. A run
+                    // that outlasts its own interval — which a VLDB run genuinely can — therefore
+                    // finishes and is restarted at once, and then again, so the machine never idles
+                    // and every later occurrence is permanently late. Obsync already has a
+                    // deliberate catch-up mechanism for missed occurrences (MissedRunPolicy), which
+                    // fires exactly one catch-up per job; letting Quartz do its own on top of that
+                    // is what turns a slow night into a permanent loop.
+                    .WithMisfireHandlingInstructionDoNothing())
                 .Build();
             await scheduler.ScheduleJob(detail, trigger, cancellationToken).ConfigureAwait(false);
 

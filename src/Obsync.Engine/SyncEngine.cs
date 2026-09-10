@@ -38,7 +38,7 @@ public sealed class SyncEngine : ISyncEngine
     /// Scripts larger than this are skipped: GitHub hard-rejects files over 100 MB and the failed
     /// push would wedge the branch. (Realistic source: reference-data exports with wide rows.)
     /// </summary>
-    private const int MaxScriptChars = 95_000_000;
+    private const int MaxScriptBytes = 95_000_000;
 
     /// <summary>
     /// Most per-change rows persisted for one run. A VLDB first run generates hundreds of
@@ -942,7 +942,15 @@ public sealed class SyncEngine : ISyncEngine
                 context.Report(SyncPhase.Scripting, $"Scripting {database}… {scanned:N0} objects processed", scanned);
             }
 
-            if (script.Length > MaxScriptChars)
+            // BYTES, not characters. GitHub's limit is on the file, and UTF-8 encodes non-ASCII
+            // to two, three or four bytes each — so a script of 40 million characters of Cyrillic or
+            // CJK is 80-120 MB on disk while passing a character check comfortably. It would then be
+            // written, committed, and rejected by GitHub on push, which wedges the branch for every
+            // later run: exactly the outcome this guard exists to prevent, reached through the guard
+            // rather than around it. The inventory artifact was already counting bytes; the
+            // per-object path was not.
+            var scriptByteLength = Encoding.UTF8.GetByteCount(script);
+            if (scriptByteLength > MaxScriptBytes)
             {
                 // Skip-and-report (file retained via "seen"): committing it would make GitHub
                 // reject the push and wedge the branch for every later run. Like every other skip
@@ -958,7 +966,7 @@ public sealed class SyncEngine : ISyncEngine
 
                 context.IncrementFailed();
                 skipped.Add($"{identity.Type} {DescribeIdentity(identity)} — the generated script is " +
-                    $"{script.Length / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
+                    $"{scriptByteLength / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
                 return;
             }
 
@@ -1207,7 +1215,7 @@ public sealed class SyncEngine : ISyncEngine
                 // by a wide margin, and anything close still goes through the exact guard. An
                 // underestimate therefore costs nothing but the generation that happens today.
                 var projected = (long)entries.Count * ObjectInventoryWriter.ApproximateBytesPerEntry;
-                if (projected > MaxScriptChars * 2)
+                if (projected > MaxScriptBytes * 2)
                 {
                     context.IncrementFailed();
                     skipped.Add($"Generated file object-inventory — {entries.Count:N0} objects would produce "
@@ -1227,7 +1235,7 @@ public sealed class SyncEngine : ISyncEngine
 
                 // The same guard as scripts (GitHub's 100 MB hard limit), applied to the actual
                 // byte length — strictly more accurate than the old char count.
-                if (byteLength > MaxScriptChars)
+                if (byteLength > MaxScriptBytes)
                 {
                     context.IncrementFailed();
                     skipped.Add($"Generated file object-inventory — the manifest is " +
@@ -2259,8 +2267,32 @@ public sealed class SyncEngine : ISyncEngine
         }
     }
 
-    /// <summary>Any single loss at or above this count is treated as suspicious whatever the ratio.</summary>
+    /// <summary>
+    /// The floor for the large-absolute-loss rule, and the whole rule for a small estate.
+    /// </summary>
     private const int MassDeletionAbsoluteThreshold = 100;
+
+    /// <summary>
+    /// Share of the tracked estate that the large-absolute-loss rule treats as suspicious, once the
+    /// estate is big enough for that to exceed <see cref="MassDeletionAbsoluteThreshold"/>.
+    /// </summary>
+    /// <remarks>
+    /// A flat count of 100 is not a scale-free signal. On the VLDBs this product targets, dropping
+    /// more than a hundred objects in a day is ordinary — one release that retires a staging schema
+    /// does it — so the rule fired on essentially every scheduled run of a large estate. The
+    /// consequence was not caution but the opposite: deletions were suspended every day, the
+    /// repository never lost the files of dropped objects, the run reported Warning every day, and
+    /// the remedy offered ("use Run Now in the app") does not exist on a headless service install.
+    /// A rule that always fires protects nothing and trains people to ignore it.
+    /// <para>
+    /// Proportional above the floor. The other three rules are already scale-free and cover the
+    /// shapes that matter most: a total wipe at any size, a majority loss, and a whole-schema wipe —
+    /// which is the precise signature of the schema-scoped DENY this guard was written for. What is
+    /// given up is a non-schema-aligned partial loss smaller than this share, which no rule catches
+    /// automatically; that is a narrower exposure than a guard nobody can clear.
+    /// </para>
+    /// </remarks>
+    private const double MassDeletionEstateShare = 0.05;
 
     /// <summary>Smallest loss the majority rule will act on, so a 1-of-2 drop is not called a wipe.</summary>
     private const int MassDeletionMajorityFloor = 10;
@@ -2303,9 +2335,11 @@ public sealed class SyncEngine : ISyncEngine
             return "every tracked object in scope";
         }
 
-        if (candidates.Count >= MassDeletionAbsoluteThreshold)
+        var largeLoss = Math.Max(
+            MassDeletionAbsoluteThreshold, (int)(inScope.Count * MassDeletionEstateShare));
+        if (candidates.Count >= largeLoss)
         {
-            return $"at least {MassDeletionAbsoluteThreshold:N0} at once";
+            return $"at least {largeLoss:N0} at once";
         }
 
         if (candidates.Count >= MassDeletionMajorityFloor && candidates.Count * 2 >= inScope.Count)

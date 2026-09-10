@@ -104,7 +104,18 @@ try
     });
     builder.Services.AddObsyncScheduler();
 
-    builder.Services.AddQuartz();
+    builder.Services.AddQuartz(q =>
+    {
+        // Two jobs at a time, not ten.
+        //
+        // Quartz's default thread pool allows ten concurrent jobs, and the natural configuration is
+        // "everything at 02:00" — so ten databases could script, hash, write and commit at once,
+        // each holding its own estate in memory and competing for the same disk and the same single
+        // SQLite write lock. [DisallowConcurrentExecution] prevents a job overlapping ITSELF; it says
+        // nothing about different jobs. Two keeps a slow job from blocking an unrelated quick one
+        // while bounding peak memory to something a server can actually hold.
+        q.UseDefaultThreadPool(pool => pool.MaxConcurrency = 2);
+    });
     // Order matters and is asserted by tests — see ObsyncHostedServices.
     builder.Services.AddObsyncHostedServices();
 

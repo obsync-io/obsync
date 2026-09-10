@@ -137,13 +137,52 @@ public sealed class RunRepository : IRunRepository
             cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
+    /// <summary>Runs deleted per transaction by <see cref="DeleteRunsBeforeAsync"/>.</summary>
+    /// <remarks>
+    /// Small, because the unit is a RUN and a run is not a row: each one cascades its logs and up to
+    /// <c>MaxPersistedChanges</c> (50,000) change rows. Twenty-five runs is therefore up to about a
+    /// million cascaded deletes per transaction — already at the top of what should hold the write
+    /// lock at once.
+    /// </remarks>
+    private const int RunDeleteBatch = 25;
+
     public async Task<int> DeleteRunsBeforeAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
     {
+        // Bounded, in a loop, rather than one statement.
+        //
+        // The index lookup was never the problem; the cascade was. Every deleted run drags its
+        // run_logs and its run_changes with it, and a VLDB run fills the latter to the persisted-
+        // change cap — so pruning a month of history on a large estate was tens of millions of
+        // cascaded deletes inside ONE implicit transaction, holding the single SQLite write lock for
+        // its whole duration and building a WAL frame for every page touched. Every other writer —
+        // the scheduler, the CLI, the audit log — then sat on the busy timeout and failed.
+        //
+        // Deleting in bounded batches is also strictly safer to interrupt: runs are independent, so
+        // a partial prune simply leaves less for the next pass, and the next pass is idempotent.
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return await connection.ExecuteAsync(new CommandDefinition(
-            "DELETE FROM runs WHERE started_at < $cutoff AND status <> $running;",
-            new { cutoff, running = (int)RunStatus.Running },
-            cancellationToken: cancellationToken)).ConfigureAwait(false);
+        const string sql =
+            """
+            DELETE FROM runs WHERE id IN (
+                SELECT id FROM runs
+                WHERE started_at < $cutoff AND status <> $running
+                LIMIT $batch);
+            """;
+
+        var deleted = 0;
+        while (true)
+        {
+            var batch = await connection.ExecuteAsync(new CommandDefinition(
+                sql,
+                new { cutoff, running = (int)RunStatus.Running, batch = RunDeleteBatch },
+                cancellationToken: cancellationToken)).ConfigureAwait(false);
+            if (batch == 0)
+            {
+                return deleted;
+            }
+
+            deleted += batch;
+            cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 
     public async Task<int> CountUnattendedFailuresSinceAsync(DateTimeOffset since, CancellationToken cancellationToken = default)

@@ -108,15 +108,35 @@ public partial class App : Application
                 }
             }
 
-            // Apply the run-history retention setting (0 = keep forever). The service also prunes
-            // daily; doing it here keeps app-only installs tidy too.
-            await RunRetention.CleanupAsync(
-                _host.Services.GetRequiredService<IAppSettingsRepository>(), runs, audit, now);
-
             var window = _host.Services.GetRequiredService<MainWindow>();
             mainViewModel = _host.Services.GetRequiredService<MainViewModel>();
             window.DataContext = mainViewModel;
             window.Show();
+
+            // Retention runs AFTER the window is up, and its failure is not the app's failure.
+            //
+            // It used to sit above window.Show() inside the startup try, so on a mature database the
+            // prune — tens of millions of cascaded deletes before it was bounded — delayed first
+            // paint, and a prune that threw was caught by the startup handler and turned into
+            // "Obsync failed to start", Shutdown(1). A database large enough to need pruning could
+            // therefore make the app permanently unstartable, which is the opposite of tidying up.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await RunRetention.CleanupAsync(
+                        _host.Services.GetRequiredService<IAppSettingsRepository>(), runs, audit, now);
+                }
+                catch (Exception retentionEx)
+                {
+                    // Nothing the user can act on, and nothing that should interrupt them: the
+                    // service prunes daily too, and the next start tries again.
+                    Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(
+                        _host.Services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<App>>(),
+                        retentionEx,
+                        "Applying run-history retention failed; it will be retried.");
+                }
+            });
         }
         catch (Exception ex)
         {

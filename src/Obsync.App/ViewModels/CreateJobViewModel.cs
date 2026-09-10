@@ -305,6 +305,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(DatabasesHeader));
         OnPropertyChanged(nameof(DatabasesHint));
+
         RefreshDestinationInfo();
     }
 
