@@ -502,17 +502,29 @@
                             </Grid>
 
                             <TextBlock Text="REFERENCE TABLES" Style="{StaticResource Caption}" Margin="0,14,0,0" />
-                            <Border Style="{StaticResource Panel}" MaxHeight="240" Margin="0,4,0,0">
-                                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding ReferenceTables}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected}" Margin="0,4" />
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </ScrollViewer>
-                            </Border>
+                            <TextBox Text="{Binding ReferenceTableFilter, UpdateSourceTrigger=PropertyChanged}"
+                                     Margin="0,4,0,4" ToolTip="Filter the tables below by name" />
+                            <!-- A ListBox rather than an ItemsControl in a ScrollViewer: the outer
+                                 ScrollViewer gave the panel infinite height, so EVERY row was
+                                 realized however many there were, and a database with tens of
+                                 thousands of tables froze the wizard on "Load tables". The ListBox
+                                 brings its own virtualizing panel and scrolls itself. -->
+                            <ListBox ItemsSource="{Binding ReferenceTablesView}" MaxHeight="240" Margin="0,0,0,0"
+                                     BorderThickness="1" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Focusable" Value="False" />
+                                        <Setter Property="Padding" Value="0" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Content="{Binding Display}" IsChecked="{Binding IsSelected}" Margin="0,4" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
 
                             <TextBlock Text="ROW CAP PER TABLE" Style="{StaticResource Caption}" Margin="0,14,0,0" />
                             <TextBox Text="{Binding ReferenceDataMaxRows, UpdateSourceTrigger=PropertyChanged}"

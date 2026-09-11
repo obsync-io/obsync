@@ -94,6 +94,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     /// <summary>Live case-insensitive contains-filter over the database checklist.</summary>
     [ObservableProperty] private string _databaseFilter = string.Empty;
+
+    /// <summary>
+    /// The same, for the reference-table checklist — which needs it more, because a database can
+    /// hold tens of thousands of tables and the list had no way to search it at all.
+    /// </summary>
+    [ObservableProperty] private string _referenceTableFilter = string.Empty;
     [ObservableProperty] private ObjectSelectionPreset _selectedPreset = ObjectSelectionPreset.Recommended;
     [ObservableProperty] private bool _includeServerObjects;
     [ObservableProperty] private bool _includeReferenceData;
@@ -200,6 +206,9 @@ public sealed partial class CreateJobViewModel : ObservableObject
     /// <summary>The database checklist filtered by <see cref="DatabaseFilter"/> (what the view shows).</summary>
     public ICollectionView DatabasesView { get; }
 
+    /// <summary>The reference-table checklist filtered by <see cref="ReferenceTableFilter"/>.</summary>
+    public ICollectionView ReferenceTablesView { get; }
+
     public IReadOnlyList<ObjectSelectionPreset> Presets { get; } = Enum.GetValues<ObjectSelectionPreset>();
     public IReadOnlyList<ScheduleKind> ScheduleKinds { get; } = Enum.GetValues<ScheduleKind>();
     public IReadOnlyList<DayOfWeek> DaysOfWeek { get; } = Enum.GetValues<DayOfWeek>();
@@ -269,6 +278,10 @@ public sealed partial class CreateJobViewModel : ObservableObject
         Databases.CollectionChanged += OnDatabasesCollectionChanged;
         DatabasesView = CollectionViewSource.GetDefaultView(Databases);
         DatabasesView.Filter = item => item is SelectableDatabase database && MatchesDatabaseFilter(database.Name);
+
+        ReferenceTablesView = CollectionViewSource.GetDefaultView(ReferenceTables);
+        ReferenceTablesView.Filter = item =>
+            item is SelectableTable table && MatchesReferenceTableFilter(table.QualifiedName);
     }
 
     // --- Step state surfaced to the view -------------------------------------------------------
@@ -373,6 +386,12 @@ public sealed partial class CreateJobViewModel : ObservableObject
 
     private bool MatchesDatabaseFilter(string name) =>
         string.IsNullOrWhiteSpace(DatabaseFilter) || name.Contains(DatabaseFilter.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private bool MatchesReferenceTableFilter(string name) =>
+        string.IsNullOrWhiteSpace(ReferenceTableFilter)
+        || name.Contains(ReferenceTableFilter.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    partial void OnReferenceTableFilterChanged(string value) => ReferenceTablesView.Refresh();
 
     partial void OnDatabaseFilterChanged(string value) => DatabasesView.Refresh();
 

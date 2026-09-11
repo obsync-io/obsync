@@ -14,7 +14,7 @@ The entire product is built around one clean concept — the **Sync Job**:
 
 ## Status
 
-Actively maintained. The current release is **v0.14.1** — download the MSI from
+Actively maintained. The current release is **v0.15.0** — download the MSI from
 **[Releases](https://github.com/obsync-io/obsync/releases)**, or build it yourself (see
 [Installing](#installing)). See [CHANGELOG.md](CHANGELOG.md) for what shipped in each version and
 the [issue tracker](https://github.com/obsync-io/obsync/issues) for what is planned.

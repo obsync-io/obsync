@@ -2,6 +2,101 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.15.0 - 2026-09-10
+
+**The settings that decide behaviour now have somewhere to be set, and the surfaces that described
+them now describe them accurately.** Where 0.14.1 carried what the audits found wrong in the engine,
+this release carries what they found on the surfaces a person actually touches: options with no user
+interface, captions that promised behaviour the code did not implement, an import path that skipped
+every rule the wizard applies, and a command line that reported success for commands it never ran.
+
+No schema migration. Nothing to do on upgrade.
+
+Test suite: 1,479 → 1,488.
+
+### Added — four job settings that had no user interface
+
+Each existed in the model, was persisted, and was read by the engine, but could only be set by
+exporting a job's configuration, hand-editing the JSON, and importing it back.
+
+- **Remove committed files when an object is dropped.** The one that matters: it decides whether
+  Obsync **deletes** a committed file when its object is dropped in SQL Server — the
+  highest-consequence behaviour in the product — and it could not be turned off from the app. The
+  mass-deletion guard applies either way.
+- **SQL attempts on a transient error.** Its git counterpart was surfaced and this was not, so every
+  job shipped with the default even though a deadlock-prone estate is exactly where raising it helps.
+- **Ignore patterns**, as the in-app equivalent of a committed `.obsyncignore`.
+- **Max parallel workers is now clamped at both ends.** It was bounded below only, so a typed `999`
+  became 999 consumer tasks and, at the SMO layer, a fan-out limited only by the object count.
+
+### Fixed — the command line reported success for commands it did not run
+
+An unrecognised verb printed the help text and exited **0**. So `obsync runn nightly`, or any typo in
+a scheduled task's action, reported a healthy result indefinitely while nothing had run since the day
+it was created. The documented exit-code table has always said `2` means a usage error; that path
+simply did not use it. Explicit help verbs still exit 0, because asking for help is not an error. Two
+credential usage errors also returned `1` where their siblings return `2` for the identical
+condition.
+
+### Fixed — an imported job bypassed every rule the wizard applies
+
+Those rules lived in the wizard rather than in the shared floor both routes pass through, so an
+import could save a job as **enabled** that then never worked:
+
+- a cron schedule with no expression — appears in Jobs, shows no next run, never fires;
+- an export job with no export path — fails at run time;
+- an explicit database list that is empty, which is the worst of the three because it scripts nothing
+  and reports **success**, so nothing ever suggests the job is misconfigured.
+
+Three numeric settings could also be imported negative. A negative command timeout throws from the
+`SqlCommand` setter rather than surfacing as a SQL error, so it escapes the per-object containment
+and fails the whole run; a negative reference-data cap skips every listed table and pins the run at
+Warning permanently.
+
+### Fixed — two captions that described behaviour the code does not implement
+
+The alerts checkbox read *"Only for scheduled and startup runs"* while the code excluded only Run
+Now, so a site driving Obsync from Task Scheduler was alerted on every CLI run. **The label changed,
+not the gate** — a Task Scheduler entry *is* the unattended case the setting exists to keep alerting
+for, and nothing can tell it apart from a person typing the command. Narrowing the gate would have
+silenced alerts a site may depend on.
+
+The maintenance window was offered for manual-only jobs, where it does nothing: the engine gates it
+on scheduled, catch-up and CLI runs, and the conflict check exempts Manual outright. The schedule
+description appended it regardless, so the wizard's review step and the Job Workspace both displayed
+**"Manual only · within 22:00–05:00"** — asserting a restriction on when a job may be run by hand
+that has never existed.
+
+### Fixed — the Job Workspace was never released when moving between jobs
+
+Both the outgoing and incoming workspace resolve to the same template, so WPF reuses the view and
+only swaps its data — the unload event never fires. The previous view model stayed subscribed to a
+run-state object that lives for the life of the process, retaining its loaded runs, changes and logs
+and continuing to react to run notifications with reloads nobody could see. The path is ordinary:
+open one job's workspace, then click a failure notification for another. Cleanup now happens on
+navigation rather than depending on an event that does not arrive.
+
+### Performance — the wizard
+
+The reference-table picker issued an unbounded query and rendered the result in a list **inside a
+scroll viewer**, which gives the panel infinite height and therefore realizes every row however many
+there are. On a large database, "Load tables" froze the wizard and then presented thousands of
+checkboxes with no way to find one. It is now a virtualizing list with a filter box, matching the
+database checklist beside it.
+
+Every data grid in the app now recycles its row containers. Row virtualization was enabled but left
+in the default mode, which creates and discards a container per row scrolled; three views set
+recycling on their own grid and five did not. It matters most on the Job Workspace's Changes grid,
+which loads up to two thousand rows.
+
+### Known limits
+
+The database checklist keeps its ticks across the "sync all user databases" toggle, where they change
+meaning from *include* to *exclude*. The header and hint change with it, and the behaviour is
+deliberate — but when editing an existing dynamic-scope job the checklist is populated with only the
+excluded databases, so switching the toggle off leaves a list that does not offer the others. Reload
+the databases after switching scope.
+
 ## 0.14.1 - 2026-09-10
 
 **Guards that scale, and a hot path that stops paying for work it had already done.** Six parallel
