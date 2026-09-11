@@ -441,7 +441,12 @@ public sealed class ScheduleProfile
             _ => "Unknown",
         };
 
-        if (!MaintenanceWindowEnabled)
+        // A manual-only job never consults the window: the engine gates on Scheduled, CatchUp and
+        // Cli, and the conflict check exempts Manual outright. Appending the window to the
+        // description made the wizard's review step and the Job Workspace assert a constraint that
+        // is never applied -- "Manual only, within 22:00-05:00" reads as a restriction on when the
+        // job may be run by hand, and there is no such restriction.
+        if (!MaintenanceWindowEnabled || Kind == ScheduleKind.Manual)
         {
             return cadence;
         }

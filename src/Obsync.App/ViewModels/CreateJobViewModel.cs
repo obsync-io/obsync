@@ -299,6 +299,17 @@ public sealed partial class CreateJobViewModel : ObservableObject
     public bool ShowWeekday => SelectedScheduleKind == ScheduleKind.Weekly;
     public bool ShowCron => SelectedScheduleKind == ScheduleKind.Cron;
 
+    /// <summary>
+    /// Whether the maintenance window applies to this cadence at all.
+    /// </summary>
+    /// <remarks>
+    /// It does not apply to a manual-only job: the engine gates the window on scheduled, catch-up
+    /// and CLI runs, and the conflict check exempts Manual outright. Offering the controls anyway
+    /// invited the reading that a manual run would be refused outside the window, which is not true
+    /// and never was.
+    /// </remarks>
+    public bool SupportsMaintenanceWindow => SelectedScheduleKind != ScheduleKind.Manual;
+
     partial void OnCurrentStepChanged(int value)
     {
         OnPropertyChanged(nameof(IsStep1));
@@ -446,6 +457,7 @@ public sealed partial class CreateJobViewModel : ObservableObject
         OnPropertyChanged(nameof(ShowWeekday));
         OnPropertyChanged(nameof(ShowCron));
         OnPropertyChanged(nameof(ShowOverlapNote));
+        OnPropertyChanged(nameof(SupportsMaintenanceWindow));
         RefreshSchedulePreview();
     }
 

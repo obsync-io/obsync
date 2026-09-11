@@ -667,7 +667,8 @@
                         <CheckBox Content="Commit only when changes are detected" IsChecked="{Binding RunOnlyIfChanges}" Margin="0,0,0,2" />
 
                         <Border Style="{StaticResource Divider}" />
-                        <CheckBox Content="Only run during a maintenance window" IsChecked="{Binding MaintenanceWindowEnabled}" Margin="0,2,0,8" />
+                        <CheckBox Content="Only run during a maintenance window" IsChecked="{Binding MaintenanceWindowEnabled}" Margin="0,2,0,8"
+                                  Visibility="{Binding SupportsMaintenanceWindow, Converter={StaticResource BoolToVisibility}}" />
                         <StackPanel Visibility="{Binding MaintenanceWindowEnabled, Converter={StaticResource BoolToVisibility}}">
                             <Grid>
                                 <Grid.ColumnDefinitions>

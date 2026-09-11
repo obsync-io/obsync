@@ -18,6 +18,11 @@ public static class RunAlertEvaluator
             return false;
         }
 
+        // Manual means "Run Now in the app", and only that. A CLI run is NOT excluded: a site
+        // driving Obsync from Task Scheduler is exactly the unattended case this setting exists to
+        // keep alerting for, and there is no way to tell that apart from a person typing the command.
+        // The checkbox says so rather than the code guessing — narrowing this would silence alerts a
+        // site may depend on, which is a worse failure than a caption that had to be made precise.
         if (settings.ScheduledRunsOnly && run.Trigger == RunTrigger.Manual)
         {
             return false;

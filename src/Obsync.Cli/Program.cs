@@ -39,7 +39,16 @@ return command switch
     "credential" or "credentials" => await CredentialAsync(provider, args),
     "whoami" => PrintWhoAmI(),
     "version" => PrintVersion(),
-    _ => PrintHelp(),
+    "help" or "--help" or "-h" or "/?" => PrintHelp(),
+
+    // An unrecognised verb is a USAGE ERROR, not a request for help.
+    //
+    // This arm used to fall through to PrintHelp(), which returns 0 — so `obsync runn nightly`, or
+    // any typo in a scheduled task's action, printed the help text and reported SUCCESS. A Task
+    // Scheduler entry wrapping that mistake reports a healthy job for ever while nothing has run
+    // since the day it was created. The documented exit-code table has always said 2 means a usage
+    // error; this arm simply did not use it.
+    _ => UnknownCommand(command),
 };
 
 static async Task<int> ListJobsAsync(IServiceProvider provider)
@@ -244,7 +253,9 @@ static async Task<int> CredentialAsync(IServiceProvider provider, string[] args)
                     reference is null
                         ? "Usage: obsync credential set github <repository-name-or-id>"
                         : $"Repository '{reference}' was not found. Run 'obsync credential list' to see the names.");
-                return 1;
+                // 2, not 1: this is a usage error, and its siblings in this same method already
+                // return 2 for the identical condition. The documented table distinguishes them.
+                return 2;
             }
 
             key = CredentialKeys.GitHubToken(match.Id);
@@ -262,7 +273,9 @@ static async Task<int> CredentialAsync(IServiceProvider provider, string[] args)
                     reference is null
                         ? "Usage: obsync credential set sql <server-name-or-id>"
                         : $"Server '{reference}' was not found. Run 'obsync credential list' to see the names.");
-                return 1;
+                // 2, not 1: this is a usage error, and its siblings in this same method already
+                // return 2 for the identical condition. The documented table distinguishes them.
+                return 2;
             }
 
             key = CredentialKeys.SqlPassword(match.Id);
@@ -599,6 +612,14 @@ static int PrintHelp()
         where the counts are shown before anything is committed.
         """);
     return 0;
+}
+
+static int UnknownCommand(string command)
+{
+    Console.Error.WriteLine($"obsync: '{command}' is not an obsync command.");
+    Console.Error.WriteLine();
+    _ = PrintHelp();
+    return 2;
 }
 
 static string Truncate(string value, int max) => value.Length <= max ? value : value[..(max - 1)] + "…";
