@@ -78,6 +78,73 @@ public sealed class JobSafetyFloorImportTests
         Assert.NotNull(JobSafetyFloor.FirstProblem(job, Now));
     }
 
+    [Theory]
+    [InlineData(65)]
+    [InlineData(100_000)]
+    [InlineData(int.MaxValue)]
+    public void AnAbsurdWorkerCount_IsRefused(int workers)
+    {
+        // The wizard clamps this to 0..64; import assigned Advanced wholesale and the floor only
+        // checked for negatives, so the ceiling was reachable through an imported file. The value
+        // becomes the consumer-task count verbatim, and at int.MaxValue the channel's `workers * 2`
+        // overflows and throws before anything runs.
+        var job = Job();
+        job.Advanced.MaxParallelWorkers = workers;
+
+        Assert.NotNull(JobSafetyFloor.FirstProblem(job, Now));
+    }
+
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(11, 1)]
+    [InlineData(1, 0)]
+    [InlineData(1, 11)]
+    [InlineData(1, int.MaxValue)]
+    public void RetryCountsOutsideTheWizardsRange_AreRefused(int sqlRetries, int gitRetries)
+    {
+        // The worst of the imported-settings family, and the reason these ceilings matter at all:
+        // the retry helpers loop on the count with a growing delay, so a huge value turns one
+        // transient SQL or network blip into a retry storm that never fails and never ends, holding
+        // the job's run lock the whole time. Unlike an absurd worker count it fails SILENTLY —
+        // there is no exception, just a run that never finishes.
+        var job = Job();
+        job.Advanced.SqlRetryCount = sqlRetries;
+        job.Advanced.GitRetryCount = gitRetries;
+
+        Assert.NotNull(JobSafetyFloor.FirstProblem(job, Now));
+    }
+
+    [Fact]
+    public void ALockTimeoutThatWouldSaturate_IsRefused()
+    {
+        // Above int.MaxValue milliseconds the conversion in SqlLockTimeout saturates, so the job
+        // would silently run with a different timeout than it asked for. Refusing is clearer.
+        var job = Job();
+        job.Advanced.SqlLockTimeoutSeconds = 3_000_000;
+
+        Assert.NotNull(JobSafetyFloor.FirstProblem(job, Now));
+    }
+
+    [Fact]
+    public void TheWizardsOwnBounds_StillClearTheFloor()
+    {
+        // Guards against the ceilings above being set tighter than what the wizard itself produces,
+        // which would make a normally-created job unsaveable through the import/duplicate paths.
+        var job = Job();
+        job.Advanced.MaxParallelWorkers = 0; // automatic
+        job.Advanced.SqlRetryCount = 1;
+        job.Advanced.GitRetryCount = 1;
+        job.Advanced.SqlLockTimeoutSeconds = 0;
+
+        Assert.Null(JobSafetyFloor.FirstProblem(job, Now));
+
+        job.Advanced.MaxParallelWorkers = 64;
+        job.Advanced.SqlRetryCount = 10;
+        job.Advanced.GitRetryCount = 10;
+
+        Assert.Null(JobSafetyFloor.FirstProblem(job, Now));
+    }
+
     [Fact]
     public void AnOrdinaryJob_StillPasses()
     {

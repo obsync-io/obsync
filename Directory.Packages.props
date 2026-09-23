@@ -18,6 +18,16 @@
 
   <ItemGroup Label="Local state database">
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <!--
+      Pinned transitively (CentralPackageTransitivePinningEnabled) to lift the native SQLite that
+      Microsoft.Data.Sqlite resolves. 2.1.11 is inside the vulnerable range of GHSA-2m69-gcr7-jv3q
+      (CVE-2025-6965, memory corruption); 2.1.12 and 2.1.13 have since shipped. The build used to
+      carry a NuGetAuditSuppress for that advisory whose stated reason — "no patched native package
+      has shipped yet" — had quietly stopped being true, and because the audit fails the build, the
+      suppression was the only thing hiding it. Pin instead of suppress, so the next advisory in
+      this package is seen rather than inherited.
+    -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
     <PackageVersion Include="Dapper" Version="2.1.79" />
   </ItemGroup>
 

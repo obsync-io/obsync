@@ -11,45 +11,72 @@ using Obsync.Shared.Models;
 using Serilog;
 using Serilog.Extensions.Logging;
 
-ObsyncPaths.EnsureCreated();
-
-using var serilog = new LoggerConfiguration()
-    .MinimumLevel.Information()
-    .WriteTo.Console(outputTemplate: "{Message:lj}{NewLine}")
-    .CreateLogger();
-
-var services = new ServiceCollection();
-services.AddLogging(builder => builder.AddProvider(new SerilogLoggerProvider(serilog)));
-services.AddObsyncSecurity();
-services.AddObsyncCore(ObsyncPaths.DatabasePath, options =>
+// Everything is inside this try for the sake of the exit code.
+//
+// ObsyncPaths.EnsureCreated() and InitializeAsync() run before any command arm and had no handler
+// at all, so an unreachable OBSYNC_DATA_ROOT, a denied ACL or a locked database printed a raw .NET
+// stack trace and exited with the CLR's unhandled-exception code (0xE0434352) — a value outside the
+// documented 0-4 contract this CLI publishes for Task Scheduler wrappers. The failure was at least
+// honest (non-zero), but it was neither readable nor documented.
+//
+// Note EnsureCreated() runs BEFORE the logger is configured, so the handler writes to stderr
+// directly rather than through Serilog; the service host solved the same ordering problem with a
+// bootstrap logger, which is the larger fix this does not attempt.
+try
 {
-    options.WorkspacesRoot = ObsyncPaths.WorkspacesRoot;
-});
+    ObsyncPaths.EnsureCreated();
 
-await using var provider = services.BuildServiceProvider();
-await provider.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
+    using var serilog = new LoggerConfiguration()
+        .MinimumLevel.Information()
+        .WriteTo.Console(outputTemplate: "{Message:lj}{NewLine}")
+        .CreateLogger();
 
-var command = args.Length > 0 ? args[0].ToLowerInvariant() : "help";
+    var services = new ServiceCollection();
+    services.AddLogging(builder => builder.AddProvider(new SerilogLoggerProvider(serilog)));
+    services.AddObsyncSecurity();
+    services.AddObsyncCore(ObsyncPaths.DatabasePath, options =>
+    {
+        options.WorkspacesRoot = ObsyncPaths.WorkspacesRoot;
+    });
 
-return command switch
+    await using var provider = services.BuildServiceProvider();
+    await provider.GetRequiredService<IDatabaseInitializer>().InitializeAsync();
+
+    var command = args.Length > 0 ? args[0].ToLowerInvariant() : "help";
+
+    return command switch
+    {
+        "list" or "jobs" => await ListJobsAsync(provider),
+        "connections" => await ListConnectionsAsync(provider),
+        "run" => await RunJobAsync(provider, args.Length > 1 ? args[1] : null),
+        "credential" or "credentials" => await CredentialAsync(provider, args),
+        "whoami" => PrintWhoAmI(),
+        "version" => PrintVersion(),
+        "help" or "--help" or "-h" or "/?" => PrintHelp(),
+
+        // An unrecognised verb is a USAGE ERROR, not a request for help.
+        //
+        // This arm used to fall through to PrintHelp(), which returns 0 — so `obsync runn nightly`, or
+        // any typo in a scheduled task's action, printed the help text and reported SUCCESS. A Task
+        // Scheduler entry wrapping that mistake reports a healthy job for ever while nothing has run
+        // since the day it was created. The documented exit-code table has always said 2 means a usage
+        // error; this arm simply did not use it.
+        _ => UnknownCommand(command),
+    };
+}
+catch (Exception ex)
 {
-    "list" or "jobs" => await ListJobsAsync(provider),
-    "connections" => await ListConnectionsAsync(provider),
-    "run" => await RunJobAsync(provider, args.Length > 1 ? args[1] : null),
-    "credential" or "credentials" => await CredentialAsync(provider, args),
-    "whoami" => PrintWhoAmI(),
-    "version" => PrintVersion(),
-    "help" or "--help" or "-h" or "/?" => PrintHelp(),
+    Console.Error.WriteLine($"Obsync could not complete the command: {ex.Message}");
+    Console.Error.WriteLine(
+        $"Data root: {ObsyncPaths.Root}. Set OBSYNC_DEBUG=1 for the full stack trace.");
 
-    // An unrecognised verb is a USAGE ERROR, not a request for help.
-    //
-    // This arm used to fall through to PrintHelp(), which returns 0 — so `obsync runn nightly`, or
-    // any typo in a scheduled task's action, printed the help text and reported SUCCESS. A Task
-    // Scheduler entry wrapping that mistake reports a healthy job for ever while nothing has run
-    // since the day it was created. The documented exit-code table has always said 2 means a usage
-    // error; this arm simply did not use it.
-    _ => UnknownCommand(command),
-};
+    if (Environment.GetEnvironmentVariable("OBSYNC_DEBUG") is "1" or "true")
+    {
+        Console.Error.WriteLine(ex);
+    }
+
+    return 1;
+}
 
 static async Task<int> ListJobsAsync(IServiceProvider provider)
 {

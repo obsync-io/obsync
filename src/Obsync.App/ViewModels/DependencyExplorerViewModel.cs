@@ -85,7 +85,13 @@ public sealed partial class DependencyExplorerViewModel : ObservableObject
         SearchText = string.Empty;
         SelectedObject = null;
         ClearResults();
-        _ = SearchNowAsync();
+
+        // Immediate (a database change is not a keystroke), but through the SAME cancellation
+        // source as the debounced path rather than the uncancellable `default` it used before.
+        // Both paths Clear() and refill SearchResults, so whichever FINISHED last used to win
+        // regardless of which was ISSUED last — change the database, type immediately, and the
+        // picker could end up showing results for the previous query.
+        _ = SearchAsync(TimeSpan.Zero);
     }
 
     partial void OnSearchTextChanged(string value) => _ = DebouncedSearchAsync();
@@ -98,18 +104,39 @@ public sealed partial class DependencyExplorerViewModel : ObservableObject
         }
     }
 
-    private async Task DebouncedSearchAsync()
+    private Task DebouncedSearchAsync() => SearchAsync(TimeSpan.FromMilliseconds(250));
+
+    /// <summary>
+    /// Runs the picker search after <paramref name="delay"/>, superseding any search already in
+    /// flight. Every entry point goes through here so exactly one search can be pending.
+    /// </summary>
+    private async Task SearchAsync(TimeSpan delay)
     {
-        _searchDebounce?.Cancel();
+        var previous = _searchDebounce;
         var cts = _searchDebounce = new CancellationTokenSource();
+        previous?.Cancel();
+        previous?.Dispose();
+
         try
         {
-            await Task.Delay(250, cts.Token);
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay, cts.Token);
+            }
+
             await SearchNowAsync(cts.Token);
         }
         catch (OperationCanceledException)
         {
             // Superseded by newer keystrokes.
+        }
+        catch (Exception ex)
+        {
+            // This is the only fire-and-forget path in the app whose failures were invisible: the
+            // task is discarded by both callers and SearchNowAsync has no handler of its own, so a
+            // SQLite error surfaced as an unobserved task exception — logged at some later GC and
+            // shown to the user as a search that simply did nothing.
+            StatusMessage = $"Object search failed — {ex.Message}";
         }
     }
 

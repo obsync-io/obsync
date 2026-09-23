@@ -70,7 +70,12 @@ public sealed class SupportBundleWriter : ISupportBundleWriter
         await WriteJsonEntryAsync(archive, "config.json", new { jobs, servers, repositories }, cancellationToken).ConfigureAwait(false);
         await WriteJsonEntryAsync(archive, "recent-runs.json", runs, cancellationToken).ConfigureAwait(false);
 
-        AddRecentLogs(archive);
+        // Off the UI thread. Serilog keeps up to 31 files of 16 MB each in both hosts, and this
+        // picks the five newest — so the worst case is ~80 MB read line by line, secret-scrubbed,
+        // and deflated at CompressionLevel.Optimal. On the dispatcher that froze the window for
+        // tens of seconds, at exactly the moment the user is already convinced the app is broken.
+        // Awaited inside the `using`, so the archive and stream are still disposed in order.
+        await Task.Run(() => AddRecentLogs(archive), cancellationToken).ConfigureAwait(false);
     }
 
     private object BuildSystemInfo(IReadOnlyList<DiagnosticResult> diagnostics, string workspacesRoot) => new

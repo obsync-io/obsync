@@ -35,8 +35,15 @@ public sealed class ScriptingWatermarkRepository : IScriptingWatermarkRepository
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         var rows = await connection.QueryAsync<(long ObjectType, string Watermark, string? Fingerprint, string? SentinelKey)>(
             new CommandDefinition(
+                // COLLATE NOCASE, matching every read of object_states and scripting_quarantine.
+                // This table's column is BINARY (V009 predates the V011 identity work), so without
+                // it a database whose casing changed — switching a job from a typed list to
+                // AllUserDatabases takes the casing from sys.databases — missed its watermark while
+                // the other two tables matched, silently forcing a full re-scan and orphaning the
+                // old row. The comparison is the fix; rebuilding the primary key on live user
+                // databases is not worth it for a re-scan.
                 "SELECT object_type, watermark, fingerprint, sentinel_key FROM scripting_watermarks "
-                + "WHERE job_id = $job AND database_name = $db;",
+                + "WHERE job_id = $job AND database_name = $db COLLATE NOCASE;",
                 new { job = jobId.ToString(), db = database },
                 cancellationToken: cancellationToken)).ConfigureAwait(false);
 

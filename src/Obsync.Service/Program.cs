@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Obsync.Engine.DependencyInjection;
+using Obsync.Scheduler;
 using Obsync.Scheduler.DependencyInjection;
 using Obsync.Security.DependencyInjection;
 using Obsync.Service;
@@ -115,6 +116,15 @@ try
         // nothing about different jobs. Two keeps a slow job from blocking an unrelated quick one
         // while bounding peak memory to something a server can actually hold.
         q.UseDefaultThreadPool(pool => pool.MaxConcurrency = 2);
+
+        // Two workers plus DoNothing misfire handling means an occurrence that merely QUEUES behind
+        // two other jobs for longer than Quartz's five-second misfire threshold is discarded, not
+        // deferred — and Quartz says nothing about it at any log level. With several jobs sharing
+        // one cron time the same jobs lose every night (the trigger comparator is deterministic)
+        // while the schedule still shows a confident future next-run time. Neither half of that
+        // pairing is wrong on its own and changing either reintroduces a defect it was added to
+        // fix, so the skip is made visible instead: a Warning plus a Skipped row in History.
+        q.AddTriggerListener<MisfiredOccurrenceListener>();
     });
     // Order matters and is asserted by tests — see ObsyncHostedServices.
     builder.Services.AddObsyncHostedServices();

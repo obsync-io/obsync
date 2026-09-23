@@ -1,4 +1,5 @@
 using Microsoft.Data.SqlClient;
+using Obsync.Shared;
 
 namespace Obsync.Metadata;
 
@@ -18,7 +19,7 @@ internal static class SqlSession
         }
 
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SET LOCK_TIMEOUT {lockTimeoutSeconds * 1000};";
+        command.CommandText = $"SET LOCK_TIMEOUT {SqlLockTimeout.ToMilliseconds(lockTimeoutSeconds)};";
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }

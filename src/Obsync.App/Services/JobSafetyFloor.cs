@@ -16,6 +16,13 @@ namespace Obsync.App.Services;
 /// </summary>
 internal static class JobSafetyFloor
 {
+    /// <summary>
+    /// Largest accepted lock timeout. Above this the conversion to milliseconds saturates at
+    /// <see cref="int.MaxValue"/> (see <see cref="SqlLockTimeout"/>), so the job would silently get
+    /// a different timeout than it asked for. A day is already far beyond any useful value.
+    /// </summary>
+    private const int MaxLockTimeoutSeconds = 86_400;
+
     /// <summary>The first reason this job cannot be run safely, or null when it clears every rule.</summary>
     public static string? FirstProblem(SyncJob job, DateTimeOffset nowUtc)
     {
@@ -75,6 +82,42 @@ internal static class JobSafetyFloor
         if (job.Advanced.ReferenceDataMaxRows < 0)
         {
             return "The reference-data row cap cannot be negative.";
+        }
+
+        // Upper bounds, not just lower ones. The wizard clamps all four of these at both ends
+        // (CreateJobViewModel.SaveAsync), but import assigns Advanced wholesale from the file and
+        // only ever reached the "cannot be negative" rules above — so every ceiling the wizard
+        // enforces was reachable through an imported job:
+        //
+        //   MaxParallelWorkers  — used raw as the consumer-task count, and as the SMO fan-out.
+        //   SqlRetryCount /
+        //   GitRetryCount       — the worst of the set. The retry helpers loop on the count with a
+        //                         growing delay, so a huge value turns one transient SQL or network
+        //                         blip into a retry storm that never fails and never ends, holding
+        //                         the job's run lock indefinitely. It fails SILENTLY, unlike the
+        //                         others, which is why it is checked here even though a plain
+        //                         "nonsensical value" is unlikely to be typed.
+        //   SqlLockTimeoutSeconds — above ~24.8 days the milliseconds conversion saturates
+        //                         (SqlLockTimeout.ToMilliseconds); refusing it is clearer than
+        //                         silently honouring something else.
+        if (job.Advanced.MaxParallelWorkers is < 0 or > 64)
+        {
+            return "The maximum parallel workers must be between 0 (automatic) and 64.";
+        }
+
+        if (job.Advanced.SqlRetryCount is < 1 or > 10)
+        {
+            return "The SQL retry count must be between 1 and 10.";
+        }
+
+        if (job.Advanced.GitRetryCount is < 1 or > 10)
+        {
+            return "The Git retry count must be between 1 and 10.";
+        }
+
+        if (job.Advanced.SqlLockTimeoutSeconds > MaxLockTimeoutSeconds)
+        {
+            return $"The lock timeout cannot exceed {MaxLockTimeoutSeconds:N0} seconds.";
         }
 
         return job.UnsafePathReason();

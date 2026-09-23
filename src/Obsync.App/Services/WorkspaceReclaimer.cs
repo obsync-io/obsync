@@ -71,8 +71,21 @@ public sealed class WorkspaceReclaimer : IWorkspaceReclaimer
             return 0;
         }
 
-        var bytes = MeasureDirectory(path);
-        return Delete(path) ? bytes : 0;
+        // Off the UI thread: measuring walks every file in a clone and deleting walks it a SECOND
+        // time to clear the read-only bit git sets on pack objects, so a schema estate's clone is
+        // hundreds of thousands of per-file syscalls with antivirus interception on each. On the
+        // dispatcher that is a hard-frozen, "Not Responding" window for tens of seconds.
+        // SettingsViewModel.RefreshStorageAsync already guards the identical walk with the note
+        // "never on the UI thread"; the reclaim paths were the ones that missed it.
+        // Only the filesystem work is offloaded — RootAsync above touches the database, and the
+        // callers assign their status properties on the dispatcher.
+        return await Task.Run(
+            () =>
+            {
+                var bytes = MeasureDirectory(path);
+                return Delete(path) ? bytes : 0;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<OrphanedWorkspace>> FindOrphansAsync(CancellationToken cancellationToken = default)
@@ -87,39 +100,56 @@ public sealed class WorkspaceReclaimer : IWorkspaceReclaimer
             .Select(r => r.Id.ToString("N"))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var orphans = new List<OrphanedWorkspace>();
-        foreach (var directory in SafeEnumerate(root))
-        {
-            var name = Path.GetFileName(directory);
-
-            // Only directories that LOOK like a workspace are candidates. The root is user-settable
-            // in Settings, so it can legitimately be a folder holding other things — deleting those
-            // because they are not in the profile list would be catastrophic and entirely our fault.
-            if (!Guid.TryParseExact(name, "N", out _) || live.Contains(name))
+        // Off the UI thread for the same reason as ReclaimForRepositoryAsync: MeasureDirectory
+        // walks every file of every candidate clone. The database reads above stay on the caller's
+        // thread so nothing here races a UI-thread reload.
+        return await Task.Run(
+            () =>
             {
-                continue;
-            }
+                var orphans = new List<OrphanedWorkspace>();
+                foreach (var directory in SafeEnumerate(root))
+                {
+                    var name = Path.GetFileName(directory);
 
-            orphans.Add(new OrphanedWorkspace(directory, MeasureDirectory(directory)));
-        }
+                    // Only directories that LOOK like a workspace are candidates. The root is user-settable
+                    // in Settings, so it can legitimately be a folder holding other things — deleting those
+                    // because they are not in the profile list would be catastrophic and entirely our fault.
+                    if (!Guid.TryParseExact(name, "N", out _) || live.Contains(name))
+                    {
+                        continue;
+                    }
 
-        return orphans;
+                    orphans.Add(new OrphanedWorkspace(directory, MeasureDirectory(directory)));
+                }
+
+                return (IReadOnlyList<OrphanedWorkspace>)orphans;
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<(int Removed, long Bytes)> ReclaimOrphansAsync(CancellationToken cancellationToken = default)
     {
-        var removed = 0;
-        long bytes = 0;
-        foreach (var orphan in await FindOrphansAsync(cancellationToken).ConfigureAwait(false))
-        {
-            if (Delete(orphan.Path))
-            {
-                removed++;
-                bytes += orphan.Bytes;
-            }
-        }
+        var orphans = await FindOrphansAsync(cancellationToken).ConfigureAwait(false);
 
-        return (removed, bytes);
+        // The measuring walk above is already off the dispatcher; the deleting walk is the larger
+        // half of the cost and must be too.
+        return await Task.Run(
+            () =>
+            {
+                var removed = 0;
+                long bytes = 0;
+                foreach (var orphan in orphans)
+                {
+                    if (Delete(orphan.Path))
+                    {
+                        removed++;
+                        bytes += orphan.Bytes;
+                    }
+                }
+
+                return (removed, bytes);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static IEnumerable<string> SafeEnumerate(string root)

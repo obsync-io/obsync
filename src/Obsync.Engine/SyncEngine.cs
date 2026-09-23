@@ -1152,8 +1152,8 @@ public sealed class SyncEngine : ISyncEngine
         // scripting everything.
         var incrementalWatermarks = !fullSnapshot && context.Job.Advanced.IncrementalScripting
             ? await PlanIncrementalAsync(
-                    context, database, types, prior, seen, inventory, ignoreRules, localPath, snapshotDates,
-                    cancellationToken)
+                    context, database, types, prior, seen, inventory, ignoreRules, localPath, dbFolder,
+                    snapshotDates, cancellationToken)
                 .ConfigureAwait(false)
             : null;
 
@@ -1483,13 +1483,50 @@ public sealed class SyncEngine : ISyncEngine
         RunContext context, string database, IReadOnlyList<SqlObjectType> types,
         Dictionary<string, TrackedObjectSnapshot> prior,
         ConcurrentDictionary<string, byte> seen, ConcurrentBag<ObjectInventoryEntry> inventory,
-        IgnoreRules ignoreRules, string localPath, Dictionary<string, DateTime> snapshotDates,
-        CancellationToken cancellationToken)
+        IgnoreRules ignoreRules, string localPath, string dbFolder,
+        Dictionary<string, DateTime> snapshotDates, CancellationToken cancellationToken)
     {
         var capableTypes = types.Where(IncrementalPlanner.CapableTypes.Contains).ToList();
         if (capableTypes.Count == 0)
         {
             return null;
+        }
+
+        // Withhold the incremental filter entirely when the repository LAYOUT has moved.
+        //
+        // An object's path depends on the job's destination folder and on whether the job has more
+        // than one database (which nests a per-database folder). Neither feeds EmissionFingerprint
+        // — that hashes what Obsync EMITS, not where it puts it — and ObjectFilePathMapper's
+        // LayoutVersion is a build constant bumped for mapper changes, not for job settings. So
+        // after an ordinary edit (rename the destination folder, tick a second database) every
+        // watermark still looked valid.
+        //
+        // That is worse than a stale file. A planned skip writes nothing and marks the object seen,
+        // so it never reaches the stale-path cleanup in ApplyItemAsync AND the deletion pass never
+        // condemns its old file. Only objects that happen to change afterwards migrate, one at a
+        // time, so the repository carries TWO trees for one database indefinitely while every run
+        // reports Succeeded. TrackedObjectSnapshot.FilePath is kept for exactly this comparison.
+        //
+        // One sample settles it: a layout change moves every object, so if the first tracked object
+        // still maps to its recorded path then none of them moved. Scanning in full for one run
+        // routes every object through the apply path, which deletes the old file and records the
+        // new one; the next run is incremental again.
+        if (prior.Count > 0)
+        {
+            var sample = prior.Values.First();
+            var expected = RepositoryLayout.Combine(
+                dbFolder,
+                _pathMapper.MapRelativePath(
+                    new ScriptedObjectIdentity(sample.ObjectType, sample.SchemaName, sample.ObjectName)));
+            if (!string.Equals(sample.FilePath, expected, StringComparison.OrdinalIgnoreCase))
+            {
+                context.Log(SyncLogLevel.Warning,
+                    $"The repository layout for {database} has changed — tracked files were recorded at paths "
+                    + $"like '{sample.FilePath}' and now map to '{expected}'. Scanning this database in full "
+                    + "once so every file moves to its new path and the old ones are removed; later runs "
+                    + "return to incremental scripting.");
+                return null;
+            }
         }
 
         // Withhold the incremental filter from any type whose tracked files no longer carry what
@@ -1690,6 +1727,21 @@ public sealed class SyncEngine : ISyncEngine
             GuardAgainstCaseTwin(identitiesSeen, key, identity, "The server scope");
 
             var script = context.Job.Selection.NormalizeScripts ? _normalizer.Normalize(rawScript) : rawScript;
+
+            // Same byte ceiling as the database pass, for the same reason: an oversized file is
+            // committed locally, rejected by GitHub on push, and then re-pushed by every later run
+            // — a wedged branch. Server scope rarely produces one (an Agent job step embedding a
+            // generated script is the realistic source), but the two apply paths are meant to be
+            // identical and the comment below says so; this one had the guard missing.
+            var serverScriptByteLength = Encoding.UTF8.GetByteCount(script);
+            if (serverScriptByteLength > MaxScriptBytes)
+            {
+                context.IncrementFailed();
+                skipped.Add($"{identity.Type} {DescribeIdentity(identity)} — the generated script is " +
+                    $"{serverScriptByteLength / (1024 * 1024):N0} MB; GitHub rejects files over 100 MB");
+                return;
+            }
+
             // Pooled, exactly as the database pass encodes. Server scope is small by comparison,
             // but the same reasoning applies and keeping the two paths identical is what stops one
             // of them quietly regressing.
@@ -1706,6 +1758,19 @@ public sealed class SyncEngine : ISyncEngine
             context.IncrementScanned();
 
             var hasPrior = prior.TryGetValue(key, out var priorState);
+
+            // Stale-path cleanup, mirroring the database pass. serverRoot is the job's destination
+            // folder, so editing that folder moves EVERY server file — and without this the old
+            // ones were orphaned permanently: the object is marked seen, so the deletion pass never
+            // condemns them, and the state row below overwrites FilePath with the new path, so
+            // nothing in the system can ever find the old one again. Unlike the database pass this
+            // needs no incremental caveat: server scope has no watermarks, so every object reaches
+            // here on every run.
+            if (hasPrior && !string.Equals(priorState!.FilePath, repoRelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                DeleteRecordedFile(context, localPath, priorState.FilePath);
+            }
+
             var changeType = !hasPrior ? ChangeType.Added : priorState!.LastHash == hash ? ChangeType.Unchanged : ChangeType.Modified;
             if (changeType == ChangeType.Unchanged)
             {
@@ -2421,6 +2486,15 @@ public sealed class SyncEngine : ISyncEngine
         run.ObjectsScanned = context.Scanned;
         run.ObjectsFailed = context.Failed;
 
+        // Set here as well as in RunJobAsync's finally, because CommitMessageBuilder reads it and
+        // the commit happens below — inside this method, long before that finally runs. Every
+        // commit message and pull-request body Obsync has produced therefore said
+        // "Duration: 00:00:00". CommitMessageBuilderTests did not catch it: its fixture presets
+        // DurationMs, so it asserted a value production never supplied. The finally still
+        // overwrites this with the final figure for the persisted row, which is the one History,
+        // the report and the alert payload use.
+        run.DurationMs = (long)(_clock.UtcNow - run.StartedAt).TotalMilliseconds;
+
         var hasChanges = context.Changes.Count > 0;
 
         if (!hasChanges)
@@ -2641,11 +2715,12 @@ public sealed class SyncEngine : ISyncEngine
     {
         try
         {
-            if (!File.Exists(absolutePath))
-            {
-                return false;
-            }
-
+            // No File.Exists probe. Both callers have already established existence — the database
+            // pass from the batched FolderFileIndex, the server pass from its own check — so this
+            // was a second NTFS metadata round trip per object that reaches here, measured at ~15 us
+            // each with on-access antivirus (about 0.76 s per 50,000 objects). A file that vanishes
+            // in between is handled correctly by the IOException catch below, which is what would
+            // have covered that race anyway.
             var actual = File.ReadAllBytes(absolutePath);
             if (actual.AsSpan().SequenceEqual(expected))
             {
@@ -3303,9 +3378,10 @@ public sealed class SyncEngine : ISyncEngine
     /// </summary>
     /// <remarks>
     /// The two contention gates used to return an un-persisted run, which meant a scheduled sync
-    /// simply did not happen and nothing anywhere said so: no history row, no alert (the notify
-    /// call sits below this point and <c>NoChanges</c> would not have qualified anyway), and no
-    /// audit event. The overdue detector could not cover it either — it fires on a next-run time
+    /// simply did not happen and nothing anywhere said so: no history row, no alert, and no audit
+    /// event. All three are written here, because every caller returns this run straight out of
+    /// <c>RunJobAsync</c> and so never reaches the audit and notify calls further down.
+    /// The overdue detector could not cover it either — it fires on a next-run time
     /// left in the past, but reconcile refreshes that from the live trigger every 30 seconds, so
     /// the UI went on showing a confident future time. Writing the occurrence down is the only
     /// signal that survives.
@@ -3350,6 +3426,35 @@ public sealed class SyncEngine : ISyncEngine
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex, "Job {JobId}: the skipped occurrence could not be recorded.", job.Id);
+        }
+
+        // The audit event and the alert belong here, not to the caller: every caller RETURNS this
+        // run straight out of RunJobAsync, so the audit write and the notify call further down are
+        // never reached. Without these two lines the remarks above were only two-thirds true — the
+        // history row was written, but a Failed occurrence (an unopenable lock file, an unreadable
+        // credential under a service account) still alerted nobody and left no audit trail, which
+        // on a headless install is the whole signal. RunAlertEvaluator decides what actually sends,
+        // so a Skipped occurrence stays silent exactly as before.
+        try
+        {
+            await _audit.WriteAsync(
+                status == RunStatus.Failed ? AuditAction.RunFailed : AuditAction.RunCompleted,
+                "Job", job.Id.ToString(), job.Name,
+                $"{trigger} occurrence {run.RunKey} recorded as {status}: {reason}",
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Job {JobId}: the occurrence audit event could not be written.", job.Id);
+        }
+
+        try
+        {
+            await _alerts.NotifyAsync(run, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Alert delivery for occurrence {RunKey} failed.", run.RunKey);
         }
 
         return run;

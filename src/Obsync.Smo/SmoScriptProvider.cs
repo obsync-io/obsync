@@ -415,7 +415,7 @@ public sealed class SmoScriptProvider : IObjectScriptProvider
     {
         if (request.SqlLockTimeoutSeconds > 0)
         {
-            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {request.SqlLockTimeoutSeconds * 1000};");
+            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {SqlLockTimeout.ToMilliseconds(request.SqlLockTimeoutSeconds)};");
         }
     }
 

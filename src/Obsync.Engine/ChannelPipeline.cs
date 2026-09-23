@@ -49,6 +49,23 @@ internal static class ChannelPipeline
             }
         }
 
+        // NOTE: neither the producer nor the consumers below are started with `token`.
+        //
+        // Task.Run(body, token) does not merely pass the token to the body — it transitions the
+        // task straight to Canceled, WITHOUT RUNNING IT, if the token is already signalled when
+        // the thread pool dequeues it. A producer that faults synchronously on its first
+        // MoveNextAsync (SmoConnection.BuildServer and the metadata provider's connection-string
+        // build both run before the first await) cancels linkedCts while this method is still in
+        // the consumer-spawning loop, so the not-yet-started consumers were cancelled outright.
+        // Task.WhenAll then threw TaskCanceledException BEFORE the captured `failure` could be
+        // rethrown, and the engine's containment filters let OperationCanceledException through —
+        // so a real provider error was reported as "Run cancelled", with no error text, no alert
+        // (cancelled runs do not alert), and every already-scripted database discarded.
+        //
+        // Measured at ~9% of runs on an idle pool and 100% with a single-thread pool; worst at the
+        // server pass, which is the first pipeline of every run when the pool is coldest.
+        // Cancellation is still honoured cooperatively inside both bodies, and because both bodies
+        // swallow their own faults into `failure`, the awaits below cannot throw ahead of it.
         var producer = Task.Run(async () =>
         {
             try
@@ -66,7 +83,7 @@ internal static class ChannelPipeline
                 channel.Writer.Complete(ex); // makes draining consumers observe the failure and stop
                 await linkedCts.CancelAsync().ConfigureAwait(false);
             }
-        }, token);
+        });
 
         var consumers = new Task[workers];
         for (var i = 0; i < workers; i++)
@@ -86,7 +103,7 @@ internal static class ChannelPipeline
                     // Unblock the producer (which may be parked on a full channel) and peers.
                     await linkedCts.CancelAsync().ConfigureAwait(false);
                 }
-            }, token);
+            });
         }
 
         // Consumers and the producer swallow their own faults into `failure`, so these awaits do not

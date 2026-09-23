@@ -137,6 +137,38 @@ public sealed class PushFailureDiagnosisTests
         Assert.Contains(expected, PushFailureDiagnosis.Explain(error));
     }
 
+    [Theory]
+    // Obsync's own PR branch names end in eight hex characters of the job's GUID, and git echoes
+    // the ref in every push failure — so "403" and "401" appeared as ordinary content in output
+    // that had nothing to do with credentials. Matched as bare substrings, they beat the
+    // non-fast-forward test below them and permanently misdiagnosed every push failure for roughly
+    // one job in three hundred, sending the user to replace a perfectly valid token.
+    [InlineData(
+        " ! [rejected]        obsync/sales/a403f2c1 -> obsync/sales/a403f2c1 (non-fast-forward)\n"
+        + "error: failed to push some refs to 'https://github.com/acme/x.git'")]
+    [InlineData(
+        " ! [rejected]        obsync/sales/9401bd7e -> obsync/sales/9401bd7e (non-fast-forward)\n"
+        + "hint: Updates were rejected because the tip of your current branch is behind")]
+    [InlineData(
+        "fatal: unable to access 'https://github.com/acme/issue-403-fix.git/'\n"
+        + "error: failed to push some refs (fetch first)")]
+    public void AHexRefOrRepositoryNameContainingAStatusCode_IsNotReadAsACredentialProblem(string error)
+    {
+        var reason = PushFailureDiagnosis.Explain(error);
+
+        Assert.DoesNotContain("write (Contents) permission", reason);
+        Assert.DoesNotContain("access token is valid", reason);
+    }
+
+    [Theory]
+    [InlineData("remote: HTTP 403 Forbidden while accessing https://github.com/acme/x.git", "write (Contents) permission")]
+    [InlineData("fatal: unable to access 'https://github.com/acme/x.git/': The requested URL returned error: 401", "credentials")]
+    public void ARealStatusCode_IsStillRecognised(string error, string expected)
+    {
+        // The narrowing above must not cost a genuine 401/403, which git prints delimited.
+        Assert.Contains(expected, PushFailureDiagnosis.Explain(error));
+    }
+
     [Fact]
     public void AnUnrecognisedError_FallsBackToItsFirstLine()
     {

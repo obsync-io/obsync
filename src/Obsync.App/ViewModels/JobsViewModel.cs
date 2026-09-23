@@ -288,8 +288,23 @@ public sealed partial class JobsViewModel : ObservableObject, IAsyncViewModel
             return;
         }
 
-        await _jobs.DeleteAsync(job.Id);
-        await _audit.WriteAsync(AuditAction.JobDeleted, "Job", job.Id.ToString(), job.Name);
+        // Deleting a job cascades to its runs, run logs, run changes, object states, watermarks and
+        // quarantine rows in one statement — millions of rows on a mature VLDB job, holding the
+        // single SQLite write lock for seconds. Both this and the audit write on the next line can
+        // therefore lose a race with the scheduler service and throw "database is locked", and
+        // unguarded they reached the dispatcher as a raw error dialog. The sibling Servers and
+        // Repositories deletes already report failure inline; this one did not.
+        try
+        {
+            await _jobs.DeleteAsync(job.Id);
+            await _audit.WriteAsync(AuditAction.JobDeleted, "Job", job.Id.ToString(), job.Name);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not delete {job.Name} — {ex.Message}";
+            return;
+        }
+
         await LoadAsync();
     }
 }

@@ -32,6 +32,27 @@ public static partial class PushFailureDiagnosis
     [GeneratedRegex(@"^\s*remote:\s*-\s*(?<rule>.+?)\s*$", RegexOptions.Multiline)]
     private static partial Regex ViolationBullet();
 
+    /// <summary>
+    /// An HTTP 401/403 as a whole token, never as three characters inside a longer run.
+    /// </summary>
+    /// <remarks>
+    /// These were matched with a bare <c>Contains("403")</c>, which is also valid hexadecimal —
+    /// and Obsync's own pull-request branch names end in eight hex characters of the job's GUID
+    /// (<c>obsync/&lt;slug&gt;/a403f2c1</c>), which git echoes in every push failure. For roughly
+    /// one job in three hundred, EVERY push failure was therefore diagnosed as "the access token
+    /// needs write permission" — permanently, for that job — sending the user to replace a token
+    /// that was never the problem. A repository named <c>issue-403-fix</c> does the same via the
+    /// remote URL, which is why <c>-</c> and <c>_</c> are excluded on both sides as well as
+    /// alphanumerics: a status code git actually reports is delimited by whitespace or punctuation
+    /// (<c>HTTP 403 Forbidden</c>, <c>returned error: 401</c>), never by a word separator.
+    /// </remarks>
+    [GeneratedRegex(@"(?<![0-9a-z_-])403(?![0-9a-z_-])")]
+    private static partial Regex HttpForbidden();
+
+    /// <inheritdoc cref="HttpForbidden" />
+    [GeneratedRegex(@"(?<![0-9a-z_-])401(?![0-9a-z_-])")]
+    private static partial Regex HttpUnauthorized();
+
     /// <summary>Explains a failed push, or falls back to its first line.</summary>
     public static string Explain(string? error)
     {
@@ -68,13 +89,13 @@ public static partial class PushFailureDiagnosis
 
         // --- Credentials and permissions ----------------------------------------------------------
 
-        if (text.Contains("permission") || text.Contains("403") || text.Contains("forbidden"))
+        if (text.Contains("permission") || text.Contains("forbidden") || HttpForbidden().IsMatch(text))
         {
             return "GitHub denied the push — the access token needs write (Contents) permission on this repository.";
         }
 
         if (text.Contains("authentication failed") || text.Contains("could not read username")
-            || text.Contains("401") || text.Contains("invalid username or password"))
+            || text.Contains("invalid username or password") || HttpUnauthorized().IsMatch(text))
         {
             return "GitHub rejected the credentials — check the repository's access token is valid and not expired.";
         }

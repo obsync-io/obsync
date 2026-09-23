@@ -78,6 +78,41 @@ public sealed class ChannelPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_ProducerFaultingBeforeItYields_StillReportsTheRealError()
+    {
+        // The regression this pins: consumers used to be started with Task.Run(body, token) against
+        // the pipeline's own linked token. A producer that faults SYNCHRONOUSLY — before its first
+        // await, which is exactly what SmoConnection.BuildServer and the metadata provider's
+        // connection-string build do — cancels that token while RunAsync is still spawning
+        // consumers, so the not-yet-started ones went straight to Canceled without running.
+        // Task.WhenAll then threw TaskCanceledException ahead of the captured failure, the engine's
+        // containment filters let OperationCanceledException through, and a genuine provider error
+        // was recorded as "Run cancelled": no error text, no alert, all scripted work discarded.
+        //
+        // RunAsync_ProducerFault_PropagatesWithoutHanging cannot catch this — its producer yields
+        // an item and awaits first, so every consumer is running by the time the fault lands.
+        //
+        // Deliberately many workers and repeated attempts: the old code masked the error ~9% of the
+        // time on an idle pool, so a single attempt at low width would pass even when broken.
+        static async IAsyncEnumerable<int> FaultsImmediately([EnumeratorCancellation] CancellationToken ct = default)
+        {
+            throw new InvalidOperationException("provider boom");
+#pragma warning disable CS0162 // unreachable: required to make this an iterator
+            yield break;
+#pragma warning restore CS0162
+        }
+
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                ChannelPipeline.RunAsync(
+                    FaultsImmediately(), (_, _) => Task.CompletedTask, degreeOfParallelism: 32, CancellationToken.None));
+
+            Assert.Equal("provider boom", ex.Message);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_ConsumerFault_PropagatesWithoutDeadlock()
     {
         // A large source against a small worker pool keeps the bounded channel full, so a faulting

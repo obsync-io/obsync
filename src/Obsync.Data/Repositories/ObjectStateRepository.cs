@@ -165,7 +165,11 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         await using var connection = await _connectionFactory.OpenAsync(cancellationToken).ConfigureAwait(false);
         var names = await connection.QueryAsync<string>(new CommandDefinition(
             """
-            SELECT DISTINCT database_name FROM object_states
+            -- DISTINCT ... COLLATE NOCASE, matching the three sibling reads in this file. The
+            -- column itself is BINARY (only ux_object_states_identity carries NOCASE), so without
+            -- it a case twin listed the same database twice in the Job Workspace picker even
+            -- though every other read in the product collapses them.
+            SELECT DISTINCT database_name COLLATE NOCASE FROM object_states
             WHERE job_id = $job AND object_type < 60 ORDER BY database_name;
             """,
             new { job = jobId.ToString() }, cancellationToken: cancellationToken)).ConfigureAwait(false);
@@ -365,16 +369,6 @@ public sealed class ObjectStateRepository : IObjectStateRepository
         LastStatus = (Shared.RunStatus)row.LastStatus,
         ErrorMessage = row.ErrorMessage,
     };
-
-    private sealed class SlimStateRow
-    {
-        public long Id { get; set; }
-        public long ObjectType { get; set; }
-        public string SchemaName { get; set; } = string.Empty;
-        public string ObjectName { get; set; } = string.Empty;
-        public string FilePath { get; set; } = string.Empty;
-        public string LastHash { get; set; } = string.Empty;
-    }
 
     private sealed class StateRow
     {

@@ -204,9 +204,37 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     {
         if (SupportInfoRows.Count > 0)
         {
-            System.Windows.Clipboard.SetText(
-                string.Join(Environment.NewLine, SupportInfoRows.Select(r => $"{r.Key}: {r.Value}")));
-            SupportInfoStatus = "Copied to the clipboard.";
+            SupportInfoStatus = TryCopyToClipboard(
+                string.Join(Environment.NewLine, SupportInfoRows.Select(r => $"{r.Key}: {r.Value}")), out var failure)
+                ? "Copied to the clipboard."
+                : failure;
+        }
+    }
+
+    /// <summary>
+    /// Copies to the clipboard, reporting failure instead of crashing. Returns false and sets
+    /// <paramref name="failure"/> when the clipboard could not be opened.
+    /// </summary>
+    /// <remarks>
+    /// <c>Clipboard.SetText</c> throws <c>ExternalException</c> (CLIPBRD_E_CANT_OPEN) whenever
+    /// another process holds the clipboard open — routine with RDP clipboard sync, clipboard
+    /// managers, Teams and Office. Every copy command on this page is a synchronous RelayCommand,
+    /// so an escaping throw reached the dispatcher's unhandled handler and showed a raw HRESULT
+    /// dialog. The diff viewer (ScriptDiffViewModel) and the Servers page already guard theirs;
+    /// this is the same guard, with the failure surfaced inline as the rest of Settings does.
+    /// </remarks>
+    private static bool TryCopyToClipboard(string text, out string? failure)
+    {
+        try
+        {
+            System.Windows.Clipboard.SetText(text);
+            failure = null;
+            return true;
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            failure = "Could not access the clipboard — another program is using it. Try again.";
+            return false;
         }
     }
 
@@ -319,8 +347,9 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     {
         var lines = Diagnostics.Select(d =>
             $"{d.Name}: {d.Status} — {d.Detail} (checked {d.CheckedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss})");
-        System.Windows.Clipboard.SetText(string.Join(Environment.NewLine, lines));
-        DiagnosticsSummary = "Results copied to the clipboard.";
+        DiagnosticsSummary = TryCopyToClipboard(string.Join(Environment.NewLine, lines), out var failure)
+            ? "Results copied to the clipboard."
+            : failure;
     }
 
     // --- Recent logs (Diagnostics tab) ------------------------------------------------------------
@@ -412,7 +441,10 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     {
         if (SelectedLogEntry is { } entry)
         {
-            System.Windows.Clipboard.SetText($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{entry.Level}] {entry.Message}");
+            LogsStatus = TryCopyToClipboard(
+                $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{entry.Level}] {entry.Message}", out var failure)
+                ? "Log entry copied to the clipboard."
+                : failure;
         }
     }
 
@@ -1197,7 +1229,11 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
     {
         if (PermissionScript is { } script)
         {
-            System.Windows.Clipboard.SetText(script);
+            // PermissionScriptLabel is the only bound status surface in this section, so a failure
+            // reported anywhere else would be invisible.
+            PermissionScriptLabel = TryCopyToClipboard(script, out var failure)
+                ? "Script copied to the clipboard."
+                : failure;
         }
     }
 
@@ -1216,9 +1252,22 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             DefaultExt = ".sql",
         };
 
-        if (dialog.ShowDialog() == true)
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        // Every other export path on this page reports a write failure inline; this one let an
+        // UnauthorizedAccessException or IOException — a vanished network share, a GP software
+        // restriction — reach the dispatcher as a raw error dialog.
+        try
         {
             System.IO.File.WriteAllText(dialog.FileName, script);
+            PermissionScriptLabel = $"Saved to {dialog.FileName}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            PermissionScriptLabel = $"Could not save the script — {ex.Message}";
         }
     }
 }

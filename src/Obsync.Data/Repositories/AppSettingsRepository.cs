@@ -99,10 +99,45 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
 
     public AppSettingsRepository(IDbConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
+    /// <summary>
+    /// Deserializes a stored settings value, degrading to <paramref name="fallback"/> when the
+    /// stored text is missing or is not valid JSON.
+    /// </summary>
+    /// <remarks>
+    /// Three getters in this file already did exactly this, each with its own note about not taking
+    /// a surface down for one unreadable value; the rest let <see cref="JsonException"/> propagate.
+    /// The inconsistency was the defect rather than either behaviour — and the unguarded set
+    /// included <see cref="GetProxyAsync"/>, which the engine reads on every run through
+    /// ProxyProvider, so a single malformed row would have failed every job with a raw parser error
+    /// as its run failure message.
+    /// <para>
+    /// Nothing in the product writes malformed JSON, so this fires only on out-of-band corruption
+    /// or on a downgrade to a build that cannot read a newer value's shape. In both cases the
+    /// default is the right answer and the alternative is an install that will not start.
+    /// </para>
+    /// </remarks>
+    private static T ReadOrDefault<T>(string? json, Func<T> fallback)
+        where T : new()
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return fallback();
+        }
+
+        try
+        {
+            return ObsyncJson.Deserialize<T>(json) ?? fallback();
+        }
+        catch (JsonException)
+        {
+            return fallback();
+        }
+    }
+
     public async Task<ProxySettings> GetProxyAsync(CancellationToken cancellationToken = default)
     {
         var json = await GetValueAsync(ProxyKey, cancellationToken).ConfigureAwait(false);
-        return string.IsNullOrEmpty(json) ? new ProxySettings() : ObsyncJson.Deserialize<ProxySettings>(json);
+        return ReadOrDefault(json, static () => new ProxySettings());
     }
 
     public Task UpsertProxyAsync(ProxySettings settings, CancellationToken cancellationToken = default) =>
@@ -134,7 +169,7 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     public async Task<AlertSettings> GetAlertSettingsAsync(CancellationToken cancellationToken = default)
     {
         var json = await GetValueAsync(AlertsKey, cancellationToken).ConfigureAwait(false);
-        return string.IsNullOrEmpty(json) ? new AlertSettings() : ObsyncJson.Deserialize<AlertSettings>(json);
+        return ReadOrDefault(json, static () => new AlertSettings());
     }
 
     public Task UpsertAlertSettingsAsync(AlertSettings settings, CancellationToken cancellationToken = default) =>
@@ -143,7 +178,11 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     public async Task<IReadOnlyList<string>> GetProductionTagsAsync(CancellationToken cancellationToken = default)
     {
         var json = await GetValueAsync(ProductionTagsKey, cancellationToken).ConfigureAwait(false);
-        return string.IsNullOrEmpty(json) ? DefaultProductionTags : ObsyncJson.Deserialize<List<string>>(json);
+        // Falls back to the defaults rather than an empty list: an unreadable value must not leave
+        // the production Run-Now guard silently unarmed.
+        return string.IsNullOrEmpty(json)
+            ? DefaultProductionTags
+            : ReadOrDefault<List<string>>(json, static () => [.. DefaultProductionTags]);
     }
 
     public Task SetProductionTagsAsync(IReadOnlyList<string> markers, CancellationToken cancellationToken = default) =>
@@ -161,7 +200,7 @@ public sealed class AppSettingsRepository : IAppSettingsRepository
     public async Task<CommitterIdentity> GetCommitterAsync(CancellationToken cancellationToken = default)
     {
         var json = await GetValueAsync(CommitterKey, cancellationToken).ConfigureAwait(false);
-        return string.IsNullOrEmpty(json) ? CommitterIdentity.Default : ObsyncJson.Deserialize<CommitterIdentity>(json);
+        return ReadOrDefault(json, static () => CommitterIdentity.Default);
     }
 
     public Task SetCommitterAsync(CommitterIdentity committer, CancellationToken cancellationToken = default) =>

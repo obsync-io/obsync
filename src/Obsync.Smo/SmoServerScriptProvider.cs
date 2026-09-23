@@ -2,6 +2,7 @@ using System.Collections;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.SqlServer.Management.Smo;
+using Obsync.Shared;
 using Obsync.Shared.Models;
 using Obsync.Shared.Objects;
 using Obsync.Shared.Scripting;
@@ -49,10 +50,11 @@ public sealed class SmoServerScriptProvider : IServerObjectScriptProvider
         // Bound how long SMO's metadata reads wait on locks (fail fast on a busy server). 0 = unset.
         if (request.SqlLockTimeoutSeconds > 0)
         {
-            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {request.SqlLockTimeoutSeconds * 1000};");
+            server.ConnectionContext.ExecuteNonQuery($"SET LOCK_TIMEOUT {SqlLockTimeout.ToMilliseconds(request.SqlLockTimeoutSeconds)};");
         }
 
         var options = SmoScriptingOptionsFactory.Create(request.Selection);
+        var yielded = 0;
 
         foreach (var type in request.Types)
         {
@@ -123,7 +125,15 @@ public sealed class SmoServerScriptProvider : IServerObjectScriptProvider
                 }
 
                 yield return RawScriptedObject.Scripted(identity, script!);
-                await Task.Yield();
+
+                // Periodic, not per-object, matching SmoScriptProvider — a thread-pool hop per item
+                // is measurable overhead at scale, and the two providers are meant to read
+                // identically. Negligible for a few hundred server objects; not for an instance
+                // with thousands of logins.
+                if ((++yielded & 63) == 0)
+                {
+                    await Task.Yield();
+                }
             }
         }
     }
