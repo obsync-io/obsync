@@ -31,9 +31,11 @@ Double-click the MSI. The wizard steps are:
      your jobs or run schedules, because Obsync's data and credentials live in the *per-user*
      profile and Windows Credential Manager vault. The app shows a scheduler warning until the
      account is fixed.
-   - **This account**: enter `DOMAIN\user` (or `.\user` on a standalone PC) and its password —
-     **the same account that runs the Obsync app**, so the service sees the credentials and data the
-     app saved. The account also needs the **"Log on as a service"** right; if it does not have it,
+   - **This account**: enter `DOMAIN\user` (or `.\user` on a standalone PC) and its password. On a
+     workstation use **the same account that runs the Obsync app**, so the service sees the
+     credentials and data the app saved. On a server use a dedicated service account and share one
+     data root instead — see [Where Obsync keeps its data](#where-obsync-keeps-its-data--and-how-to-share-it).
+     The account also needs the **"Log on as a service"** right; if it does not have it,
      the install still succeeds but the service will not start (see below). For a group Managed
      Service Account enter `DOMAIN\name$` and leave the password blank — the wizard only accepts a
      blank password for account kinds Windows logs on without one (`DOMAIN\name$`, `NT SERVICE\...`,
@@ -103,6 +105,66 @@ Manager, which is what gMSA logons require. Prerequisites, before running the MS
 
    For **LocalSystem** or an `NT SERVICE\...` account, `psexec -s obsync credential set ...` is
    simpler and interactive.
+
+## Where Obsync keeps its data — and how to share it
+
+Obsync's database (`obsync.db`), logs, locks and git workspaces live under one **data root**. By
+default that root is **per Windows account**:
+
+| Host | Default data root |
+| --- | --- |
+| The app, for each user who opens it | `C:\Users\<user>\AppData\Local\Obsync` |
+| The service, running as Local System | `C:\Windows\System32\config\systemprofile\AppData\Local\Obsync` |
+| The service, running as `DOMAIN\svc-obsync` | that account's own `AppData\Local\Obsync` |
+
+This is the single most common cause of "the service runs but nothing happens". The service is
+healthy, heartbeating and scheduling — against a database the app never opens. The app detects it
+and says so in the scheduler banner, and `obsync whoami` prints the account and root a run will
+actually use.
+
+There are two ways to make the app and the service agree, and **they suit different deployments**:
+
+**On a workstation** — set the service's Log On account to the user who runs the app
+(`services.msc` → Obsync → Log On), restart it, and both use that account's root. Simple, and wrong
+for a server: it ties an unattended service to a human account that expires, locks out, and is
+eventually offboarded.
+
+**On a server** — keep a proper service account and point both hosts at one shared root:
+
+```powershell
+# Machine-wide (system) variable — a service inherits only the SYSTEM environment,
+# so a User-scoped variable will NOT reach it.
+[Environment]::SetEnvironmentVariable('OBSYNC_DATA_ROOT', 'D:\Obsync', 'Machine')
+
+Restart-Service Obsync          # the service reads it at startup
+# sign out and back in, or restart the app, so the app picks it up too
+```
+
+Then store the credentials for the service account, because **Windows Credential Manager stays
+per-account no matter where the data root points**:
+
+```powershell
+psexec -s obsync credential set ...        # for Local System
+# or run obsync credential set as DOMAIN\svc-obsync
+```
+
+Rules that matter:
+
+- **Machine-scoped, not user-scoped.** A service process inherits the system environment only.
+- **Fully qualified.** A relative value resolves against the current directory, which is the install
+  folder for the app and `C:\Windows\System32` for a service — so the two would still disagree.
+  Obsync rejects a relative value and falls back to the per-account default rather than using it.
+- **Grant the service account write access** to the folder you choose.
+- **Verify it took.** Settings → Diagnostics → *Data root* states both the path and whether it came
+  from `OBSYNC_DATA_ROOT`; `obsync whoami` does the same from a shell. If it still shows a path
+  under `AppData\Local`, the variable did not reach that host.
+- **Moving an existing install** does not migrate anything. Copy `obsync.db` into the new root
+  before restarting, or you start from an empty database with the old one still on disk.
+
+Whichever you choose, settle it **before** creating jobs. Retention, diagnostics, the workspace
+reclaimer and the support bundle all act on whichever root the host that runs them resolved — so on
+a split deployment, retention configured in the app prunes the app's history while the service's
+history, the one actually growing on the server, is never pruned.
 
 ## Repair, uninstall, upgrade
 

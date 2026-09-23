@@ -208,6 +208,13 @@ public sealed class GitWorkspaceTests : IDisposable
         Assert.Equal("true", await ConfigValueAsync(workPath, "core.longpaths"));
         Assert.Equal("true", await ConfigValueAsync(workPath, "feature.manyFiles"));
         Assert.Equal("batch", await ConfigValueAsync(workPath, "core.fsyncMethod"));
+
+        // Obsync writes LF and git stores LF; a CRLF working tree is a mismatch we would only
+        // manufacture for ourselves, and it makes the content comparison in FileHasContent fail for
+        // every object on every run. Set at CLONE time only — see CloneFreshAsync for why applying
+        // it to an existing clone stages a CRLF rewrite of every tracked file.
+        Assert.Equal("false", await ConfigValueAsync(workPath, "core.autocrlf"));
+
         Assert.Contains("*.obsync-tmp", await File.ReadAllLinesAsync(Path.Combine(workPath, ".git", "info", "exclude")));
     }
 
@@ -232,6 +239,16 @@ public sealed class GitWorkspaceTests : IDisposable
         Assert.Equal("true", await ConfigValueAsync(workPath, "core.longpaths"));
         Assert.Equal("true", await ConfigValueAsync(workPath, "feature.manyFiles"));
         Assert.Equal("batch", await ConfigValueAsync(workPath, "core.fsyncMethod"));
+
+        // core.autocrlf is DELIBERATELY not applied here, unlike its three siblings above. This
+        // assertion exists to stop that inconsistency being tidied up, because tidying it is
+        // destructive: on a clone whose working tree is already CRLF, setting the key re-checks-out
+        // nothing (git reports the tree clean — the index's cached stat matches the CRLF file git
+        // itself wrote, and the forced `checkout -f -B` on the path below writes no files), so the
+        // next thing to touch any file's stat flips all of them to modified and `git add -A` stages
+        // a CRLF rewrite of every tracked script into the customer's repository.
+        Assert.Null(await LocalConfigOrNullAsync(workPath, "core.autocrlf"));
+
         var excludePath = Path.Combine(workPath, ".git", "info", "exclude");
         Assert.Contains("*.obsync-tmp", await File.ReadAllLinesAsync(excludePath));
 
@@ -558,6 +575,18 @@ public sealed class GitWorkspaceTests : IDisposable
         var result = await _runner.RunAsync(workPath, ["config", "--local", "--get", key]);
         Assert.True(result.Success, result.StandardError);
         return result.StandardOutput.Trim();
+    }
+
+    /// <summary>The repo-LOCAL value of a key, or null when the clone does not set it itself.</summary>
+    /// <remarks>
+    /// Must be <c>--local</c>: the machine's system gitconfig commonly sets <c>core.autocrlf=true</c>
+    /// (the bundled MinGit does), so an effective-value read would report "true" for a key this
+    /// clone never touched and the assertion would prove nothing.
+    /// </remarks>
+    private async Task<string?> LocalConfigOrNullAsync(string workPath, string key)
+    {
+        var result = await _runner.RunAsync(workPath, ["config", "--local", "--get", key]);
+        return result.Success ? result.StandardOutput.Trim() : null;
     }
 
     private async Task<string> InitBareRemoteAsync()

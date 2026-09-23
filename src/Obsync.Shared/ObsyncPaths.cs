@@ -10,7 +10,24 @@ public static class ObsyncPaths
     /// resolves via the shell's known-folder API and deliberately ignores a <c>%LOCALAPPDATA%</c>
     /// env-var override, so this dedicated variable is the only reliable redirection.)
     /// </summary>
-    public static string Root { get; } = ResolveRoot(Environment.GetEnvironmentVariable("OBSYNC_DATA_ROOT"));
+    private static readonly (string Path, bool FromEnvironment) Resolved =
+        ResolveRootWithSource(Environment.GetEnvironmentVariable("OBSYNC_DATA_ROOT"));
+
+    public static string Root => Resolved.Path;
+
+    /// <summary>
+    /// True when <see cref="Root"/> came from <c>OBSYNC_DATA_ROOT</c> rather than this account's
+    /// own Local Application Data folder.
+    /// </summary>
+    /// <remarks>
+    /// This is the difference between a deployment where the app and the service share one database
+    /// and one where they silently use two. It cannot be inferred from the path — a root under
+    /// <c>C:\ProgramData\Obsync</c> looks identical whether it was chosen deliberately or fallen
+    /// back into — so it is recorded at resolution time and surfaced by diagnostics and the support
+    /// bundle. Without it there is no way for an operator to CONFIRM that a shared-root deployment
+    /// is actually shared; they can only observe, later, that it was not.
+    /// </remarks>
+    public static bool RootIsExplicitlyConfigured => Resolved.FromEnvironment;
 
     /// <summary>
     /// Set when <see cref="Root"/> could not be resolved the normal way and a fallback was used.
@@ -36,14 +53,22 @@ public static class ObsyncPaths
     /// inherits only the system environment.
     /// </para>
     /// </summary>
-    internal static string ResolveRoot(string? overrideRoot)
+    internal static string ResolveRoot(string? overrideRoot) => ResolveRootWithSource(overrideRoot).Path;
+
+    /// <inheritdoc cref="ResolveRoot(string?)" />
+    /// <remarks>
+    /// Also reports whether the override actually applied, which is not recoverable from the path
+    /// afterwards — an unusable override falls through to the default and must not be reported as
+    /// a deliberate configuration.
+    /// </remarks>
+    internal static (string Path, bool FromEnvironment) ResolveRootWithSource(string? overrideRoot)
     {
         var trimmed = overrideRoot?.Trim().Trim('"').Trim();
         if (!string.IsNullOrEmpty(trimmed) && Path.IsPathFullyQualified(trimmed))
         {
             try
             {
-                return Path.GetFullPath(trimmed);
+                return (Path.GetFullPath(trimmed), true);
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
             {
@@ -51,7 +76,7 @@ public static class ObsyncPaths
             }
         }
 
-        return DefaultRoot();
+        return (DefaultRoot(), false);
     }
 
     /// <summary>

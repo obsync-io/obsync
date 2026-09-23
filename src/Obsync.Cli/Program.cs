@@ -577,6 +577,15 @@ static int PrintWhoAmI()
 {
     Console.WriteLine($"Account:   {CurrentActor.Name}");
     Console.WriteLine($"Data root: {ObsyncPaths.Root}");
+
+    // Provenance, not just the path. This command exists to answer "which database will a run
+    // actually use", and on a shared-root deployment the answer hinges on whether OBSYNC_DATA_ROOT
+    // reached THIS host — a service inherits only the system environment, so a user-scoped variable
+    // silently does nothing. The path alone cannot distinguish the two cases.
+    Console.WriteLine(ObsyncPaths.RootIsExplicitlyConfigured
+        ? "Source:    OBSYNC_DATA_ROOT (shared by every account on this machine)"
+        : "Source:    this account's own profile (set OBSYNC_DATA_ROOT machine-wide to share one)");
+
     if (ObsyncPaths.RootResolutionWarning is { } warning)
     {
         Console.WriteLine();

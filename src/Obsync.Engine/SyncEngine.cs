@@ -2747,10 +2747,15 @@ public sealed class SyncEngine : ISyncEngine
             }
 
             // Line endings are not content. git converts LF to CRLF on checkout whenever
-            // core.autocrlf is true — which the bundled MinGit sets, and which the hardening
-            // deliberately does not override — while Obsync writes LF. So after any clone or
-            // re-clone every file on disk is byte-DIFFERENT from what was scripted, though the blob
-            // git stores is identical.
+            // core.autocrlf is true — the bundled MinGit's default — while Obsync writes LF. So on
+            // such a clone every file on disk is byte-DIFFERENT from what was scripted, though the
+            // blob git stores is identical.
+            //
+            // Clones Obsync creates now pass `-c core.autocrlf=false` (GitWorkspace.CloneFreshAsync)
+            // and check out LF, so this fallback no longer runs for them. It is still required, and
+            // is not dead code: clones made by earlier versions keep their original setting —
+            // flipping it in place would stage a CRLF rewrite of every tracked file — and a
+            // repository whose blobs already contain CRLF reaches here regardless of the setting.
             //
             // Comparing raw bytes therefore declared all 13,000-odd objects Modified on the first
             // run after a fresh workspace, rewrote every one of them, and produced no commit at all

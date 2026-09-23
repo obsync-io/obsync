@@ -169,10 +169,30 @@ public sealed class DiagnosticsService : IDiagnosticsService
     /// account. The service starts, heartbeats and reports itself healthy against a database the app
     /// will never look at, so nothing else in the product can tell the user.
     /// </remarks>
-    private DiagnosticResult CheckDataRoot() =>
-        ObsyncPaths.RootResolutionWarning is { } warning
-            ? new DiagnosticResult("Data root", DiagnosticStatus.Warning, warning, _clock.UtcNow)
-            : new DiagnosticResult("Data root", DiagnosticStatus.Pass, ObsyncPaths.Root, _clock.UtcNow);
+    private DiagnosticResult CheckDataRoot()
+    {
+        if (ObsyncPaths.RootResolutionWarning is { } warning)
+        {
+            return new DiagnosticResult("Data root", DiagnosticStatus.Warning, warning, _clock.UtcNow);
+        }
+
+        // Say WHERE the root came from, not just what it is.
+        //
+        // The root is per Windows account by default, so on a server — where the service runs under
+        // its own account — the app and the service use two different databases. The scheduler
+        // banner already reports the consequence ("cannot see your jobs"), but nothing anywhere
+        // confirmed the opposite: that a deliberately shared deployment really is shared. The paths
+        // are indistinguishable by inspection, so an operator who sets OBSYNC_DATA_ROOT has no way
+        // to verify it took effect until something fails. This is also the setting that decides
+        // which database retention, diagnostics and the workspace reclaimer act on.
+        var detail = ObsyncPaths.RootIsExplicitlyConfigured
+            ? $"{ObsyncPaths.Root} (set by OBSYNC_DATA_ROOT, so every account on this machine — "
+                + "including the service account — shares this database)"
+            : $"{ObsyncPaths.Root} (this Windows account's own folder; the service account has a separate "
+                + "one unless OBSYNC_DATA_ROOT is set machine-wide)";
+
+        return new DiagnosticResult("Data root", DiagnosticStatus.Pass, detail, _clock.UtcNow);
+    }
 
     internal static string FormatBytes(long bytes) => bytes switch
     {

@@ -65,4 +65,33 @@ public sealed class ObsyncPathsTests
         // exists — which is exactly the failure that made a bad root undiagnosable in the service.
         Assert.Equal(DefaultRoot, ObsyncPaths.ResolveRoot("D:\\bad\0path"));
     }
+
+    [Theory]
+    [InlineData(@"D:\ObsyncData")]
+    [InlineData("  \"D:\\ObsyncData\"  ")]
+    public void AnOverrideThatApplied_IsReportedAsExplicitlyConfigured(string raw)
+    {
+        var (path, fromEnvironment) = ObsyncPaths.ResolveRootWithSource(raw);
+
+        Assert.Equal(@"D:\ObsyncData", path);
+        Assert.True(fromEnvironment);
+    }
+
+    [Theory]
+    [InlineData(null)]                      // not set
+    [InlineData("")]                        // set but empty
+    [InlineData(@"relative\path")]          // rejected: resolves differently per host
+    [InlineData("D:\\bad\0path")]           // rejected: unusable
+    public void AnOverrideThatDidNotApply_IsNotReportedAsConfigured(string? raw)
+    {
+        // The distinction that matters operationally. A rejected override falls back to the
+        // per-account default, which is the very split the operator was trying to eliminate — and
+        // the resulting path is indistinguishable from "never configured". Reporting it as
+        // configured would tell them the deployment is shared when it is not, which is worse than
+        // saying nothing: the whole point of surfacing provenance is that the path cannot answer it.
+        var (path, fromEnvironment) = ObsyncPaths.ResolveRootWithSource(raw);
+
+        Assert.Equal(DefaultRoot, path);
+        Assert.False(fromEnvironment);
+    }
 }

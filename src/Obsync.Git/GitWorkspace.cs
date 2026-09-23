@@ -299,6 +299,33 @@ public sealed partial class GitWorkspace : IGitWorkspace
                 "-c", "core.longpaths=true",
                 "-c", "feature.manyFiles=true",
                 "-c", "core.fsyncMethod=batch",
+                // - core.autocrlf=false: Obsync writes LF and git stores LF, so the CRLF a Windows
+                //   checkout would produce exists ONLY in the working tree — a mismatch we
+                //   manufacture locally and then pay to undo. It makes FileHasContent's byte
+                //   comparison fail for every object on every run (forcing the CRLF-collapse
+                //   fallback), and makes `git add` emit one "LF will be replaced by CRLF" warning
+                //   per file — 10,000 lines of stderr on a mid-sized estate.
+                //
+                //   Measured, so nobody re-sells this as a speed fix: it is worth ~3s of `git add`
+                //   on a 10,000-object FIRST run (about 0.8% of a 369s run), nothing on `git
+                //   commit`, and ~11ms on a no-change run at the engine's real parallelism. The
+                //   reason to do it is that the workspace becomes consistent with both ends, not
+                //   that it is faster. Repository CONTENT is byte-identical either way, because the
+                //   blobs were always LF.
+                //
+                //   DELIBERATELY NOT in the PrepareAsync config block below, where its three
+                //   siblings are re-applied to pre-existing clones. Flipping this on a clone whose
+                //   working tree is already CRLF does NOT re-checkout it: git reports the tree
+                //   clean because the index's cached stat matches the CRLF file git itself wrote,
+                //   and the forced `checkout -f -B` further down writes nothing (verified — it sees
+                //   HEAD tree == target tree and a stat-clean worktree). The moment anything then
+                //   touches a file's stat, all of them flip to modified and `git add -A` stages
+                //   CRLF content — a commit rewriting every script in the customer's repository
+                //   with a line-ending-only diff. Converting an existing clone needs
+                //   `git rm --cached -r` + `git reset --hard` (~6.6s at 10,000 files); that is not
+                //   worth 0.8%, so existing clones keep autocrlf as they are and FileHasContent's
+                //   fallback keeps covering them.
+                "-c", "core.autocrlf=false",
                 context.RemoteUrl, context.LocalPath,
             ],
             cancellationToken,

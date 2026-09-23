@@ -64,6 +64,20 @@ public sealed class SchedulerHealthTests
         Assert.Equal(SchedulerHealthStatus.NotExecutingYourJobs, health.Status);
         Assert.False(health.CanExecuteSchedules);
         Assert.Contains("LocalSystem", health.Summary, StringComparison.Ordinal);
+
+        // Both remedies must be offered, server-appropriate one first. Changing the service's logon
+        // account to the signed-in user is the right answer on a workstation and the WRONG one on a
+        // server — it ties an unattended service to a human account that expires, locks out and is
+        // eventually offboarded. For years this message named only that option, so the guidance
+        // steered exactly the deployments that could least afford it.
+        Assert.Contains("OBSYNC_DATA_ROOT", health.Summary, StringComparison.Ordinal);
+        Assert.Contains("Log On", health.Summary, StringComparison.Ordinal);
+
+        // The two constraints that make the variable work at all, and which existed only in code
+        // comments: a service inherits the SYSTEM environment, and a relative value resolves
+        // against C:\Windows\System32 for a service but the install folder for the app.
+        Assert.Contains("machine-wide", health.Summary, StringComparison.Ordinal);
+        Assert.Contains("fully-qualified", health.Summary, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -227,9 +227,13 @@ public sealed class SchedulerHealthService : ISchedulerHealthService
             var account = string.IsNullOrWhiteSpace(serviceAccount) ? "another account" : serviceAccount;
             return new SchedulerHealth(
                 SchedulerHealthStatus.NotExecutingYourJobs,
-                $"Scheduled jobs won't run — the Obsync service is running as {account}, which cannot see " +
-                "your jobs or credentials. Set the service's Log On account to your Windows account " +
-                "(services.msc → Obsync → Log On) and restart it, or reinstall Obsync with your account.");
+                $"Scheduled jobs won't run — the Obsync service is running as {account}, which has its own " +
+                "data folder and credential vault and so cannot see your jobs. On a server, keep the service " +
+                "account and give both a single database: set OBSYNC_DATA_ROOT as a machine-wide (system) " +
+                "environment variable to a fully-qualified path, restart the service, then store that " +
+                $"account's SQL and GitHub credentials for it (\"obsync credential set\" run as {account}). " +
+                "On a workstation, the simpler fix is to set the service's Log On account to your own " +
+                "(services.msc → Obsync → Log On) and restart it.");
         }
 
         // Stale, not absent. The service DID write into this database, so its account can see this

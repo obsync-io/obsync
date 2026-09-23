@@ -596,9 +596,23 @@ public sealed partial class SettingsViewModel : ObservableObject, IAsyncViewMode
             var days = SelectedRetention?.Days ?? 0;
             await _settings.SetRunRetentionDaysAsync(days);
             await AuditSettingsChangedAsync("Run history retention");
-            RetentionStatus = days == 0
+            // Name the database this applies to when it is NOT the shared one.
+            //
+            // Retention is stored in whichever data root THIS host resolved, and the root is per
+            // Windows account by default — so on a server, where the service runs under its own
+            // account, this setting prunes the app's history while the service's history, the one
+            // actually growing, is untouched. The scheduler banner reports the split, but someone
+            // who reaches this screen has already formed the belief that the setting applies
+            // everywhere, and nothing here corrected it. Silent on a correctly shared deployment.
+            var scope = ObsyncPaths.RootIsExplicitlyConfigured
+                ? string.Empty
+                : $" This applies to {ObsyncPaths.Root} — the Obsync service keeps its own history"
+                    + " unless OBSYNC_DATA_ROOT is set machine-wide.";
+
+            RetentionStatus = (days == 0
                 ? "Saved — run history is kept forever."
-                : $"Saved — runs older than {days} days are removed automatically (checked daily and at startup).";
+                : $"Saved — runs older than {days} days are removed automatically (checked daily and at startup).")
+                + scope;
         }
         catch (Exception ex)
         {
