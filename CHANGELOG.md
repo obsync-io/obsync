@@ -2,6 +2,152 @@
 
 All notable changes to Obsync. Versions are the MSI/installer baselines; dates are build dates.
 
+## 0.16.0 - 2026-09-23
+
+**Two defects could stop a job running again without anything saying so.** Both are fixed, and both
+were reproduced before they were fixed. This release is the result of a full review of the product
+followed by a second pass whose only job was to disprove the first — which it did, for about a third
+of what the first pass found, including two proposed "fixes" that would have damaged working code
+and one that would have deleted existing run history on upgrade. What survived is here; what was
+refuted is recorded so it is not raised again.
+
+If you run three or more jobs at the same time of day, this is an important upgrade.
+
+No schema migration. Nothing to do on upgrade.
+
+Test suite: 1,488 → 1,518.
+
+### Fixed — scheduled occurrences the scheduler discarded without telling anyone
+
+Quartz is configured with two worker threads and a "skip what was missed" misfire policy. Neither is
+wrong on its own, and both were deliberate. Together, with the misfire threshold left at Quartz's
+default of **five seconds**, an occurrence that was merely *queued* behind two other jobs was not
+deferred — it was thrown away.
+
+Reproduced against the shipped configuration: five jobs sharing one cron time, runs longer than five
+seconds. Jobs three, four and five fired **zero** times across repeated cycles, while both workers
+sat idle most of every period. The same jobs lost every cycle, because the trigger comparator is
+deterministic. There was no log line at any level, not even at Debug.
+
+It was also invisible to every health surface. A misfired trigger keeps a confident *future*
+next-fire time, which the 30-second reconcile copies into the job's next-run time — so the overdue
+detector could never trip and the heartbeat stayed green. And it escaped testing because catch-up
+and startup runs use a different fire path that always worked, which is the same thing that masked
+the 0.8.x scheduling defect.
+
+**The policy is deliberately unchanged.** Raising the threshold or firing what was missed
+reintroduces the permanent backlog loop the policy exists to prevent; raising the worker count
+reintroduces the memory and write-lock contention 0.14.1 fixed. What was missing was not a different
+policy but any record of the decision. A skipped occurrence now writes a **Warning** to the log and a
+**Skipped** row to History, naming the remedy: stagger the cron times of the jobs sharing that slot,
+or raise the worker count.
+
+### Fixed — a real error reported as "Run cancelled", discarding the whole run
+
+The scripting pipeline started its consumer tasks bound to its own cancellation token. A provider
+that failed on its very first call — a bad connection string, an unreachable instance — cancelled
+that token while the pipeline was still starting consumers, so those consumers were cancelled before
+they ever ran. The genuine error was then overwritten by the cancellation, and the run was recorded
+as **Cancelled**: no error message, no alert (cancelled runs do not alert), and every database
+already scripted in that run thrown away.
+
+It masked the real error about 9% of the time on an idle machine and every time on a busy one, and it
+was worst in the server-scope pass, which is the first thing every run does.
+
+### Fixed — a folder change that duplicated the repository tree, permanently
+
+Renaming a job's destination folder, or adding a second database to a job, moves every object's file.
+Incremental scripting did not know that: it skips unchanged objects, and a skipped object reached
+neither the code that removes its old file nor the pass that deletes files for objects that are gone.
+The result was two trees for one database, indefinitely — only the objects that happened to change
+afterwards ever moved — while every run reported success.
+
+A layout change is now detected and that database is scanned in full once, with a warning explaining
+why; later runs return to incremental. The server-scope pass, which had no such cleanup at all, now
+has the same one, plus the file-size guard it was also missing.
+
+### Fixed — failures that alerted nobody
+
+A run refused because Obsync could not open its own lock file, or because a credential could not be
+read, wrote a Failed row to History and stopped there — past the audit write and past alerting. On a
+headless install that meant no signal at all, which is precisely the deployment that has no one
+watching History. Those occurrences now audit and alert like any other failure.
+
+### Security
+
+- **CVE-2025-6965** (`GHSA-2m69-gcr7-jv3q`, memory corruption in the bundled native SQLite) is fixed
+  by pinning `SQLitePCLRaw.lib.e_sqlite3` to 2.1.13. The build had been suppressing this advisory on
+  the stated grounds that no patched package existed; patched packages had since shipped, and because
+  the audit fails the build, the suppression was the only thing hiding it. The suppression is
+  **removed** rather than updated, so the next advisory in that package is seen rather than inherited.
+- **Imported job configurations now clear the same ceilings the wizard applies.** Import checked only
+  that values were not negative. The worst case was the retry counts: a large value turns one
+  transient SQL or network error into a retry loop that never fails, never ends, and holds the job's
+  run lock throughout — silently, unlike an oversized worker count, which at least fails loudly.
+- `SET LOCK_TIMEOUT` no longer overflows to a negative value above about 24.8 days, which SQL Server
+  rejects outright, failing every database in the job.
+
+### Changed — saying which database a setting applies to
+
+Obsync's data root is per Windows account, so a service running under its own account uses a
+different database than the app. The scheduler banner already reported the consequence; nothing
+reported the opposite — that a deliberately *shared* deployment really is shared. The paths are
+indistinguishable by inspection, so an operator who set `OBSYNC_DATA_ROOT` had no way to confirm it
+had taken effect until something failed.
+
+- Diagnostics and `obsync whoami` now state where the root came from, not just what it is. An
+  override that was rejected — relative, or unusable — falls back to the per-account default and is
+  never reported as configured.
+- The scheduler banner names **both** remedies. It previously offered one: set the service's logon
+  account to your own. That is right on a workstation and wrong on a server, where it ties an
+  unattended service to a human account that expires, locks out and is eventually offboarded. It now
+  leads with the shared-root option and states the two requirements that previously existed only in
+  source comments — machine-scoped, and fully qualified.
+- Saving run-history retention says which database it applies to when the root is not shared. That is
+  the one screen where someone acts believing the setting applies everywhere; on a split deployment
+  it prunes the app's history while the service's, the one actually growing on the server, is
+  untouched.
+- `packaging/INSTALL.md` gains a **Where Obsync keeps its data** section. `OBSYNC_DATA_ROOT` appeared
+  in no user-facing document, so the trap was documented and the remedy was not.
+
+### Changed — Obsync's git workspace no longer manufactures CRLF
+
+New workspaces are cloned with `core.autocrlf=false`. Obsync writes LF and git stores LF, so the CRLF
+a Windows checkout produces existed only in the working tree — a mismatch created locally and then
+undone on every comparison, plus one warning line per file on every commit.
+
+This is **not** a performance change and should not be read as one. Measured on a 10,000-file corpus:
+about 3 seconds on `git add` (roughly 0.8% of a 369-second first run), nothing on `git commit`, and
+about 11 milliseconds on a no-change run. Repository content is byte-identical either way, because
+the stored blobs were always LF.
+
+It applies to clones Obsync creates from now on, and deliberately not to existing ones: changing the
+setting on a clone whose working tree is already CRLF re-checks-out nothing, and the next change to
+any file would stage a line-ending rewrite of every tracked script into the repository. Existing
+workspaces keep working through the comparison path that already handles them.
+
+### Fixed — smaller things
+
+- Every commit message and pull-request body reported `Duration: 00:00:00`. The duration was recorded
+  after the commit was built. (The unit test passed because its fixture supplied a value production
+  never did.)
+- A push failure was blamed on token permissions whenever `403` appeared as hexadecimal inside a
+  branch name — and Obsync's own pull-request branches end in eight hex characters of the job id, so
+  for roughly one job in three hundred *every* push failure was misdiagnosed, permanently.
+- Ignore patterns no longer recompile a regular expression per object. Past fifteen distinct patterns
+  the shared cache thrashed; worth about 0.8 seconds on a job that uses many patterns, and nothing on
+  a job that uses none.
+- Reclaiming workspaces, exporting a support bundle and deleting a job no longer run on the UI thread
+  or without error handling; four clipboard copies and one file save now report failure inline
+  instead of raising a system error dialog.
+- The command line has a top-level error handler, so a failure before the first command — an
+  unreachable data root, a locked database — prints a readable message and a documented exit code
+  instead of a stack trace.
+- Watermarks no longer miss a database whose name changed only in case, which silently forced a full
+  re-scan.
+- Settings values that could not be read no longer fail the surfaces that read them; the proxy
+  settings in particular are read on every run.
+
 ## 0.15.0 - 2026-09-10
 
 **The settings that decide behaviour now have somewhere to be set, and the surfaces that described

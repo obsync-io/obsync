@@ -14,12 +14,17 @@ The entire product is built around one clean concept — the **Sync Job**:
 
 ## Status
 
-Actively maintained. The current release is **v0.15.0** — download the MSI from
+Actively maintained. The current release is **v0.16.0** — download the MSI from
 **[Releases](https://github.com/obsync-io/obsync/releases)**, or build it yourself (see
 [Installing](#installing)). See [CHANGELOG.md](CHANGELOG.md) for what shipped in each version and
 the [issue tracker](https://github.com/obsync-io/obsync/issues) for what is planned.
 
 > [!IMPORTANT]
+> **If you run three or more jobs at the same time of day, upgrade to 0.16.0.** In every earlier
+> build the scheduler could silently discard the occurrences it could not start immediately, with
+> nothing written to History, no alert, and no log line — while the next-run time still looked
+> healthy. See the 0.16.0 entry in the changelog.
+>
 > If you are running **0.8.0, 0.8.1 or 0.8.2, upgrade.** Scheduled runs never executed in those
 > builds (see the 0.8.3 entry in the changelog). Manual runs were unaffected.
 
